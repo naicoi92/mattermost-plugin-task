@@ -29,6 +29,7 @@ include build/setup.mk
 BUNDLE_NAME ?= $(PLUGIN_ID)-$(PLUGIN_VERSION).tar.gz
 
 # Include custom makefile, if present
+# shellcheck disable=SC1073,SC1065,SC1064,SC1072
 ifneq ($(wildcard build/custom.mk),)
 	include build/custom.mk
 endif
@@ -236,7 +237,7 @@ endif
 
 ## Builds the webapp, if it exists.
 .PHONY: webapp
-webapp: webapp/node_modules
+webapp: webapp/node_modules i18n-copy
 ifneq ($(HAS_WEBAPP),)
 ifeq ($(MM_DEBUG),)
 	cd webapp && $(NPM) run build;
@@ -244,6 +245,12 @@ else
 	cd webapp && $(NPM) run debug;
 endif
 endif
+
+## Copies shared i18n JSON files from assets/i18n to webapp/i18n.
+.PHONY: i18n-copy
+i18n-copy:
+	@mkdir -p webapp/i18n
+	@cp assets/i18n/*.json webapp/i18n/
 
 ## Generates a tar bundle of the plugin for install.
 .PHONY: bundle
