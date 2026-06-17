@@ -17,7 +17,7 @@ Triển khai theo issue #4: cung cấp chuỗi dịch dùng chung cho server và
 | `assets/i18n/vi.json` | Tạo mới | Bản dịch tiếng Việt tương ứng |
 | `assets/embed.go` | Tạo mới | `//go:embed i18n/*.json` trong package `assets` |
 | `server/i18n.go` | Tạo mới | Load bundle, expose `T(locale, key, args...)` |
-| `build/custom.mk` | Sửa | Thêm target copy i18n vào webapp (nếu dùng) |
+| `Makefile` | Sửa | Thêm target i18n-copy và phụ thuộc từ webapp target |
 | `Makefile` | Sửa | `webapp` phụ thuộc target copy i18n |
 | `server/i18n_test.go` | Tạo mới (nếu cần) | Unit test fallback và argument interpolation |
 
