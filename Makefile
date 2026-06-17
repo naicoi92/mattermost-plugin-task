@@ -249,9 +249,9 @@ endif
 ## Copies shared i18n JSON files from assets/i18n to webapp/i18n.
 .PHONY: i18n-copy
 i18n-copy:
-	`@mkdir` -p webapp/i18n
-	`@rm` -f webapp/i18n/*.json
-	`@cp` assets/i18n/*.json webapp/i18n/
+	@mkdir -p webapp/i18n
+	@rm -f webapp/i18n/*.json
+	@cp assets/i18n/*.json webapp/i18n/
 
 ## Generates a tar bundle of the plugin for install.
 .PHONY: bundle
