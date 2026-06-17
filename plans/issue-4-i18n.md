@@ -41,7 +41,7 @@ Không dùng nested object. Cùng một file sẽ được webapp load qua `regi
 package main
 
 func T(locale, key string, args ...interface{}) string
-func MustLoadI18n() *I18n
+func NewI18n() (*I18n, error)
 ```
 
 - `T` dùng `text/template` hoặc `fmt.Sprintf` style placeholder cho argument interpolation. Do issue yêu cầu `args...`, dùng `fmt.Sprintf(message, args...)` là đủ.
