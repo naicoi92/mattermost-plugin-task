@@ -41,6 +41,14 @@ func NewKVStore(client *pluginapi.Client) KVStore {
 	}
 }
 
+// SetAtomicWithRetries performs a read-modify-write on key using atomic
+// compare-and-set, retrying on conflict (see MaxRetries / RetryBackoff). Each
+// conflict is logged at warn level with the key name and retry count so
+// contention shows up clearly in server logs.
+func (c Client) SetAtomicWithRetries(key string, update func(old []byte) (any, error)) error {
+	return SetAtomicWithRetries(&c.client.KV, c.client.Log.Warn, key, update)
+}
+
 // TaskKey returns the entity key for a task.
 func TaskKey(id string) string {
 	return keyTaskPrefix + id

@@ -53,4 +53,13 @@ type KVStore interface {
 	DeleteReminder(taskID string) error
 	// ListReminderKeys returns all keys prefixed with idx:reminder:.
 	ListReminderKeys() ([]string, error)
+
+	// SetAtomicWithRetries performs a read-modify-write on key using atomic
+	// compare-and-set semantics: it reads the current value, calls update to
+	// derive the new value, and writes it back only if the value has not
+	// changed. On conflict it retries up to MaxRetries times with
+	// RetryBackoff between attempts, logging each conflict with the key name
+	// and retry count. Use this for any read-modify-write (e.g. counters,
+	// append-to-collection) where lost updates are not acceptable.
+	SetAtomicWithRetries(key string, update func(old []byte) (any, error)) error
 }
