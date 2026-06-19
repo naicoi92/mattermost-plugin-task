@@ -288,8 +288,13 @@ func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
 			p.writeError(w, http.StatusNotFound, "task not found")
 		case errors.Is(err, task.ErrReminderNeedsDue):
 			p.writeError(w, http.StatusBadRequest, "task has no due date")
+		case req.OffsetMS <= 0:
+			// Invalid offset is a client error.
+			p.writeError(w, http.StatusBadRequest, "offset_ms must be positive")
 		default:
-			p.writeError(w, http.StatusBadRequest, err.Error())
+			// Unexpected service/store failures are server errors; don't echo the
+			// raw error text to the client.
+			p.writeError(w, http.StatusInternalServerError, "failed to set reminder")
 		}
 		return
 	}

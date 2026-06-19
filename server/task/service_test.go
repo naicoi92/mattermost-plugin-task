@@ -668,6 +668,7 @@ func TestFireReadyReminders_WithinWindow(t *testing.T) {
 	svc := NewService(store)
 
 	// due=100000, offset=60000 -> fires at 40000.
+	require.NoError(t, store.SaveTask(model.Task{ID: "T1", Status: model.StatusTodo}))
 	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
 		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
 	}))
@@ -682,6 +683,7 @@ func TestFireReadyReminders_WithinWindow(t *testing.T) {
 func TestFireReadyReminders_NotYetDue(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)
+	require.NoError(t, store.SaveTask(model.Task{ID: "T1", Status: model.StatusTodo}))
 	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
 		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
 	}))
@@ -689,6 +691,34 @@ func TestFireReadyReminders_NotYetDue(t *testing.T) {
 	due, err := svc.FireReadyReminders(10_000, time.Minute)
 	require.NoError(t, err)
 	assert.Empty(t, due)
+}
+
+func TestFireReadyReminders_SelfHealsTerminalAndOrphanEdges(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	t.Run("terminal task edge dropped without firing", func(t *testing.T) {
+		require.NoError(t, store.SaveTask(model.Task{ID: "T1", Status: model.StatusDone}))
+		require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
+			DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
+		}))
+		due, err := svc.FireReadyReminders(50_000, time.Minute)
+		require.NoError(t, err)
+		assert.Empty(t, due, "terminal task must not fire")
+		meta, _ := store.GetReminder("T1")
+		assert.Nil(t, meta, "stale edge cleaned up")
+	})
+
+	t.Run("orphan edge (task gone) dropped", func(t *testing.T) {
+		require.NoError(t, store.SaveReminder("T2", model.ReminderMetadata{
+			DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
+		}))
+		due, err := svc.FireReadyReminders(50_000, time.Minute)
+		require.NoError(t, err)
+		assert.Empty(t, due)
+		meta, _ := store.GetReminder("T2")
+		assert.Nil(t, meta, "orphan edge cleaned up")
+	})
 }
 
 func TestFireReadyReminders_PastGraceDroppedAndMarkedFired(t *testing.T) {
@@ -716,6 +746,7 @@ func TestFireReadyReminders_PastGraceDroppedAndMarkedFired(t *testing.T) {
 func TestFireReadyReminders_NoAssigneeSkipped(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)
+	require.NoError(t, store.SaveTask(model.Task{ID: "T1", Status: model.StatusTodo}))
 	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
 		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "",
 	}))

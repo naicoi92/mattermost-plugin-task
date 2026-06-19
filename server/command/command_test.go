@@ -342,6 +342,21 @@ func TestTaskRemind_NeedsDue(t *testing.T) {
 	assert.Contains(t, resp.Text, "no due date")
 }
 
+func TestTaskRemind_GenericErrorSanitized(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	// LogError is variadic; match any number of args.
+	env.api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	svc := &fakeStatusService{reminderErr: errors.New("internal db explosion")}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task remind T1 15m"})
+	require.NoError(t, err)
+	// The raw backend error must not leak to the user; only a safe message.
+	assert.NotContains(t, resp.Text, "internal db explosion", "raw error must not leak")
+	assert.Contains(t, resp.Text, "Failed")
+}
+
 func TestParseReminderOffset(t *testing.T) {
 	cases := []struct {
 		token string

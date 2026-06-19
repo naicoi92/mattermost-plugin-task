@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
@@ -307,6 +309,41 @@ func TestSetReminder_NeedsDue(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestSetReminder_InvalidOffset(t *testing.T) {
+	p, _ := newTestPlugin()
+	due := int64(100_000)
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1", Due: &due})
+	require.NoError(t, err)
+
+	// offset_ms <= 0 is a client error.
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+created.ID+"/reminder", `{"offset_ms":0}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSetReminder_InternalErrorDoesNotLeak(t *testing.T) {
+	// Point the service at a store seeded with a due-dated task, where
+	// SaveReminder fails. The handler must respond 500 and must NOT echo the
+	// raw error text.
+	due := int64(100_000)
+	store := &failingReminderStore{fakeTaskStore: newFakeTaskStore()}
+	store.tasks["T1"] = model.Task{ID: "T1", CreatorID: "u1", Due: &due, Status: model.StatusTodo}
+	api := &plugintest.API{}
+	api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	p := &Plugin{
+		taskService: task.NewService(store),
+	}
+	p.SetAPI(api)
+	p.router = p.initRouter()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/T1/reminder", `{"offset_ms":60000}`, "u1"))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.NotContains(t, w.Body.String(), "boom-internal", "raw error must not leak")
+}
+
 func TestDeleteReminder_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin()
 	due := int64(100_000)
@@ -323,3 +360,20 @@ func TestDeleteReminder_Endpoint(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Nil(t, got.ReminderOffset)
 }
+
+// failingReminderStore wraps a fakeTaskStore (seeded with a task that has a due
+// date so SetReminder reaches SaveReminder) but fails SaveReminder, to exercise
+// the setReminder handler's internal-error path.
+type failingReminderStore struct {
+	*fakeTaskStore
+}
+
+func (f *failingReminderStore) SaveReminder(string, model.ReminderMetadata) error {
+	return errInternalFake
+}
+
+type errInternalFakeType struct{}
+
+func (errInternalFakeType) Error() string { return "boom-internal" }
+
+var errInternalFake errInternalFakeType

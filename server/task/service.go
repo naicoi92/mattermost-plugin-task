@@ -212,10 +212,12 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 
 	switch newStatus {
 	case model.StatusDone, model.StatusCancelled:
-		// Stop reminders on terminal statuses. Best-effort: the task is already
-		// terminal so a leftover reminder edge is harmless (the scheduler skips
-		// reminders for done/cancelled tasks), matching Delete's handling.
-		_ = s.store.DeleteReminder(task.ID)
+		// Stop reminders on terminal statuses. Propagate the error: a leftover
+		// edge would let FireReadyReminders still fire a DM for a terminal task,
+		// so cleanup must succeed (unlike Delete, where the whole task is gone).
+		if err := s.store.DeleteReminder(task.ID); err != nil {
+			return nil, err
+		}
 	case model.StatusTodo, model.StatusInProgress:
 		// Reopening allows a reminder to fire again: reset the fired flag and
 		// rebuild the index if a due+offset are still set.
@@ -379,6 +381,24 @@ func (s *Service) FireReadyReminders(nowMs int64, grace time.Duration) ([]DueRem
 			return nil, err
 		}
 		if meta == nil {
+			continue
+		}
+		// Self-heal: a reminder edge should never exist for a terminal task. If
+		// one lingers (e.g. a crash between the status update and edge cleanup,
+		// or an older code path), drop it now so we never DM about a done/
+		// cancelled task. This guards the index from ANY source of staleness,
+		// not just SetStatus.
+		t, err := s.store.GetTask(taskID)
+		if err != nil {
+			return nil, err
+		}
+		if t == nil {
+			// Task gone (orphan edge) — clean it up.
+			_ = s.store.DeleteReminder(taskID)
+			continue
+		}
+		if t.Status == model.StatusDone || t.Status == model.StatusCancelled {
+			_ = s.store.DeleteReminder(taskID)
 			continue
 		}
 		fireAt := meta.FireMS()

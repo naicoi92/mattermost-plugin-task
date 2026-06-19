@@ -203,7 +203,8 @@ func (c *Handler) handleRemind(args *model.CommandArgs, rest []string) (*model.C
 	return ephemeral(fmt.Sprintf("🔔 Reminder set for **%s** (%s before due).", t.Summary, token)), nil
 }
 
-// formatReminderError maps reminder service errors to ephemeral text.
+// formatReminderError maps reminder service errors to ephemeral text. Raw
+// backend errors are logged server-side but never echoed to the user.
 func formatReminderError(c *Handler, id string, err error, action string) (*model.CommandResponse, error) {
 	switch {
 	case errors.Is(err, task.ErrNotFound):
@@ -212,7 +213,7 @@ func formatReminderError(c *Handler, id string, err error, action string) (*mode
 		return ephemeral("This task has no due date, so a reminder cannot be set."), nil
 	default:
 		c.client.Log.Error("Failed to "+action, "task_id", id, "error", err)
-		return ephemeral(fmt.Sprintf("Failed to %s for task %s: %s", action, id, err.Error())), nil
+		return ephemeral(fmt.Sprintf("Failed to %s for task %s. Please try again.", action, id)), nil
 	}
 }
 
@@ -251,7 +252,7 @@ func (c *Handler) setStatus(args *model.CommandArgs, id, status string) (*model.
 			return ephemeral(fmt.Sprintf("Invalid status %q.", status)), nil
 		default:
 			c.client.Log.Error("Failed to set task status", "task_id", id, "status", status, "error", err)
-			return ephemeral(fmt.Sprintf("Failed to update task %s: %s", id, err.Error())), nil
+			return ephemeral(fmt.Sprintf("Failed to update task %s. Please try again.", id)), nil
 		}
 	}
 	return ephemeral(fmt.Sprintf("✅ Task **%s** is now **%s**.", t.Summary, status)), nil
