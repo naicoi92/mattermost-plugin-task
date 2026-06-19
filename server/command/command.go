@@ -33,6 +33,9 @@ type TaskService interface {
 	// parent's ChannelID and (as default) the parent's assignee; an explicit
 	// assigneeID overrides the default. Returns the created subtask.
 	CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*taskmodel.Task, error)
+	// AddComment persists a comment on taskID by userID and returns the comment
+	// plus an event describing the task's participants for notification.
+	AddComment(taskID, userID, content string) (taskmodel.Comment, task.CommentEvent, error)
 }
 
 // AssignNotifier fires the assignee-change DM. It is the subset of the
@@ -55,6 +58,21 @@ type TaskNotifier interface {
 	NotifyCancelled(task TaskRef, actorID, creatorID, assigneeID string)
 }
 
+// CommentNotifier fires the comment DM to task participants. May be nil
+// (notification skipped).
+type CommentNotifier interface {
+	NotifyCommented(task TaskRef, actorID, creatorID, assigneeID string)
+}
+
+// CommentAuthorizer reports whether userID may comment on the task. It backs
+// the view/comment permission rule including channel membership for
+// channel-scoped tasks; supplied by the plugin layer (which has the channel
+// membership API). May be nil, in which case the handler falls back to the
+// creator/assignee co-owner check (matching the personal-task rule).
+type CommentAuthorizer interface {
+	CanComment(userID string, task *taskmodel.Task) bool
+}
+
 // UserResolver resolves an @username mention to a Mattermost user id. Supplied
 // by the plugin layer (which has API access); nil disables assign parsing.
 type UserResolver interface {
@@ -73,11 +91,13 @@ type TaskRef struct {
 // Handler dispatches slash commands. Today it owns the /task command; the
 // legacy /hello command from the starter template is retained for reference.
 type Handler struct {
-	client         *pluginapi.Client
-	taskService    TaskService
-	notifier       TaskNotifier
-	assignNotifier AssignNotifier
-	users          UserResolver
+	client            *pluginapi.Client
+	taskService       TaskService
+	notifier          TaskNotifier
+	assignNotifier    AssignNotifier
+	commentNotifier   CommentNotifier
+	commentAuthorizer CommentAuthorizer
+	users             UserResolver
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -91,9 +111,11 @@ const helloCommandTrigger = "hello"
 // Options configure optional collaborators on the command handler. Fields may
 // be nil to disable the corresponding behavior (notifications / @user lookup).
 type Options struct {
-	Notifier       TaskNotifier   // done/cancelled DMs
-	AssignNotifier AssignNotifier // assignee DM
-	Users          UserResolver   // @username -> user id for /task assign
+	Notifier          TaskNotifier      // done/cancelled DMs
+	AssignNotifier    AssignNotifier    // assignee DM
+	CommentNotifier   CommentNotifier   // comment DM
+	CommentAuthorizer CommentAuthorizer // view/comment permission (channel-aware)
+	Users             UserResolver      // @username -> user id for /task assign
 }
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
@@ -166,6 +188,12 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 	subtaskCmd.AddTextArgument("subtask summary", "<summary>", "")
 	taskCmd.AddCommand(subtaskCmd)
 
+	// /task comment <id> <text>
+	commentCmd := model.NewAutocompleteData("comment", "<id> <text>", "Add a comment to a task")
+	commentCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
+	commentCmd.AddTextArgument("comment text", "<text>", "")
+	taskCmd.AddCommand(commentCmd)
+
 	// /task help
 	helpCmd := model.NewAutocompleteData("help", "", "Show task command help")
 	taskCmd.AddCommand(helpCmd)
@@ -181,11 +209,13 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 	}
 
 	return &Handler{
-		client:         client,
-		taskService:    taskService,
-		notifier:       opts.Notifier,
-		assignNotifier: opts.AssignNotifier,
-		users:          opts.Users,
+		client:            client,
+		taskService:       taskService,
+		notifier:          opts.Notifier,
+		assignNotifier:    opts.AssignNotifier,
+		commentNotifier:   opts.CommentNotifier,
+		commentAuthorizer: opts.CommentAuthorizer,
+		users:             opts.Users,
 	}
 }
 
@@ -230,6 +260,8 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return c.handleUnassign(args, subFields[1:])
 	case "subtask":
 		return c.handleSubtask(args, subFields[1:])
+	case "comment":
+		return c.handleComment(args, subFields[1:])
 	case "help":
 		return ephemeral(taskHelp()), nil
 	default:
@@ -415,6 +447,63 @@ func (c *Handler) handleSubtask(args *model.CommandArgs, rest []string) (*model.
 	return ephemeral(fmt.Sprintf("➕ Subtask **%s** added to **%s**.", created.Summary, parent.Summary)), nil
 }
 
+// handleComment implements /task comment <id> <text>. Anyone who can view the
+// task may comment. The text runs to the end of the line (may contain spaces).
+// A new comment DMs the task participants (creator + assignee), excluding the
+// commenter.
+func (c *Handler) handleComment(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 2 {
+		return ephemeral("Usage: /task comment <id> <text>"), nil
+	}
+	id := rest[0]
+	text := strings.TrimSpace(strings.Join(rest[1:], " "))
+	if text == "" {
+		return ephemeral("Usage: /task comment <id> <text>"), nil
+	}
+
+	// Resolve the task so the success message can name it and the notifier has
+	// the participants. The service re-checks existence on AddComment.
+	t, err := c.taskService.Get(id)
+	if err != nil {
+		c.client.Log.Error("Failed to load task for comment", "task_id", id, "error", err)
+		return ephemeral(fmt.Sprintf("Failed to comment on %s. Please try again.", id)), nil
+	}
+	if t == nil {
+		return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
+	}
+	// Authorization: anyone who can view the task may comment. When a channel-aware
+	// authorizer is wired, use it (covers channel members); otherwise fall back to
+	// the personal-task co-owner rule (creator or assignee).
+	if c.commentAuthorizer != nil {
+		if !c.commentAuthorizer.CanComment(args.UserId, t) {
+			return ephemeral("You do not have permission to comment on this task."), nil
+		}
+	} else if args.UserId != t.CreatorID && args.UserId != t.AssigneeID {
+		return ephemeral("You do not have permission to comment on this task."), nil
+	}
+
+	_, ev, err := c.taskService.AddComment(id, args.UserId, text)
+	if err != nil {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
+			return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
+		case errors.Is(err, task.ErrCommentContentRequired):
+			return ephemeral("Comment text is required."), nil
+		default:
+			c.client.Log.Error("Failed to add comment", "task_id", id, "error", err)
+			return ephemeral(fmt.Sprintf("Failed to comment on %s: %s", id, err.Error())), nil
+		}
+	}
+
+	if c.commentNotifier != nil {
+		c.commentNotifier.NotifyCommented(
+			TaskRef{ID: t.ID, Summary: t.Summary},
+			ev.UserID, ev.CreatorID, ev.AssigneeID,
+		)
+	}
+	return ephemeral(fmt.Sprintf("💬 Comment added to **%s**.", t.Summary)), nil
+}
+
 // setStatus calls the service and formats the result for the user.
 func (c *Handler) setStatus(args *model.CommandArgs, id, status string) (*model.CommandResponse, error) {
 	t, err := c.taskService.SetStatus(id, status)
@@ -582,6 +671,7 @@ func taskHelp() string {
 		"• `/task assign <id> @user` — assign a task to a user\n" +
 		"• `/task unassign <id>` — remove the assignee\n" +
 		"• `/task subtask <parentId> <summary>` — add a subtask\n" +
+		"• `/task comment <id> <text>` — add a comment\n" +
 		"• `/task remind <id> <15m|1h|1d|off>` — set or turn off a reminder\n" +
 		"• `/task help` — show this help"
 }

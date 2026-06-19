@@ -23,16 +23,18 @@ import (
 // implements the subset the task.Service touches; the service is the unit under
 // indirect test, so a thin store is enough to drive the HTTP layer end-to-end.
 type fakeTaskStore struct {
-	tasks   map[string]model.Task
-	indexes map[string]struct{}
-	subs    map[string]map[string]struct{}
+	tasks    map[string]model.Task
+	indexes  map[string]struct{}
+	subs     map[string]map[string]struct{}
+	comments map[string][]model.Comment // taskID -> comments
 }
 
 func newFakeTaskStore() *fakeTaskStore {
 	return &fakeTaskStore{
-		tasks:   map[string]model.Task{},
-		indexes: map[string]struct{}{},
-		subs:    map[string]map[string]struct{}{},
+		tasks:    map[string]model.Task{},
+		indexes:  map[string]struct{}{},
+		subs:     map[string]map[string]struct{}{},
+		comments: map[string][]model.Comment{},
 	}
 }
 
@@ -67,11 +69,31 @@ func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) {
 	sort.Strings(ids)
 	return ids, nil
 }
-func (f *fakeTaskStore) SaveComment(string, model.Comment) error { return nil }
-func (f *fakeTaskStore) GetComment(string, string) (*model.Comment, error) {
+
+func (f *fakeTaskStore) SaveComment(taskID string, c model.Comment) error {
+	f.comments[taskID] = append(f.comments[taskID], c)
+	return nil
+}
+
+func (f *fakeTaskStore) GetComment(taskID, commentID string) (*model.Comment, error) {
+	for _, c := range f.comments[taskID] {
+		if c.ID == commentID {
+			out := c
+			return &out, nil
+		}
+	}
 	return nil, nil
 }
-func (f *fakeTaskStore) GetCommentIDs(string) ([]string, error) { return nil, nil }
+
+func (f *fakeTaskStore) GetCommentIDs(taskID string) ([]string, error) {
+	var ids []string
+	for _, c := range f.comments[taskID] {
+		ids = append(ids, c.ID)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 func (f *fakeTaskStore) SaveReminder(string, model.ReminderMetadata) error {
 	return nil
 }
@@ -254,6 +276,79 @@ func TestListSubtasks_ReturnsDirectSubtasksInOrder(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, c1.ID, got[0].ID)
 	assert.Equal(t, c2.ID, got[1].ID)
+}
+
+// --- Comments (issue #24) ---
+
+func TestCreateComment_PersistsAndReturns(t *testing.T) {
+	p, _ := newTestPlugin()
+	task, err := p.taskService.Create(task.CreateInput{Summary: "task", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+task.ID+"/comments", `{"content":"looks good"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var got model.Comment
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "looks good", got.Content)
+	assert.Equal(t, "u1", got.UserID)
+	assert.NotEmpty(t, got.ID)
+}
+
+func TestCreateComment_TaskNotFound(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/ghost/comments", `{"content":"x"}`, "u1"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestCreateComment_EmptyContentRejected(t *testing.T) {
+	p, _ := newTestPlugin()
+	task, err := p.taskService.Create(task.CreateInput{Summary: "task", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+task.ID+"/comments", `{"content":"  "}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestListComments_ReturnsInCreationOrder(t *testing.T) {
+	p, _ := newTestPlugin()
+	task, err := p.taskService.Create(task.CreateInput{Summary: "task", CreatorID: "u1"})
+	require.NoError(t, err)
+	c1, _, err := p.taskService.AddComment(task.ID, "u1", "first")
+	require.NoError(t, err)
+	c2, _, err := p.taskService.AddComment(task.ID, "u2", "second")
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet,
+		"/api/v1/tasks/"+task.ID+"/comments", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []model.Comment
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got, 2)
+	assert.Equal(t, c1.ID, got[0].ID)
+	assert.Equal(t, c2.ID, got[1].ID)
+}
+
+// Issue #24 (CodeRabbit): GET /comments is access-controlled. A personal task
+// is private to creator/assignee; a stranger must be denied (403), not leaked
+// the thread.
+func TestListComments_ForbiddenForNonParticipant(t *testing.T) {
+	p, _ := newTestPlugin()
+	task, err := p.taskService.Create(task.CreateInput{Summary: "secret", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet,
+		"/api/v1/tasks/"+task.ID+"/comments", "", "u-stranger"))
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestAuthorization_Required(t *testing.T) {

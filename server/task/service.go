@@ -220,6 +220,54 @@ func (s *Service) ListComments(taskID string) ([]model.Comment, error) {
 	return comments, nil
 }
 
+// CommentEvent describes the result of adding a comment so callers (REST/
+// command handlers) can fire the participant notification without re-reading
+// the task. CreatorID and AssigneeID are the task's current participants.
+type CommentEvent struct {
+	TaskID     string
+	CommentID  string
+	UserID     string // the commenter
+	CreatorID  string
+	AssigneeID string
+}
+
+// AddComment persists a new comment on taskID, stamped with a fresh ULID and the
+// current time, and returns the comment plus a CommentEvent for notification.
+// Each comment is its own KV key (no CAS), so concurrent comments never
+// conflict. A non-existent task yields ErrNotFound. An empty content is
+// rejected.
+func (s *Service) AddComment(taskID, userID, content string) (model.Comment, CommentEvent, error) {
+	if strings.TrimSpace(content) == "" {
+		return model.Comment{}, CommentEvent{}, ErrCommentContentRequired
+	}
+	task, err := s.store.GetTask(taskID)
+	if err != nil {
+		return model.Comment{}, CommentEvent{}, err
+	}
+	if task == nil {
+		return model.Comment{}, CommentEvent{}, ErrNotFound
+	}
+
+	now := nowFunc()
+	comment := model.Comment{
+		ID:        taskutil.GenerateULID(),
+		UserID:    userID,
+		Content:   content,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.store.SaveComment(taskID, comment); err != nil {
+		return model.Comment{}, CommentEvent{}, err
+	}
+	return comment, CommentEvent{
+		TaskID:     taskID,
+		CommentID:  comment.ID,
+		UserID:     userID,
+		CreatorID:  task.CreatorID,
+		AssigneeID: task.AssigneeID,
+	}, nil
+}
+
 // SubtaskProgress returns (done, total) where done counts subtasks in a
 // terminal status (done/cancelled) and total is the number of subtasks. Used
 // to render the "x/y" progress on task cards. Missing subtask entities are
@@ -672,6 +720,11 @@ var ErrNotFound = errors.New("task not found")
 // ErrParentNotFound is returned by Create when a subtask references a parent
 // task id that does not exist.
 var ErrParentNotFound = errors.New("parent task not found")
+
+// ErrCommentContentRequired is returned by AddComment when the content is empty
+// (or whitespace). Callers should map it with errors.Is rather than substring
+// matching on the message.
+var ErrCommentContentRequired = errors.New("comment content is required")
 
 // AssignEvent describes the result of an assignee change so callers (REST/
 // command handlers) can fire the appropriate notification without re-reading
