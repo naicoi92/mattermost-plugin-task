@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -294,10 +295,5 @@ func (c channelMembershipChecker) IsChannelAdmin(userID, channelID string) bool 
 		return false
 	}
 	// Channel admins carry the "channel_admin" role in the member's role list.
-	for _, role := range member.GetRoles() {
-		if role == "channel_admin" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(member.GetRoles(), "channel_admin")
 }
