@@ -1,6 +1,7 @@
 package notification
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -17,10 +18,9 @@ type fakeAPI struct {
 }
 
 type recordedPost struct {
-	recipientID string
-	channelID   string
-	userID      string
-	message     string
+	channelID string
+	userID    string
+	message   string
 }
 
 func (f *fakeAPI) GetUser(userID string) (*model.User, error) {
@@ -56,11 +56,12 @@ func (e errFake) Error() string { return string(e) }
 type fakeTranslator struct{}
 
 func (fakeTranslator) T(locale, key string, args ...any) string {
-	out := locale + ":" + key
+	parts := make([]string, 0, 2+len(args))
+	parts = append(parts, locale, key)
 	for _, a := range args {
-		out += ":" + asString(a)
+		parts = append(parts, asString(a))
 	}
-	return out
+	return strings.Join(parts, ":")
 }
 
 func asString(v any) string {
