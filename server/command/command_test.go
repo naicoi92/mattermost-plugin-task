@@ -66,6 +66,13 @@ type fakeStatusService struct {
 	subtaskSummary  string
 	subtaskResult   *taskmodel.Task
 	subtaskErr      error
+
+	commentTaskID  string
+	commentUserID  string
+	commentContent string
+	commentResult  taskmodel.Comment
+	commentEvent   task.CommentEvent
+	commentErr     error
 }
 
 func (f *fakeStatusService) SetStatus(id, status string) (*taskmodel.Task, error) {
@@ -108,6 +115,13 @@ func (f *fakeStatusService) CreateSubtask(parentID, creatorID, summary, assignee
 	f.subtaskCreator = creatorID
 	f.subtaskSummary = summary
 	return f.subtaskResult, f.subtaskErr
+}
+
+func (f *fakeStatusService) AddComment(taskID, userID, content string) (taskmodel.Comment, task.CommentEvent, error) {
+	f.commentTaskID = taskID
+	f.commentUserID = userID
+	f.commentContent = content
+	return f.commentResult, f.commentEvent, f.commentErr
 }
 
 func TestHelloCommand(t *testing.T) {
@@ -271,6 +285,60 @@ func TestTaskSubtask_Usage(t *testing.T) {
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task subtask P1", UserId: "u-me"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "Usage")
+}
+
+// /task comment adds a comment; text may contain spaces.
+func TestTaskComment_Command(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{
+		getResult:     &taskmodel.Task{ID: "T1", Summary: "task", CreatorID: "u-me"},
+		commentResult: taskmodel.Comment{ID: "C1", Content: "looks good to me"},
+		commentEvent:  task.CommentEvent{TaskID: "T1", UserID: "u-me", CreatorID: "u-me"},
+	}
+	// CommentNotifier is wired to capture the call.
+	notifier := &captureCommentNotifier{}
+	handler := NewCommandHandler(env.client, svc, Options{CommentNotifier: notifier})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task comment T1 looks good to me", UserId: "u-me"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Comment added")
+	assert.Equal(t, "T1", svc.commentTaskID)
+	assert.Equal(t, "u-me", svc.commentUserID)
+	assert.Equal(t, "looks good to me", svc.commentContent)
+	assert.Equal(t, "T1", notifier.taskID, "comment DM fired to participants")
+}
+
+func TestTaskComment_TaskNotFound(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{getResult: nil}
+	handler := NewCommandHandler(env.client, svc, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task comment ghost hi", UserId: "u-me"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "not found")
+}
+
+func TestTaskComment_Usage(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task comment T1", UserId: "u-me"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Usage")
+}
+
+// captureCommentNotifier records the last NotifyCommented call.
+type captureCommentNotifier struct {
+	called bool
+	taskID string
+}
+
+func (c *captureCommentNotifier) NotifyCommented(ref TaskRef, actorID, creatorID, assigneeID string) {
+	c.called = true
+	c.taskID = ref.ID
 }
 
 func TestTaskStatus_InternalError(t *testing.T) {

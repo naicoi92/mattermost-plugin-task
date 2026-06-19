@@ -55,6 +55,10 @@ func (p *Plugin) initRouter() *mux.Router {
 	tasks.HandleFunc("/{id:[^/]+}/subtasks", p.createSubtask).Methods(http.MethodPost)
 	tasks.HandleFunc("/{id:[^/]+}/subtasks", p.listSubtasks).Methods(http.MethodGet)
 
+	// Comments (issue #24).
+	tasks.HandleFunc("/{id:[^/]+}/comments", p.createComment).Methods(http.MethodPost)
+	tasks.HandleFunc("/{id:[^/]+}/comments", p.listComments).Methods(http.MethodGet)
+
 	return router
 }
 
@@ -537,6 +541,86 @@ func (p *Plugin) listSubtasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, subs)
+}
+
+// createCommentRequest is the JSON body for POST /tasks/:id/comments.
+type createCommentRequest struct {
+	Content string `json:"content"`
+}
+
+// createComment handles POST /tasks/:id/comments. The authenticated user is the
+// commenter; anyone who may view the task may comment on it. A new comment DMs
+// the task participants (creator + current assignee), excluding the commenter.
+func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
+	taskID := mux.Vars(r)["id"]
+	actorID := currentUserID(r)
+
+	// View permission gates commenting: anyone who can view may comment.
+	t, err := p.taskService.Get(taskID)
+	if err != nil {
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if t == nil {
+		p.writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to comment on this task")
+		return
+	}
+
+	var req createCommentRequest
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	comment, ev, err := p.taskService.AddComment(taskID, actorID, req.Content)
+	if err != nil {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
+			p.writeError(w, http.StatusNotFound, "task not found")
+		case strings.Contains(err.Error(), "required"):
+			p.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			p.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	// DM the task participants (creator + assignee), excluding the commenter.
+	if p.notifier != nil {
+		p.notifier.NotifyCommented(notification.TaskSummary{ID: t.ID, Summary: t.Summary},
+			ev.UserID, ev.CreatorID, ev.AssigneeID)
+	}
+
+	// Refresh the card so a "comments" indicator stays current.
+	p.updateCard(t.ChannelPostID, t)
+	p.updateCard(t.DMPostID, t)
+
+	w.WriteHeader(http.StatusCreated)
+	p.writeJSON(w, comment)
+}
+
+// listComments handles GET /tasks/:id/comments, returning comments sorted by
+// creation time.
+func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
+	taskID := mux.Vars(r)["id"]
+	comments, err := p.taskService.ListComments(taskID)
+	if err != nil {
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	p.writeJSON(w, comments)
+}
+
+// channelMembership returns a permission.ChannelMembershipChecker backed by the
+// plugin API, or nil when membership checks cannot be performed (the permission
+// helpers treat a nil checker as "not a member", so personal tasks stay private
+// and channel tasks fall back to creator/assignee).
+func (p *Plugin) channelMembership() permission.ChannelMembershipChecker {
+	return channelMembershipChecker{api: p.API}
 }
 
 // handleCardAction handles the interactive task-card button callback

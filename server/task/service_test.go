@@ -774,6 +774,45 @@ func TestListComments_EmptyWhenNone(t *testing.T) {
 	assert.Empty(t, comments)
 }
 
+// Issue #24: AddComment persists a comment and returns a notification event.
+func TestAddComment_PersistsAndReturnsEvent(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "task", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+
+	comment, ev, err := svc.AddComment(parent.ID, "u3", "nice work")
+	require.NoError(t, err)
+	assert.Equal(t, "nice work", comment.Content)
+	assert.Equal(t, "u3", comment.UserID)
+	assert.NotEmpty(t, comment.ID)
+	assert.Equal(t, parent.ID, ev.TaskID)
+	assert.Equal(t, "u1", ev.CreatorID)
+	assert.Equal(t, "u2", ev.AssigneeID, "event carries participants for notification")
+
+	// Stored and visible via ListComments.
+	comments, err := svc.ListComments(parent.ID)
+	require.NoError(t, err)
+	require.Len(t, comments, 1)
+	assert.Equal(t, comment.ID, comments[0].ID)
+}
+
+func TestAddComment_EmptyContentRejected(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "task", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	_, _, err = svc.AddComment(parent.ID, "u1", "   ")
+	assert.Error(t, err)
+}
+
+func TestAddComment_TaskNotFound(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, _, err := svc.AddComment("ghost", "u1", "hi")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
 func TestSubtaskProgress(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)
