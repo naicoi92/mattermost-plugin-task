@@ -39,12 +39,13 @@ var statusColors = map[string]string{
 
 // buildTaskCard builds the SlackAttachment that renders a task as an interactive
 // message card (PLAN.md section 6.3 / issue #15). It shows summary, assignee,
-// due (red when overdue), status, subtask progress, and the action buttons
-// Done/Cancel/Assign/Subtask/Comment.
+// due (red when overdue), status, subtask progress, comment count, and the
+// action buttons Done/Cancel/Assign/Subtask/Comment.
 //
 // nowMs lets the overdue check be deterministic in tests; pass time.Now().UnixMilli().
 // subtaskDone/subtaskTotal render the "x/y" progress (pass 0/0 when none).
-func buildTaskCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal int) model.SlackAttachment {
+// commentCount renders a "Comments: N" indicator when > 0 (issue #25).
+func buildTaskCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int) model.SlackAttachment {
 	fields := []*model.SlackAttachmentField{
 		{Title: "Status", Value: statusLabel(t.Status), Short: true},
 	}
@@ -61,6 +62,11 @@ func buildTaskCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal int
 	if subtaskTotal > 0 {
 		fields = append(fields, &model.SlackAttachmentField{
 			Title: "Subtasks", Value: fmt.Sprintf("%d/%d done", subtaskDone, subtaskTotal), Short: true,
+		})
+	}
+	if commentCount > 0 {
+		fields = append(fields, &model.SlackAttachmentField{
+			Title: "Comments", Value: fmt.Sprintf("%d", commentCount), Short: true,
 		})
 	}
 
@@ -165,7 +171,8 @@ func cardIntegration(action cardAction, taskID string) *model.PostActionIntegrat
 // created in a channel.
 func (p *Plugin) postCard(channelID string, t *taskmodel.Task) string {
 	done, total := p.subtaskProgress(t.ID)
-	attachment := buildTaskCard(t, nowMillis(), done, total)
+	comments := p.commentCount(t.ID)
+	attachment := buildTaskCard(t, nowMillis(), done, total, comments)
 	post := &model.Post{
 		UserId:    p.botUserID,
 		ChannelId: channelID,
@@ -209,11 +216,46 @@ func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 		return
 	}
 	done, total := p.subtaskProgress(t.ID)
-	attachment := buildTaskCard(t, nowMillis(), done, total)
+	comments := p.commentCount(t.ID)
+	attachment := buildTaskCard(t, nowMillis(), done, total, comments)
 	post.Props["attachments"] = []*model.SlackAttachment{&attachment}
 	if _, err := p.API.UpdatePost(post); err != nil {
 		p.API.LogError("Failed to update task card", "post_id", postID, "error", err)
 	}
+}
+
+// commentCount returns the number of comments on taskID, or 0 on error
+// (best-effort — a card without the indicator is better than no card). Used to
+// render the "Comments: N" indicator (issue #25).
+func (p *Plugin) commentCount(taskID string) int {
+	if p.taskService == nil {
+		return 0
+	}
+	ids, err := p.taskService.ListComments(taskID)
+	if err != nil {
+		p.API.LogDebug("Failed to count comments", "task_id", taskID, "error", err)
+		return 0
+	}
+	return len(ids)
+}
+
+// recentComments returns up to limit most-recent comments on taskID (creation
+// order), or nil on error. Used to seed the Task Detail dialog's read-only
+// comment preview (issue #25).
+func (p *Plugin) recentComments(taskID string, limit int) []taskmodel.Comment {
+	if p.taskService == nil || limit <= 0 {
+		return nil
+	}
+	comments, err := p.taskService.ListComments(taskID)
+	if err != nil {
+		p.API.LogDebug("Failed to load recent comments", "task_id", taskID, "error", err)
+		return nil
+	}
+	if len(comments) > limit {
+		// ListComments returns oldest-first; show the last `limit` (most recent).
+		comments = comments[len(comments)-limit:]
+	}
+	return comments
 }
 
 // subtaskProgress returns (done, total) for the task's subtasks, or (0, 0) on
