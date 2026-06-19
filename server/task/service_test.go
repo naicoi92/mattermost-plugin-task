@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ type fakeStore struct {
 	indexes      map[string]struct{}
 	reminders    map[string]model.ReminderMetadata
 	skipComments map[string]struct{} // comment ids to treat as corrupt (defensive skip)
+	corruptErr   map[string]error    // comment ids whose GetComment returns a decode error
 }
 
 func newFakeStore() *fakeStore {
@@ -32,6 +34,7 @@ func newFakeStore() *fakeStore {
 		indexes:      map[string]struct{}{},
 		reminders:    map[string]model.ReminderMetadata{},
 		skipComments: map[string]struct{}{},
+		corruptErr:   map[string]error{},
 	}
 }
 
@@ -130,6 +133,9 @@ func (f *fakeStore) SaveComment(taskID string, comment model.Comment) error {
 // An id listed in skipComments simulates a corrupt payload (returns nil) so the
 // service's defensive skip can be tested.
 func (f *fakeStore) GetComment(taskID, commentID string) (*model.Comment, error) {
+	if err, corrupt := f.corruptErr[commentID]; corrupt {
+		return nil, err
+	}
 	if _, skip := f.skipComments[commentID]; skip {
 		return nil, nil
 	}
@@ -697,19 +703,23 @@ func TestListComments_ReturnsCommentsInCreationOrder(t *testing.T) {
 }
 
 // Issue #23: a comment whose stored JSON fails to deserialize is skipped rather
-// than failing the whole list.
+// than failing the whole list. Simulates a corrupt payload by making the store
+// return a decode error for that id (matching what the production store returns
+// when KV.Get can't unmarshal the bytes).
 func TestListComments_SkipsCorruptComment(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)
 	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "01A", Content: "good"}))
 	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "02B", Content: "corrupt"}))
-	// Mark 02B as corrupt: GetComment returns nil for it.
-	store.skipComments["02B"] = struct{}{}
+	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "03C", Content: "also good"}))
+	// Mark 02B as corrupt: GetComment returns a decode error for it.
+	store.corruptErr["02B"] = errors.New("invalid character 'z' looking for beginning of value")
 
 	comments, err := svc.ListComments("t1")
 	require.NoError(t, err)
-	require.Len(t, comments, 1, "corrupt comment skipped, not fatal")
+	require.Len(t, comments, 2, "corrupt comment skipped, not fatal")
 	assert.Equal(t, "01A", comments[0].ID)
+	assert.Equal(t, "03C", comments[1].ID)
 }
 
 func TestListComments_EmptyWhenNone(t *testing.T) {

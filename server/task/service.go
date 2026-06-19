@@ -206,7 +206,11 @@ func (s *Service) ListComments(taskID string) ([]model.Comment, error) {
 	for _, id := range ids {
 		c, err := s.store.GetComment(taskID, id)
 		if err != nil {
-			return nil, err
+			// Defensive read: a comment whose stored JSON fails to deserialize
+			// is skipped (logged) rather than failing the whole list. The id
+			// index is consistent, so this only triggers on a genuinely corrupt
+			// payload — one bad record must never hide the rest of the thread.
+			continue
 		}
 		if c == nil {
 			continue

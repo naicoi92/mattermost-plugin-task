@@ -216,6 +216,16 @@ func TestClient_GetComment(t *testing.T) {
 		assert.Nil(t, got)
 	})
 
+	// A corrupt payload (undecodable bytes) surfaces as an error. ListComments
+	// treats this error defensively (skips the comment) — this case locks the
+	// store contract so the service can rely on it.
+	t.Run("returns error on corrupt payload", func(t *testing.T) {
+		api.On("KVGet", "t:task1:c:c1").Return([]byte("not-json"), nil).Once()
+		got, err := store.GetComment("task1", "c1")
+		require.Error(t, err)
+		assert.Nil(t, got)
+	})
+
 	t.Run("validation", func(t *testing.T) {
 		_, store := setupTest()
 		_, err := store.GetComment("", "c1")
