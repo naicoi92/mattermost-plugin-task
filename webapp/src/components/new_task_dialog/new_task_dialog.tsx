@@ -32,6 +32,11 @@ export interface NewTaskDialogProps {
     // when scope === 'channel'; ignored for personal tasks.
     channelID?: string;
 
+    // initialSummary / initialDescription pre-fill the form when the dialog opens
+    // (e.g. from the post-dropdown "Tạo task" action, #16).
+    initialSummary?: string;
+    initialDescription?: string;
+
     // onClose is called when the dialog is dismissed or after a successful
     // create, so the host can flip `visible` back to false.
     onClose?: () => void;
@@ -50,7 +55,14 @@ const emptyForm = {
     scope: 'personal' as NewTaskScope,
 };
 
-export default function NewTaskDialog({visible, channelID, onClose, onCreated}: NewTaskDialogProps): JSX.Element | null {
+export default function NewTaskDialog({
+    visible,
+    channelID,
+    initialSummary,
+    initialDescription,
+    onClose,
+    onCreated,
+}: NewTaskDialogProps): JSX.Element | null {
     const dispatch = useDispatch();
     const t = useFormatMessage();
 
@@ -59,13 +71,20 @@ export default function NewTaskDialog({visible, channelID, onClose, onCreated}: 
     const [submitting, setSubmitting] = useState(false);
 
     // Reset the form whenever the dialog is opened so a previous draft doesn't
-    // linger. Default the scope to 'channel' when a channel context is present.
+    // linger. Default the scope to 'channel' when a channel context is present,
+    // and apply any prefilled summary/description (e.g. from the post-dropdown
+    // "Tạo task" action, #16).
     useEffect(() => {
         if (visible) {
-            setForm({...emptyForm, scope: channelID ? 'channel' : 'personal'});
+            setForm({
+                ...emptyForm,
+                scope: channelID ? 'channel' : 'personal',
+                summary: initialSummary ?? '',
+                description: initialDescription ?? '',
+            });
             setError('');
         }
-    }, [visible, channelID]);
+    }, [visible, channelID, initialSummary, initialDescription]);
 
     if (!visible) {
         return null;

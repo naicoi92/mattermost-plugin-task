@@ -30,6 +30,8 @@ export const ACTION_TYPES = {
     SET_SELECTED_TASK: 'task/set_selected_task',
     UPSERT_TASK: 'task/upsert_task',
     DELETE_TASK: 'task/delete_task',
+    OPEN_NEW_TASK_DIALOG: 'task/open_new_task_dialog',
+    CLOSE_NEW_TASK_DIALOG: 'task/close_new_task_dialog',
 } as const;
 
 // TaskState is the slice mounted at state['plugins-com.mattermost.plugin-task'].
@@ -55,6 +57,11 @@ export interface TaskState {
     // out-of-order WebSocket event can be dropped instead of overwriting a newer
     // state. The server sets seq to the task's UpdatedAt on every publish.
     lastSeq: Record<string, number>;
+
+    // newTaskDialog drives the NewTaskDialog root component (#30). When open, it
+    // carries an optional prefill (summary/description) set by the post-dropdown
+    // "Tạo task" action (#16). null = dialog closed.
+    newTaskDialog: {open: boolean; prefillSummary?: string; prefillDescription?: string; channelID?: string};
 }
 
 const initialState: TaskState = {
@@ -63,6 +70,7 @@ const initialState: TaskState = {
     selectedTask: null,
     tasks: {},
     lastSeq: {},
+    newTaskDialog: {open: false},
 };
 
 // A discriminated-union action. Keeping this narrow (rather than `AnyAction`)
@@ -73,6 +81,9 @@ export interface PluginAction {
     taskID?: string;
     task?: TaskPartial;
     seq?: number;
+    prefillSummary?: string;
+    prefillDescription?: string;
+    channelID?: string;
 }
 
 // reducer is the entry point registered via registerReducer in index.tsx.
@@ -154,6 +165,18 @@ export default function reducer(state: TaskState = initialState, action: PluginA
             lastSeq: omit(state.lastSeq, id),
         };
     }
+    case ACTION_TYPES.OPEN_NEW_TASK_DIALOG:
+        return {
+            ...state,
+            newTaskDialog: {
+                open: true,
+                prefillSummary: action.prefillSummary,
+                prefillDescription: action.prefillDescription,
+                channelID: action.channelID,
+            },
+        };
+    case ACTION_TYPES.CLOSE_NEW_TASK_DIALOG:
+        return {...state, newTaskDialog: {open: false}};
     default:
         return state;
     }

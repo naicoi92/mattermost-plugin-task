@@ -7,7 +7,7 @@
 // reducer, translations, and the post dropdown action. Uses a fake registry +
 // store so no host app is needed.
 
-import Plugin, {openNewTaskFromMessage} from 'index';
+import Plugin, {openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
@@ -15,13 +15,15 @@ import type {GlobalState} from '@mattermost/types/store';
 
 // A minimal store whose dispatch records every action, used to assert the
 // channel header button and post dropdown action dispatch the right thing.
-function fakeStore() {
+// `state` is returned by getState (defaults to empty) so post-dropdown tests can
+// seed the host post entities.
+function fakeStore(state: unknown = {}) {
     const actions: Array<{type: string}> = [];
     const store = {
         dispatch: jest.fn((a: {type: string}) => {
             actions.push(a);
         }),
-        getState: jest.fn(),
+        getState: jest.fn(() => state),
         subscribe: jest.fn(),
         replaceReducer: jest.fn(),
         [Symbol.observable]: jest.fn(),
@@ -108,10 +110,107 @@ describe('Plugin.initialize registrations (#27)', () => {
 });
 
 describe('openNewTaskFromMessage', () => {
-    test('opens the RHS', () => {
+    // A host state shape with a post under entities.posts.posts, matching where
+    // Mattermost stores posts.
+    function stateWithPost(postId: string, message: string, channelID: string) {
+        return {
+            entities: {posts: {posts: {[postId]: {message, channel_id: channelID}}}},
+        };
+    }
+
+    test('opens the New Task dialog with prefilled summary/description from the resolved post', () => {
+        const state = stateWithPost('p1', 'Fix the bug\nDetails here\nMore detail', 'ch1');
+        const {store, actions} = fakeStore(state);
+        openNewTaskFromMessage(store, 'p1');
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: 'Fix the bug',
+            prefillDescription: 'Details here\nMore detail',
+            channelID: 'ch1',
+        });
+    });
+
+    test('an empty message opens the dialog with blank fields', () => {
+        const state = stateWithPost('p1', '', 'ch1');
+        const {store, actions} = fakeStore(state);
+        openNewTaskFromMessage(store, 'p1');
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: '',
+            prefillDescription: '',
+            channelID: 'ch1',
+        });
+    });
+
+    test('an unknown postId opens the dialog blank', () => {
+        const {store, actions} = fakeStore(stateWithPost('p1', 'msg', 'ch1'));
+        openNewTaskFromMessage(store, 'nope');
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: '',
+            prefillDescription: '',
+            channelID: undefined,
+        });
+    });
+
+    test('a missing postId opens the dialog blank', () => {
         const {store, actions} = fakeStore();
         openNewTaskFromMessage(store);
-        expect(actions).toContainEqual({type: ACTION_TYPES.OPEN_RHS});
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: '',
+            prefillDescription: '',
+            channelID: undefined,
+        });
+    });
+});
+
+describe('resolvePost', () => {
+    test('reads a post from state.entities.posts.posts', () => {
+        const state = {entities: {posts: {posts: {p1: {message: 'hi', channel_id: 'c1'}}}}};
+        expect(resolvePost(state, 'p1')).toEqual({message: 'hi', channel_id: 'c1'});
+    });
+
+    test('returns undefined for a missing post', () => {
+        expect(resolvePost({entities: {posts: {posts: {}}}}, 'p1')).toBeUndefined();
+    });
+
+    test('returns undefined when the entities shape is absent', () => {
+        expect(resolvePost({}, 'p1')).toBeUndefined();
+        expect(resolvePost(null, 'p1')).toBeUndefined();
+    });
+});
+
+describe('splitMessageForTask', () => {
+    test('first line is the summary, rest is the description', () => {
+        const out = splitMessageForTask('Buy milk\n2% organic\nAt the store');
+        expect(out.summary).toBe('Buy milk');
+        expect(out.description).toBe('2% organic\nAt the store');
+    });
+
+    test('a single line yields an empty description', () => {
+        const out = splitMessageForTask('Just a summary');
+        expect(out.summary).toBe('Just a summary');
+        expect(out.description).toBe('');
+    });
+
+    test('an empty message yields empty fields', () => {
+        const out = splitMessageForTask('   ');
+        expect(out.summary).toBe('');
+        expect(out.description).toBe('');
+    });
+
+    test('a long first line is truncated with an ellipsis', () => {
+        const long = 'x'.repeat(200);
+        const out = splitMessageForTask(long);
+        expect(out.summary.length).toBe(120);
+        expect(out.summary.endsWith('…')).toBe(true);
+    });
+
+    test('leading/trailing whitespace is trimmed', () => {
+        const out = splitMessageForTask('\n  Summary  \n  Desc  \n');
+        expect(out.summary).toBe('Summary');
+        expect(out.description).toBe('Desc');
     });
 });
 
