@@ -87,6 +87,62 @@ The server-side building blocks for all of the above are already merged
 (task service, REST API, slash commands, dialog builders, notification layer),
 so Phase 3 is primarily webapp React work.
 
+## Phase 2 (Subtask & Comment) E2E checklist
+
+> Issue #26. Covers the Phase 2 acceptance criteria. Automated integration tests
+> (`server/integration_test.go`, `TestIntegration_Phase2_*`) drive the critical
+> rules at the service + notification layer; the manual steps below verify the
+> chat experience end to end.
+
+### Automated coverage (Phase 2)
+
+`go test ./server/...` includes:
+
+- **Subtask creation & inheritance** — subtask inherits parent `ChannelID` and
+  default assignee; explicit assignee overrides; missing parent rejected
+  (`task` + `command` + REST unit tests; `TestIntegration_Phase2_SubtaskInheritsAndProgress`).
+- **Parent-done blocking** — parent `done` rejected with a clear message listing
+  open subtasks; allowed once all subtasks are terminal
+  (`TestIntegration_Phase2_ParentDoneBlockedThenAllowed`).
+- **Parent-cancel cascade** — cancelling a parent cascade-cancels open subtasks,
+  leaves terminal ones untouched, and notifies participants **once** for the
+  parent (`TestIntegration_Phase2_CancelParentCascades`).
+- **Comment add/list + participant notification** — new comment DMs creator +
+  assignee (minus commenter); list returns comments in creation order
+  (`TestIntegration_Phase2_CommentNotifiesParticipants`).
+- **Loop/depth guard** — a `ParentTaskID` forming a cycle or exceeding
+  `maxSubtaskDepth` is rejected.
+
+### Manual E2E (Phase 2)
+
+Prerequisites: two users (creator + assignee), a channel, the plugin enabled.
+
+- [ ] **Create subtask from a parent.** `/task subtask <parentId> <summary>`
+      creates a subtask that inherits the parent's channel and (default)
+      assignee. `GET /tasks/<parentId>/subtasks` lists it.
+- [ ] **Card shows subtask progress.** After posting/refreshing the parent card,
+      it shows `Subtasks: 1/2 done` as subtasks are completed.
+- [ ] **Parent-done blocked while a subtask is open.** `/task done <parentId>`
+      is refused with a message naming the open subtask; `/task status
+      <parentId> done` returns 409.
+- [ ] **Mark subtasks done, then mark parent done.** Once every subtask is
+      `done`/`cancelled`, the parent can be marked `done`.
+- [ ] **Cancel parent cascades.** `/task cancel <parentId>` moves open subtasks
+      to `cancelled`; already-terminal subtasks stay as-is. The creator +
+      assignee each get **one** cancellation DM (not one per subtask).
+- [ ] **Add a comment; participants notified.** `/task comment <id> <text>`
+      (or `POST /tasks/<id>/comments`) adds a comment; the creator and assignee
+      (minus the commenter) are DM'd. The card shows `Comments: N`.
+- [ ] **Task Detail shows subtasks + comments.** Opening the Task Detail dialog
+      shows live subtask progress and the most recent comments in the intro.
+- [ ] **Access control.** A user who cannot view a personal task cannot read its
+      comments (`GET /tasks/<id>/comments` → 403) or comment via the command.
+
+### Deferred to Phase 3 (webapp)
+
+- RHS Task Detail rendering the **full** subtask list and **full** comment
+  thread (the REST data path ships in Phase 2: `GET /subtasks`, `GET /comments`).
+
 ## Test server setup
 
 1. Mattermost server ≥ 10.7.0, dev config with `EnableUploads: true`.
