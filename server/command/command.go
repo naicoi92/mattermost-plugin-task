@@ -64,6 +64,15 @@ type CommentNotifier interface {
 	NotifyCommented(task TaskRef, actorID, creatorID, assigneeID string)
 }
 
+// CommentAuthorizer reports whether userID may comment on the task. It backs
+// the view/comment permission rule including channel membership for
+// channel-scoped tasks; supplied by the plugin layer (which has the channel
+// membership API). May be nil, in which case the handler falls back to the
+// creator/assignee co-owner check (matching the personal-task rule).
+type CommentAuthorizer interface {
+	CanComment(userID string, task *taskmodel.Task) bool
+}
+
 // UserResolver resolves an @username mention to a Mattermost user id. Supplied
 // by the plugin layer (which has API access); nil disables assign parsing.
 type UserResolver interface {
@@ -82,12 +91,13 @@ type TaskRef struct {
 // Handler dispatches slash commands. Today it owns the /task command; the
 // legacy /hello command from the starter template is retained for reference.
 type Handler struct {
-	client          *pluginapi.Client
-	taskService     TaskService
-	notifier        TaskNotifier
-	assignNotifier  AssignNotifier
-	commentNotifier CommentNotifier
-	users           UserResolver
+	client            *pluginapi.Client
+	taskService       TaskService
+	notifier          TaskNotifier
+	assignNotifier    AssignNotifier
+	commentNotifier   CommentNotifier
+	commentAuthorizer CommentAuthorizer
+	users             UserResolver
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -101,10 +111,11 @@ const helloCommandTrigger = "hello"
 // Options configure optional collaborators on the command handler. Fields may
 // be nil to disable the corresponding behavior (notifications / @user lookup).
 type Options struct {
-	Notifier        TaskNotifier    // done/cancelled DMs
-	AssignNotifier  AssignNotifier  // assignee DM
-	CommentNotifier CommentNotifier // comment DM
-	Users           UserResolver    // @username -> user id for /task assign
+	Notifier          TaskNotifier      // done/cancelled DMs
+	AssignNotifier    AssignNotifier    // assignee DM
+	CommentNotifier   CommentNotifier   // comment DM
+	CommentAuthorizer CommentAuthorizer // view/comment permission (channel-aware)
+	Users             UserResolver      // @username -> user id for /task assign
 }
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
@@ -198,12 +209,13 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 	}
 
 	return &Handler{
-		client:          client,
-		taskService:     taskService,
-		notifier:        opts.Notifier,
-		assignNotifier:  opts.AssignNotifier,
-		commentNotifier: opts.CommentNotifier,
-		users:           opts.Users,
+		client:            client,
+		taskService:       taskService,
+		notifier:          opts.Notifier,
+		assignNotifier:    opts.AssignNotifier,
+		commentNotifier:   opts.CommentNotifier,
+		commentAuthorizer: opts.CommentAuthorizer,
+		users:             opts.Users,
 	}
 }
 
@@ -459,13 +471,23 @@ func (c *Handler) handleComment(args *model.CommandArgs, rest []string) (*model.
 	if t == nil {
 		return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
 	}
+	// Authorization: anyone who can view the task may comment. When a channel-aware
+	// authorizer is wired, use it (covers channel members); otherwise fall back to
+	// the personal-task co-owner rule (creator or assignee).
+	if c.commentAuthorizer != nil {
+		if !c.commentAuthorizer.CanComment(args.UserId, t) {
+			return ephemeral("You do not have permission to comment on this task."), nil
+		}
+	} else if args.UserId != t.CreatorID && args.UserId != t.AssigneeID {
+		return ephemeral("You do not have permission to comment on this task."), nil
+	}
 
 	_, ev, err := c.taskService.AddComment(id, args.UserId, text)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
 			return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
-		case strings.Contains(err.Error(), "required"):
+		case errors.Is(err, task.ErrCommentContentRequired):
 			return ephemeral("Comment text is required."), nil
 		default:
 			c.client.Log.Error("Failed to add comment", "task_id", id, "error", err)

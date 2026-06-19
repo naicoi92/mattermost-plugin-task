@@ -337,6 +337,20 @@ func TestListComments_ReturnsInCreationOrder(t *testing.T) {
 	assert.Equal(t, c2.ID, got[1].ID)
 }
 
+// Issue #24 (CodeRabbit): GET /comments is access-controlled. A personal task
+// is private to creator/assignee; a stranger must be denied (403), not leaked
+// the thread.
+func TestListComments_ForbiddenForNonParticipant(t *testing.T) {
+	p, _ := newTestPlugin()
+	task, err := p.taskService.Create(task.CreateInput{Summary: "secret", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet,
+		"/api/v1/tasks/"+task.ID+"/comments", "", "u-stranger"))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
 func TestAuthorization_Required(t *testing.T) {
 	p, _ := newTestPlugin()
 	w := httptest.NewRecorder()

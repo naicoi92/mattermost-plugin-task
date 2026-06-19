@@ -14,7 +14,9 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/command"
+	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
+	"github.com/naicoi92/mattermost-plugin-task/server/permission"
 	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
@@ -87,10 +89,11 @@ func (p *Plugin) OnActivate() error {
 	p.taskService = task.NewService(p.kvstore)
 
 	p.commandClient = command.NewCommandHandler(p.client, p.taskService, command.Options{
-		Notifier:        commandNotifier{p.notifier},
-		AssignNotifier:  commandAssignNotifier{p.notifier},
-		CommentNotifier: commandCommentNotifier{p.notifier},
-		Users:           userResolver{p.API},
+		Notifier:          commandNotifier{p.notifier},
+		AssignNotifier:    commandAssignNotifier{p.notifier},
+		CommentNotifier:   commandCommentNotifier{p.notifier},
+		CommentAuthorizer: commandCommentAuthorizer{channels: channelMembershipChecker{api: p.API}},
+		Users:             userResolver{p.API},
 	})
 
 	p.router = p.initRouter()
@@ -250,6 +253,19 @@ func (c commandCommentNotifier) NotifyCommented(ref command.TaskRef, actorID, cr
 		return
 	}
 	c.n.NotifyCommented(notification.TaskSummary{ID: ref.ID, Summary: ref.Summary}, actorID, creatorID, assigneeID)
+}
+
+// commandCommentAuthorizer adapts permission.CanUserCommentTask to the
+// command.CommentAuthorizer interface, using the channel-membership checker.
+type commandCommentAuthorizer struct {
+	channels permission.ChannelMembershipChecker
+}
+
+func (c commandCommentAuthorizer) CanComment(userID string, t *taskmodel.Task) bool {
+	if t == nil {
+		return false
+	}
+	return permission.CanUserCommentTask(userID, t, c.channels)
 }
 
 // userResolver adapts plugin.API.GetUserByUsername to command.UserResolver,

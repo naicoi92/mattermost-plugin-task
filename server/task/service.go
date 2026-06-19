@@ -238,7 +238,7 @@ type CommentEvent struct {
 // rejected.
 func (s *Service) AddComment(taskID, userID, content string) (model.Comment, CommentEvent, error) {
 	if strings.TrimSpace(content) == "" {
-		return model.Comment{}, CommentEvent{}, errors.New("comment content is required")
+		return model.Comment{}, CommentEvent{}, ErrCommentContentRequired
 	}
 	task, err := s.store.GetTask(taskID)
 	if err != nil {
@@ -720,6 +720,11 @@ var ErrNotFound = errors.New("task not found")
 // ErrParentNotFound is returned by Create when a subtask references a parent
 // task id that does not exist.
 var ErrParentNotFound = errors.New("parent task not found")
+
+// ErrCommentContentRequired is returned by AddComment when the content is empty
+// (or whitespace). Callers should map it with errors.Is rather than substring
+// matching on the message.
+var ErrCommentContentRequired = errors.New("comment content is required")
 
 // AssignEvent describes the result of an assignee change so callers (REST/
 // command handlers) can fire the appropriate notification without re-reading

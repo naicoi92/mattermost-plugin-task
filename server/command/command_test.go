@@ -320,6 +320,44 @@ func TestTaskComment_TaskNotFound(t *testing.T) {
 	assert.Contains(t, resp.Text, "not found")
 }
 
+// Issue #24 (CodeRabbit): /task comment must enforce an authorization gate,
+// mirroring the REST path. Without a channel-aware authorizer, the fallback is
+// the personal-task co-owner rule (creator or assignee).
+func TestTaskComment_RequiresPermission(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{
+		getResult: &taskmodel.Task{ID: "T1", Summary: "task", CreatorID: "u-owner"},
+	}
+	handler := NewCommandHandler(env.client, svc, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task comment T1 hi", UserId: "u-stranger"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "permission")
+}
+
+// When a CommentAuthorizer is wired, it gates commenting (covers channel members).
+func TestTaskComment_UsesAuthorizer(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	task := &taskmodel.Task{ID: "T1", Summary: "task", CreatorID: "u-owner"}
+	svc := &fakeStatusService{
+		getResult:     task,
+		commentResult: taskmodel.Comment{ID: "C1", Content: "ok"},
+	}
+	handler := NewCommandHandler(env.client, svc, Options{CommentAuthorizer: allowCommentAuthorizer{}})
+
+	// A stranger is allowed by the stub authorizer.
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task comment T1 hi", UserId: "u-stranger"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Comment added")
+}
+
+// allowCommentAuthorizer permits everyone; used to verify the authorizer path.
+type allowCommentAuthorizer struct{}
+
+func (allowCommentAuthorizer) CanComment(userID string, t *taskmodel.Task) bool { return true }
+
 func TestTaskComment_Usage(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()

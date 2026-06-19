@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -581,7 +582,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
 			p.writeError(w, http.StatusNotFound, "task not found")
-		case strings.Contains(err.Error(), "required"):
+		case errors.Is(err, task.ErrCommentContentRequired):
 			p.writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			p.writeError(w, http.StatusInternalServerError, err.Error())
@@ -604,14 +605,41 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // listComments handles GET /tasks/:id/comments, returning comments sorted by
-// creation time.
+// creation time. Access-controlled: the caller must be permitted to view the
+// task (CanUserCommentTask follows the view rule), so a personal task's thread
+// can't be read by an outsider who only knows the id.
 func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 	taskID := mux.Vars(r)["id"]
+	actorID := currentUserID(r)
+
+	t, err := p.taskService.Get(taskID)
+	if err != nil {
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if t == nil {
+		p.writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task's comments")
+		return
+	}
+
 	comments, err := p.taskService.ListComments(taskID)
 	if err != nil {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Enforce ordering defensively: the service returns ULID (creation) order,
+	// but this handler guarantees it regardless of the underlying contract by
+	// sorting by CreatedAt with the comment ID as a deterministic tie-breaker.
+	sort.Slice(comments, func(i, j int) bool {
+		if comments[i].CreatedAt != comments[j].CreatedAt {
+			return comments[i].CreatedAt < comments[j].CreatedAt
+		}
+		return comments[i].ID < comments[j].ID
+	})
 	p.writeJSON(w, comments)
 }
 
