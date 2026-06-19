@@ -156,6 +156,15 @@ func TestCreateTask_RequiresSummary(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// A subtask referencing a non-existent parent is a client error (400), not 500.
+func TestCreateTask_MissingParentIsBadRequest(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"child","parent_task_id":"ghost"}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestAuthorization_Required(t *testing.T) {
 	p, _ := newTestPlugin()
 	w := httptest.NewRecorder()

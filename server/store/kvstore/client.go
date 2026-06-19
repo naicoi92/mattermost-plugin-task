@@ -1,6 +1,7 @@
 package kvstore
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/pluginapi"
@@ -132,8 +133,9 @@ func (c Client) DeleteTask(id string) error {
 }
 
 // ListTaskIDsByPrefix scans keys matching prefix and returns the distinct
-// task IDs embedded in those keys. Stale index entries whose task no longer
-// exists are removed and omitted from the result.
+// task IDs embedded in those keys, sorted lexicographically (ULID order, i.e.
+// creation order). Stale index entries whose task no longer exists are removed
+// and omitted from the result.
 func (c Client) ListTaskIDsByPrefix(prefix string) ([]string, error) {
 	seen := make(map[string]struct{})
 	var result []string
@@ -174,6 +176,10 @@ func (c Client) ListTaskIDsByPrefix(prefix string) ([]string, error) {
 		page++
 	}
 
+	// ULIDs are lexicographically ordered by creation time, so a plain string
+	// sort yields creation order. ListKeys order is not guaranteed stable across
+	// pages/impls, so we sort explicitly.
+	sort.Strings(result)
 	return result, nil
 }
 
@@ -205,7 +211,8 @@ func (c Client) SaveSubtask(parentID, taskID string) error {
 	return c.SaveIndex(SubtaskKey(parentID, taskID))
 }
 
-// GetSubtaskIDs returns the task IDs registered as subtasks of parentID.
+// GetSubtaskIDs returns the task IDs registered as subtasks of parentID, sorted
+// by ULID (which corresponds to creation order).
 func (c Client) GetSubtaskIDs(parentID string) ([]string, error) {
 	if parentID == "" {
 		return nil, errors.New("parent task ID is required")
@@ -248,7 +255,10 @@ func (c Client) GetComment(taskID, commentID string) (*model.Comment, error) {
 	return &comment, nil
 }
 
-// GetCommentIDs returns the IDs of comments attached to taskID.
+// GetCommentIDs returns the IDs of comments attached to taskID, sorted by ULID
+// (creation order). ListKeys order is not guaranteed stable, so the IDs are
+// sorted explicitly — for comments the comment ULID is embedded in the key, so a
+// string sort yields chronological order.
 func (c Client) GetCommentIDs(taskID string) ([]string, error) {
 	prefix := CommentKey(taskID, "")
 	var result []string
@@ -274,6 +284,7 @@ func (c Client) GetCommentIDs(taskID string) ([]string, error) {
 		page++
 	}
 
+	sort.Strings(result)
 	return result, nil
 }
 

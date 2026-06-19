@@ -138,6 +138,10 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(err.Error(), "required"):
 			p.writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, task.ErrParentNotFound):
+			// A missing parent is a client error (bad parent_task_id), not a
+			// server error.
+			p.writeError(w, http.StatusBadRequest, "parent task not found")
 		default:
 			p.writeError(w, http.StatusInternalServerError, err.Error())
 		}
