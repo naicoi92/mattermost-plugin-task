@@ -32,6 +32,14 @@ type KVStore interface {
 	// task IDs embedded in those keys. Stale index entries whose task no longer
 	// exists are removed and omitted from the result.
 	ListTaskIDsByPrefix(prefix string) ([]string, error)
+	// ListUserAssignedTaskIDs returns task IDs from idx:u:{userID}:assigned:.
+	ListUserAssignedTaskIDs(userID string) ([]string, error)
+	// ListUserCreatedTaskIDs returns task IDs from idx:u:{userID}:created:.
+	ListUserCreatedTaskIDs(userID string) ([]string, error)
+	// ListChannelTaskIDs returns task IDs from idx:ch:{channelID}:task:.
+	ListChannelTaskIDs(channelID string) ([]string, error)
+	// ListAllTaskIDs returns task IDs from the global idx:all:task: index.
+	ListAllTaskIDs() ([]string, error)
 	// SaveIndex writes an independent index edge key.
 	SaveIndex(key string) error
 	// DeleteIndex removes an independent index edge key.

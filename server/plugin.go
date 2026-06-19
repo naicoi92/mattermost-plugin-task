@@ -14,6 +14,7 @@ import (
 
 	"github.com/naicoi92/mattermost-plugin-task/server/command"
 	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
+	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
 // Plugin implements the interface expected by the Mattermost server to communicate between the server and plugin processes.
@@ -28,6 +29,11 @@ type Plugin struct {
 
 	// commandClient is the client used to register and execute slash commands.
 	commandClient command.Command
+
+	// taskService wraps the kvstore with task lifecycle business logic
+	// (create/list/patch/delete cascade), shared by the REST API and slash
+	// commands.
+	taskService *task.Service
 
 	// router is the HTTP router for handling API requests.
 	router *mux.Router
@@ -47,6 +53,8 @@ func (p *Plugin) OnActivate() error {
 	p.client = pluginapi.NewClient(p.API, p.Driver)
 
 	p.kvstore = kvstore.NewKVStore(p.client)
+
+	p.taskService = task.NewService(p.kvstore)
 
 	p.commandClient = command.NewCommandHandler(p.client)
 
