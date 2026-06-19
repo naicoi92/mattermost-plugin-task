@@ -131,8 +131,12 @@ func (c Client) SaveTask(task model.Task) error {
 
 // TouchTaskUpdatedAt atomically updates only the UpdatedAt field of the task
 // with the given id, using compare-and-set so a concurrent change to other
-// fields (status/assignee/due) is never clobbered. A missing task yields
-// ErrTaskNotFound; the CAS retries on conflict (see SetAtomicWithRetries).
+// fields (status/assignee/due) is never clobbered. The update is monotonic:
+// UpdatedAt is set to max(existing, updatedAt) so a stale candidate (e.g. a
+// subtask whose CreatedAt predates a concurrent parent change) can never push
+// the WebSocket seq backward and cause newer events to be dropped. A missing
+// task yields ErrTaskNotFound; the CAS retries on conflict (see
+// SetAtomicWithRetries).
 func (c Client) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 	if id == "" {
 		return errors.New("task ID is required")
@@ -145,7 +149,10 @@ func (c Client) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 		if err := json.Unmarshal(old, &task); err != nil {
 			return nil, errors.Wrapf(err, "failed to decode task %s for touch", id)
 		}
-		task.UpdatedAt = updatedAt
+		// Monotonic: never decrease UpdatedAt, so the WS seq can't regress.
+		if updatedAt > task.UpdatedAt {
+			task.UpdatedAt = updatedAt
+		}
 		return task, nil
 	})
 	if err != nil {

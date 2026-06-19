@@ -364,14 +364,32 @@ func (s *Service) ListSubtasks(parentID string) ([]model.Task, error) {
 // assigneeID overrides the inherited default. A non-existent parent is rejected
 // with ErrParentNotFound. It is a thin wrapper over Create that also re-validates
 // the parent for callers that resolved it separately.
+//
+// After creating the subtask it atomically bumps the parent's UpdatedAt (via
+// TouchTaskUpdatedAt) so the WebSocket seq (#32) advances and a client receiving
+// the parent's "subtasks changed" event doesn't drop it as stale — the same
+// root cause fixed for comments.
 func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*model.Task, error) {
-	return s.Create(CreateInput{
+	created, err := s.Create(CreateInput{
 		Summary:      summary,
 		CreatorID:    creatorID,
 		AssigneeID:   assigneeID,
 		Due:          due,
 		ParentTaskID: parentID,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Bump the parent's UpdatedAt so a "subtasks changed" WebSocket event for the
+	// parent isn't dropped by the client's stale-seq guard. Best-effort: a touch
+	// failure only means the parent's progress badge may lag; the subtask itself
+	// is already created.
+	if tErr := s.store.TouchTaskUpdatedAt(parentID, created.CreatedAt); tErr != nil {
+		s.logUnexpected("failed to touch parent UpdatedAt after subtask creation", tErr)
+	}
+
+	return created, nil
 }
 
 // SetPostIDs records the channel/DM post ids of the task's interactive card so
