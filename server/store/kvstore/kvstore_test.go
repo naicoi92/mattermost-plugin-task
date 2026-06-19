@@ -194,6 +194,37 @@ func TestClient_SaveComment_Validation(t *testing.T) {
 	assert.EqualError(t, store.SaveComment("task1", pmodel.Comment{}), "comment ID is required")
 }
 
+// Issue #23: GetComment reads the single t:{taskID}:c:{commentID} entity key.
+func TestClient_GetComment(t *testing.T) {
+	api, store := setupTest()
+
+	t.Run("returns comment when present", func(t *testing.T) {
+		comment := pmodel.Comment{ID: "c1", UserID: "u1", Content: "LGTM"}
+		api.On("KVGet", "t:task1:c:c1").Return(mustMarshal(t, comment), nil).Once()
+
+		got, err := store.GetComment("task1", "c1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "c1", got.ID)
+		assert.Equal(t, "LGTM", got.Content)
+	})
+
+	t.Run("returns nil when absent", func(t *testing.T) {
+		api.On("KVGet", "t:task1:c:ghost").Return(nil, nil).Once()
+		got, err := store.GetComment("task1", "ghost")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("validation", func(t *testing.T) {
+		_, store := setupTest()
+		_, err := store.GetComment("", "c1")
+		assert.EqualError(t, err, "task ID is required")
+		_, err = store.GetComment("task1", "")
+		assert.EqualError(t, err, "comment ID is required")
+	})
+}
+
 func TestClient_SaveSubtask_Validation(t *testing.T) {
 	_, store := setupTest()
 

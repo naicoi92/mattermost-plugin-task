@@ -229,6 +229,25 @@ func (c Client) SaveComment(taskID string, comment model.Comment) error {
 	return nil
 }
 
+// GetComment returns the comment with the given id on taskID, or nil if no such
+// comment is stored. It reads the single t:{taskID}:c:{commentID} entity key.
+func (c Client) GetComment(taskID, commentID string) (*model.Comment, error) {
+	if taskID == "" {
+		return nil, errors.New("task ID is required")
+	}
+	if commentID == "" {
+		return nil, errors.New("comment ID is required")
+	}
+	var comment model.Comment
+	if err := c.client.KV.Get(CommentKey(taskID, commentID), &comment); err != nil {
+		return nil, errors.Wrapf(err, "failed to get comment %s on task %s", commentID, taskID)
+	}
+	if comment.ID == "" {
+		return nil, nil
+	}
+	return &comment, nil
+}
+
 // GetCommentIDs returns the IDs of comments attached to taskID.
 func (c Client) GetCommentIDs(taskID string) ([]string, error) {
 	prefix := CommentKey(taskID, "")
