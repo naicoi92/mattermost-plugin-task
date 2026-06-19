@@ -166,6 +166,87 @@ func (s *Service) Get(id string) (*model.Task, error) {
 	return s.store.GetTask(id)
 }
 
+// SetStatus transitions the task to newStatus using the canonical state machine
+// (taskutil.ApplyStatus), refreshing UpdatedAt and clearing/stamping the
+// CompletedAt/CancelledAt fields as appropriate:
+//
+//	todo / in_progress: clear CompletedAt and CancelledAt
+//	done:               set CompletedAt, clear CancelledAt
+//	cancelled:          set CancelledAt, clear CompletedAt
+//
+// Moving to a terminal status (done/cancelled) stops any active reminder by
+// dropping the idx:reminder:{id} edge. Cancelling a task also cascade-cancels
+// its open (todo/in_progress) subtasks. newStatus must be a valid status.
+//
+// It returns the updated task. A non-existent id yields ErrNotFound; an invalid
+// status yields ErrInvalidStatus.
+var ErrInvalidStatus = errors.New("invalid status")
+
+func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
+	if !model.IsValidStatus(newStatus) {
+		return nil, ErrInvalidStatus
+	}
+	task, err := s.store.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, ErrNotFound
+	}
+
+	// No-op if the status is unchanged.
+	if task.Status == newStatus {
+		return task, nil
+	}
+
+	taskutil.ApplyStatus(task, newStatus, nowFunc())
+	if err := s.store.SaveTask(*task); err != nil {
+		return nil, err
+	}
+
+	switch newStatus {
+	case model.StatusDone, model.StatusCancelled:
+		// Stop reminders on terminal statuses.
+		if rerr := s.store.DeleteReminder(task.ID); rerr != nil {
+			return nil, rerr
+		}
+	}
+
+	// Cascade-cancel open subtasks when the parent is cancelled.
+	if newStatus == model.StatusCancelled {
+		if err := s.cascadeCancelSubtasks(task.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	return task, nil
+}
+
+// cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
+// cancelled. Already-terminal subtasks are left untouched.
+func (s *Service) cascadeCancelSubtasks(parentID string) error {
+	subIDs, err := s.store.GetSubtaskIDs(parentID)
+	if err != nil {
+		return errors.Wrap(err, "failed to list subtasks for cascade cancel")
+	}
+	for _, subID := range subIDs {
+		sub, err := s.store.GetTask(subID)
+		if err != nil {
+			return err
+		}
+		if sub == nil {
+			continue
+		}
+		if sub.Status != model.StatusTodo && sub.Status != model.StatusInProgress {
+			continue
+		}
+		if _, err := s.SetStatus(subID, model.StatusCancelled); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // PatchInput is the partial-update payload. Only fields listed in UpdateFields
 // are modified; a field present in UpdateFields with the corresponding pointer
 // nil clears that field.
