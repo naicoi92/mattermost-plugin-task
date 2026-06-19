@@ -50,6 +50,11 @@ export interface TaskState {
     // tasks is a normalized by-id cache of tasks the webapp has seen. The
     // WebSocket handler (#32) upserts here so every view updates in lockstep.
     tasks: Record<string, TaskPartial>;
+
+    // lastSeq tracks the highest event seq seen per task (#32), so a stale
+    // out-of-order WebSocket event can be dropped instead of overwriting a newer
+    // state. The server sets seq to the task's UpdatedAt on every publish.
+    lastSeq: Record<string, number>;
 }
 
 const initialState: TaskState = {
@@ -57,6 +62,7 @@ const initialState: TaskState = {
     selectedTaskID: '',
     selectedTask: null,
     tasks: {},
+    lastSeq: {},
 };
 
 // A discriminated-union action. Keeping this narrow (rather than `AnyAction`)
@@ -66,6 +72,7 @@ export interface PluginAction {
     rhsOpen?: boolean;
     taskID?: string;
     task?: TaskPartial;
+    seq?: number;
 }
 
 // reducer is the entry point registered via registerReducer in index.tsx.
@@ -93,15 +100,40 @@ export default function reducer(state: TaskState = initialState, action: PluginA
         if (!action.task || typeof action.task.id !== 'string' || !action.task.id.trim()) {
             return state;
         }
+
+        // Stale-event guard (#32): drop an event whose seq is not newer than the
+        // last one applied for this task. The server sets seq = UpdatedAt, which
+        // only ever increases, so an older seq means an out-of-order delivery.
+        // An absent seq (a local optimistic mutation) is always applied.
+        if (action.seq !== undefined) {
+            const seen = state.lastSeq[action.task.id] ?? -Infinity;
+            if (action.seq <= seen) {
+                return state;
+            }
+        }
+
         return {
             ...state,
             tasks: {...state.tasks, [action.task.id]: action.task},
             selectedTask: state.selectedTaskID === action.task.id ? action.task : state.selectedTask,
+            lastSeq: action.seq === undefined ? state.lastSeq : {
+                ...state.lastSeq,
+                [action.task.id]: action.seq,
+            },
         };
     case ACTION_TYPES.DELETE_TASK: {
         const id = action.taskID ?? '';
         if (!id) {
             return state;
+        }
+
+        // Stale-event guard (#32): a delete with an older seq must not evict a
+        // task that a newer event has since updated. An absent seq applies.
+        if (action.seq !== undefined) {
+            const seen = state.lastSeq[id] ?? -Infinity;
+            if (action.seq < seen) {
+                return state;
+            }
         }
 
         // Two independent effects: remove from the cache (only if present), and
@@ -119,6 +151,7 @@ export default function reducer(state: TaskState = initialState, action: PluginA
             tasks: inCache ? omit(state.tasks, id) : state.tasks,
             selectedTask: isSelected ? null : state.selectedTask,
             selectedTaskID: isSelected ? '' : state.selectedTaskID,
+            lastSeq: omit(state.lastSeq, id),
         };
     }
     default:
