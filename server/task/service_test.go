@@ -1,0 +1,432 @@
+package task
+
+import (
+	"sort"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/naicoi92/mattermost-plugin-task/server/model"
+	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
+)
+
+// fakeStore is an in-memory KVStore implementation for service tests. It tracks
+// task/comment/subtask/index records and the reminder edge so the service can be
+// exercised end-to-end without the Mattermost pluginapi.
+type fakeStore struct {
+	tasks     map[string]model.Task
+	comments  map[string][]model.Comment // taskID -> comments
+	subtasks  map[string]map[string]struct{}
+	indexes   map[string]struct{}
+	reminders map[string]int64
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{
+		tasks:     map[string]model.Task{},
+		comments:  map[string][]model.Comment{},
+		subtasks:  map[string]map[string]struct{}{},
+		indexes:   map[string]struct{}{},
+		reminders: map[string]int64{},
+	}
+}
+
+func (f *fakeStore) GetTask(id string) (*model.Task, error) {
+	t, ok := f.tasks[id]
+	if !ok {
+		return nil, nil
+	}
+	return &t, nil
+}
+
+func (f *fakeStore) SaveTask(task model.Task) error {
+	f.tasks[task.ID] = task
+	return nil
+}
+
+func (f *fakeStore) DeleteTask(id string) error {
+	delete(f.tasks, id)
+	return nil
+}
+
+func (f *fakeStore) SaveIndex(key string) error {
+	f.indexes[key] = struct{}{}
+	return nil
+}
+
+func (f *fakeStore) DeleteIndex(key string) error {
+	delete(f.indexes, key)
+	// Comments are stored as entity keys t:{taskID}:c:{commentID}; mirror the
+	// production KVStore by dropping them from the comments map when removed.
+	if commentID, taskID, ok := parseCommentKey(key); ok {
+		f.comments[taskID] = removeComment(f.comments[taskID], commentID)
+	}
+	return nil
+}
+
+func removeComment(in []model.Comment, id string) []model.Comment {
+	out := in[:0]
+	for _, c := range in {
+		if c.ID != id {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// parseCommentKey decodes a t:{taskID}:c:{commentID} key. The ":c:" separator
+// matches kvstore.keyCommentPrefix.
+func parseCommentKey(key string) (commentID, taskID string, ok bool) {
+	idx := lastIndex(key, ":c:")
+	if idx < 0 || !startsWith(key, "t:") {
+		return "", "", false
+	}
+	taskID = key[2:idx]
+	commentID = key[idx+3:]
+	if taskID == "" || commentID == "" {
+		return "", "", false
+	}
+	return commentID, taskID, true
+}
+
+func lastIndex(s, sep string) int {
+	for i := len(s) - len(sep); i >= 0; i-- {
+		if s[i:i+len(sep)] == sep {
+			return i
+		}
+	}
+	return -1
+}
+
+func (f *fakeStore) SaveSubtask(parentID, taskID string) error {
+	if f.subtasks[parentID] == nil {
+		f.subtasks[parentID] = map[string]struct{}{}
+	}
+	f.subtasks[parentID][taskID] = struct{}{}
+	return nil
+}
+
+func (f *fakeStore) GetSubtaskIDs(parentID string) ([]string, error) {
+	var ids []string
+	for id := range f.subtasks[parentID] {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func (f *fakeStore) SaveComment(taskID string, comment model.Comment) error {
+	f.comments[taskID] = append(f.comments[taskID], comment)
+	return nil
+}
+
+func (f *fakeStore) GetCommentIDs(taskID string) ([]string, error) {
+	var ids []string
+	for _, c := range f.comments[taskID] {
+		ids = append(ids, c.ID)
+	}
+	return ids, nil
+}
+
+func (f *fakeStore) SaveReminder(taskID string, value int64) error {
+	f.reminders[taskID] = value
+	return nil
+}
+
+func (f *fakeStore) DeleteReminder(taskID string) error {
+	delete(f.reminders, taskID)
+	return nil
+}
+
+func (f *fakeStore) ListReminderKeys() ([]string, error) {
+	var keys []string
+	for k := range f.reminders {
+		keys = append(keys, kvstore.ReminderKey(k))
+	}
+	return keys, nil
+}
+
+// ListTaskIDsByPrefix mimics the production store by scanning the global index
+// and decoding task ids from the index keys. It supports the prefixes the
+// service uses (idx:u:{u}:assigned:, idx:u:{u}:created:, idx:ch:{c}:task:,
+// idx:all:task:, idx:t:{p}:sub:).
+func (f *fakeStore) ListTaskIDsByPrefix(prefix string) ([]string, error) {
+	var ids []string
+	for key := range f.indexes {
+		if !startsWith(key, prefix) {
+			continue
+		}
+		id := key[len(prefix):]
+		if id == "" {
+			continue
+		}
+		// Self-heal: skip stale markers pointing to deleted tasks.
+		if _, ok := f.tasks[id]; !ok {
+			delete(f.indexes, key)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func (f *fakeStore) ListUserAssignedTaskIDs(userID string) ([]string, error) {
+	return f.ListTaskIDsByPrefix("idx:u:" + userID + ":assigned:")
+}
+
+func (f *fakeStore) ListUserCreatedTaskIDs(userID string) ([]string, error) {
+	return f.ListTaskIDsByPrefix("idx:u:" + userID + ":created:")
+}
+
+func (f *fakeStore) ListChannelTaskIDs(channelID string) ([]string, error) {
+	return f.ListTaskIDsByPrefix("idx:ch:" + channelID + ":task:")
+}
+
+func (f *fakeStore) ListAllTaskIDs() ([]string, error) {
+	return f.ListTaskIDsByPrefix("idx:all:task:")
+}
+
+func (f *fakeStore) SetAtomicWithRetries(key string, update func(old []byte) (any, error)) error {
+	return nil // not exercised by the task service
+}
+
+func startsWith(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// fixedNow seeds nowFunc for deterministic timestamps.
+func fixedNow(ms int64) func() int64 { return func() int64 { return ms } }
+
+func TestCreate_Validation(t *testing.T) {
+	svc := NewService(newFakeStore())
+
+	_, err := svc.Create(CreateInput{CreatorID: "u1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "summary is required")
+
+	_, err = svc.Create(CreateInput{Summary: "x"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creator id is required")
+}
+
+func TestCreate_WritesIndexes(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	origNow := nowFunc
+	nowFunc = fixedNow(1_700_000_000_000)
+	defer func() { nowFunc = origNow }()
+
+	due := int64(1_700_010_000_000)
+	created, err := svc.Create(CreateInput{
+		Summary:    "Review PR",
+		ChannelID:  "ch1",
+		CreatorID:  "u1",
+		AssigneeID: "u2",
+		Due:        &due,
+	})
+	require.NoError(t, err)
+
+	// Entity persisted.
+	got, err := svc.Get(created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "Review PR", got.Summary)
+	assert.Equal(t, model.StatusTodo, got.Status)
+	assert.NotEmpty(t, got.OrderKey)
+	assert.Equal(t, int64(1_700_000_000_000), got.CreatedAt)
+
+	// All four indexes present.
+	assert.Contains(t, store.indexes, kvstore.UserAssignedKey("u2", created.ID))
+	assert.Contains(t, store.indexes, kvstore.UserCreatedKey("u1", created.ID))
+	assert.Contains(t, store.indexes, kvstore.ChannelTaskKey("ch1", created.ID))
+	assert.Contains(t, store.indexes, kvstore.AllTasksKey(created.ID))
+}
+
+func TestCreate_PersonalTask_NoChannelIndex(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	created, err := svc.Create(CreateInput{Summary: "Personal", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	assert.NotContains(t, store.indexes, kvstore.ChannelTaskKey("", created.ID))
+	assert.Contains(t, store.indexes, kvstore.AllTasksKey(created.ID))
+}
+
+func TestCreate_SubtaskWritesMembershipAndInheritsNothing(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	child, err := svc.Create(CreateInput{Summary: "child", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+
+	assert.Contains(t, store.subtasks[parent.ID], child.ID)
+}
+
+func TestPatch_PartialUpdate(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	origNow := nowFunc
+	nowFunc = fixedNow(1_000)
+	defer func() { nowFunc = origNow }()
+
+	created, err := svc.Create(CreateInput{Summary: "old", Description: "d", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	newSummary := "new summary"
+	patched, err := svc.Patch(created.ID, PatchInput{
+		UpdateFields: []string{"summary"},
+		Summary:      &newSummary,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "new summary", patched.Summary)
+	assert.Equal(t, "d", patched.Description, "untouched field preserved")
+	assert.True(t, patched.UpdatedAt >= 1000)
+}
+
+func TestPatch_ClearDue(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	due := int64(123)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", Due: &due})
+	require.NoError(t, err)
+	require.NotNil(t, created.Due)
+
+	patched, err := svc.Patch(created.ID, PatchInput{UpdateFields: []string{"due"}, Due: nil})
+	require.NoError(t, err)
+	assert.Nil(t, patched.Due)
+}
+
+func TestPatch_NotFound(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, err := svc.Patch("nope", PatchInput{UpdateFields: []string{"summary"}})
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDelete_CascadeRemovesSubtasksCommentsIndexes(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	parent, err := svc.Create(CreateInput{Summary: "p", CreatorID: "u1", AssigneeID: "u2", ChannelID: "ch1"})
+	require.NoError(t, err)
+	child, err := svc.Create(CreateInput{Summary: "c", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	require.NoError(t, store.SaveComment(parent.ID, model.Comment{ID: "cmt1", Content: "hi"}))
+
+	require.NoError(t, svc.Delete(parent.ID))
+
+	// Parent gone.
+	got, err := svc.Get(parent.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	// Child gone too.
+	gotChild, err := svc.Get(child.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gotChild)
+	// Indexes removed by full known key.
+	assert.NotContains(t, store.indexes, kvstore.AllTasksKey(parent.ID))
+	assert.NotContains(t, store.indexes, kvstore.UserAssignedKey("u2", parent.ID))
+	assert.NotContains(t, store.indexes, kvstore.UserCreatedKey("u1", parent.ID))
+	assert.NotContains(t, store.indexes, kvstore.ChannelTaskKey("ch1", parent.ID))
+	// Comments removed.
+	assert.Empty(t, store.comments[parent.ID])
+}
+
+func TestDelete_NotFound(t *testing.T) {
+	svc := NewService(newFakeStore())
+	err := svc.Delete("nope")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestList_ScopeMine(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	// u2 owns two tasks; u3 owns one.
+	_, err := svc.Create(CreateInput{Summary: "a", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+	_, err = svc.Create(CreateInput{Summary: "b", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+	_, err = svc.Create(CreateInput{Summary: "c", CreatorID: "u1", AssigneeID: "u3"})
+	require.NoError(t, err)
+
+	tasks, err := svc.List(ListQuery{Scope: ScopeMine, UserID: "u2"})
+	require.NoError(t, err)
+	assert.Len(t, tasks, 2)
+}
+
+func TestList_StatusFilter(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	t1, err := svc.Create(CreateInput{Summary: "t1", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+	t2, err := svc.Create(CreateInput{Summary: "t2", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+	require.NotNil(t, t1)
+
+	// Mark t2 done by editing the stored task directly.
+	stored := store.tasks[t2.ID]
+	stored.Status = model.StatusDone
+	stored.CompletedAt = ptrInt64(1)
+	store.tasks[t2.ID] = stored
+
+	tasks, err := svc.List(ListQuery{Scope: ScopeMine, UserID: "u2", Status: model.StatusDone})
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, t2.ID, tasks[0].ID)
+}
+
+func TestList_CursorPagination(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	// Create 3 tasks; their OrderKeys are n, n0, n00 (monotonic).
+	a, err := svc.Create(CreateInput{Summary: "a", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+	b, err := svc.Create(CreateInput{Summary: "b", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+	c, err := svc.Create(CreateInput{Summary: "c", CreatorID: "u1", AssigneeID: "u2"})
+	require.NoError(t, err)
+
+	// Page 1: limit 2 -> a, b.
+	page1, err := svc.List(ListQuery{Scope: ScopeMine, UserID: "u2", Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, page1, 2)
+	assert.Equal(t, a.ID, page1[0].ID)
+	assert.Equal(t, b.ID, page1[1].ID)
+
+	// Page 2: after b's order key -> c.
+	page2, err := svc.List(ListQuery{Scope: ScopeMine, UserID: "u2", Limit: 2, AfterOrderKey: page1[1].OrderKey})
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+	assert.Equal(t, c.ID, page2[0].ID)
+}
+
+func TestSearch_MatchesSummaryOrDescription(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	_, err := svc.Create(CreateInput{Summary: "Fix login bug", CreatorID: "u1"})
+	require.NoError(t, err)
+	_, err = svc.Create(CreateInput{Summary: "unrelated", Description: "discuss the LOGIN flow", CreatorID: "u1"})
+	require.NoError(t, err)
+	_, err = svc.Create(CreateInput{Summary: "no match", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	results, err := svc.Search("login", 10)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	empty, err := svc.Search("", 10)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func ptrInt64(v int64) *int64 { return &v }
