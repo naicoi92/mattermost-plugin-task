@@ -47,13 +47,19 @@ func TestCanUserModifyTask_Unassigned(t *testing.T) {
 }
 
 func TestCanUserDeleteTask(t *testing.T) {
-	ch := fakeMembershipChecker{admins: map[string]bool{"admin1:ch1": true}}
+	ch := fakeMembershipChecker{
+		admins:  map[string]bool{"admin1:ch1": true},
+		members: map[string]bool{"member1:ch1": true},
+	}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
 	assert.True(t, CanUserDeleteTask("creator1", task, ch), "creator can always delete")
 	assert.False(t, CanUserDeleteTask("assignee1", task, ch), "assignee cannot delete")
 	assert.False(t, CanUserDeleteTask("other", task, ch), "random member cannot delete")
 	assert.True(t, CanUserDeleteTask("admin1", task, ch), "channel admin can delete channel task")
+	// A plain channel member (not an admin) must not be able to delete: guards
+	// against regressions that widen the delete rule to all channel members.
+	assert.False(t, CanUserDeleteTask("member1", task, ch), "channel member (non-admin) cannot delete")
 }
 
 func TestCanUserDeleteTask_AdminIsNotMember(t *testing.T) {
