@@ -64,6 +64,26 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		return nil, errors.New("creator id is required")
 	}
 
+	// Subtasks inherit from their parent: a subtask must live in the parent's
+	// channel, and its default assignee is the parent's assignee (the caller may
+	// still override the assignee via CreateInput.AssigneeID). A non-existent
+	// parent is rejected so an orphan ParentTaskID can never be persisted.
+	channelID := in.ChannelID
+	assigneeID := in.AssigneeID
+	if in.ParentTaskID != "" {
+		parent, err := s.store.GetTask(in.ParentTaskID)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to load parent task")
+		}
+		if parent == nil {
+			return nil, ErrParentNotFound
+		}
+		channelID = parent.ChannelID
+		if assigneeID == "" {
+			assigneeID = parent.AssigneeID
+		}
+	}
+
 	now := nowFunc()
 	id := taskutil.GenerateULID()
 
@@ -76,9 +96,9 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		ID:             id,
 		Summary:        in.Summary,
 		Description:    in.Description,
-		ChannelID:      in.ChannelID,
+		ChannelID:      channelID,
 		CreatorID:      in.CreatorID,
-		AssigneeID:     in.AssigneeID,
+		AssigneeID:     assigneeID,
 		Due:            in.Due,
 		IsAllDay:       in.IsAllDay,
 		Status:         model.StatusTodo,
@@ -582,6 +602,10 @@ func derefBool(p *bool) bool {
 
 // ErrNotFound is returned by Get/Patch/Delete when the task id does not exist.
 var ErrNotFound = errors.New("task not found")
+
+// ErrParentNotFound is returned by Create when a subtask references a parent
+// task id that does not exist.
+var ErrParentNotFound = errors.New("parent task not found")
 
 // AssignEvent describes the result of an assignee change so callers (REST/
 // command handlers) can fire the appropriate notification without re-reading
