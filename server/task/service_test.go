@@ -614,6 +614,36 @@ func TestAssign_NotFound(t *testing.T) {
 
 func ptrInt64(v int64) *int64 { return &v }
 
+func TestSubtaskProgress(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	open, err := svc.Create(CreateInput{Summary: "open", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	done, err := svc.Create(CreateInput{Summary: "done", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	cancelled, err := svc.Create(CreateInput{Summary: "cancelled", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+
+	_, err = svc.SetStatus(done.ID, model.StatusDone)
+	require.NoError(t, err)
+	_, err = svc.SetStatus(cancelled.ID, model.StatusCancelled)
+	require.NoError(t, err)
+
+	d, total, err := svc.SubtaskProgress(parent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, d, "done+cancelled are terminal")
+	assert.Equal(t, 3, total)
+
+	// A task with no subtasks reports 0/0.
+	d2, total2, err := svc.SubtaskProgress(open.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, d2)
+	assert.Equal(t, 0, total2)
+}
+
 // --- Reminder subsystem ---
 
 func TestCreate_SeedsReminderIndexWhenDueAndOffset(t *testing.T) {

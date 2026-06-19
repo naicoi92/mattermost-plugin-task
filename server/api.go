@@ -150,7 +150,16 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		dmPostID = p.postCardDM(created.AssigneeID, created)
 	}
 	if channelPostID != "" || dmPostID != "" {
-		if updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID); err == nil && updated != nil {
+		updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID)
+		if err != nil {
+			// Card posts exist but the task linkage didn't persist; log so later
+			// status transitions can't refresh the cards (investigatable).
+			p.API.LogError("Failed to persist task card post IDs",
+				"task_id", created.ID,
+				"channel_post_id", channelPostID,
+				"dm_post_id", dmPostID,
+				"error", err)
+		} else if updated != nil {
 			created = updated
 		}
 	}

@@ -74,7 +74,7 @@ func TestTaskCardActions_AllFivePresent(t *testing.T) {
 func TestTaskCardActions_EachHasContext(t *testing.T) {
 	for _, a := range taskCardActions("T1", taskmodel.StatusTodo) {
 		require.NotNil(t, a.Integration)
-		assert.Equal(t, "/api/v1/actions", a.Integration.URL)
+		assert.Equal(t, "/plugins/com.mattermost.plugin-task/api/v1/actions", a.Integration.URL)
 		assert.Equal(t, "T1", a.Integration.Context["task_id"])
 		assert.NotEmpty(t, a.Integration.Context["action"])
 	}

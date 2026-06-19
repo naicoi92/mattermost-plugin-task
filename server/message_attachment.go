@@ -9,9 +9,12 @@ import (
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
-// cardActionCallbackPath is the plugin-relative URL interactive card buttons
-// POST to. The handler (handleCardAction) reads context.action + context.task_id.
-const cardActionCallbackPath = "/api/v1/actions"
+// cardActionCallbackPath is the plugin-scoped URL interactive card buttons POST
+// to. Mattermost requires PostActionIntegration URLs to use the
+// /plugins/{plugin_id}/... form for routing + internal auth (without it the
+// callback is treated as an external request and fails). The handler
+// (handleCardAction) reads context.action + context.task_id.
+const cardActionCallbackPath = "/plugins/com.mattermost.plugin-task/api/v1/actions"
 
 // cardAction is an interactive button on a task card.
 type cardAction string
@@ -161,7 +164,8 @@ func cardIntegration(action cardAction, taskID string) *model.PostActionIntegrat
 // (author = bot) and returns the post id. Used to post the card when a task is
 // created in a channel.
 func (p *Plugin) postCard(channelID string, t *taskmodel.Task) string {
-	attachment := buildTaskCard(t, nowMillis(), 0, 0)
+	done, total := p.subtaskProgress(t.ID)
+	attachment := buildTaskCard(t, nowMillis(), done, total)
 	post := &model.Post{
 		UserId:    p.botUserID,
 		ChannelId: channelID,
@@ -204,11 +208,26 @@ func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 		p.API.LogError("Failed to load post for card update", "post_id", postID, "error", err)
 		return
 	}
-	attachment := buildTaskCard(t, nowMillis(), 0, 0)
+	done, total := p.subtaskProgress(t.ID)
+	attachment := buildTaskCard(t, nowMillis(), done, total)
 	post.Props["attachments"] = []*model.SlackAttachment{&attachment}
 	if _, err := p.API.UpdatePost(post); err != nil {
 		p.API.LogError("Failed to update task card", "post_id", postID, "error", err)
 	}
+}
+
+// subtaskProgress returns (done, total) for the task's subtasks, or (0, 0) on
+// error (best-effort — a card without progress is better than no card).
+func (p *Plugin) subtaskProgress(taskID string) (done, total int) {
+	if p.taskService == nil {
+		return 0, 0
+	}
+	d, t, err := p.taskService.SubtaskProgress(taskID)
+	if err != nil {
+		p.API.LogDebug("Failed to compute subtask progress", "task_id", taskID, "error", err)
+		return 0, 0
+	}
+	return d, t
 }
 
 // nowMillis returns the current time in ms; factored out for tests.
