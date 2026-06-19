@@ -31,6 +31,11 @@ import type {PluginRegistry} from 'types/mattermost-webapp';
 import en from '../i18n/en.json';
 import vi from '../i18n/vi.json';
 
+// Plugin-wide stylesheet (#93). Imported once so webpack bundles it into
+// main.js alongside the JS. Without it the RHS, Quick List, New Task dialog
+// and Task Detail panel render with no styling at all.
+import './styles/index.scss';
+
 // getTranslationsForLocale returns the JSON bundle for the requested locale, or
 // the English bundle as a safe fallback. Used by registerTranslations (#33);
 // the same files are the single source of truth copied from assets/i18n/ by the

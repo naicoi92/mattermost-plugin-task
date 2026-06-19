@@ -1,0 +1,543 @@
+// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
+// See LICENSE.txt for license information.
+
+// Plugin-wide styles for the Task plugin webapp (#93). The React components in
+// src/components already ship className hooks but no CSS matched them, so the
+// RHS, Quick List, New Task dialog, and Task Detail panel rendered unstyled.
+//
+// This file is imported once from src/index.tsx so webpack bundles it into
+// main.js. It is intentionally framework-free plain CSS (via SCSS nesting for
+// readability) and stays within the plugin's own class namespace (`task-*`,
+// `quick-list*`) so it does not collide with the host webapp.
+//
+// Out of scope for v0.1.0: the Kanban modal (`.task-kanban-modal`) — Phase 4.
+
+// --- Shared variables -------------------------------------------------------
+
+$border-color: #ccc;
+$text-muted: #666;
+$danger: #d24b4e;
+$primary: #1c58d9;
+$primary-hover: #1547b0;
+$bg-alt: #f7f7f7;
+$bg-hover: #eef1f5;
+$radius: 4px;
+$gap: 8px;
+
+// --- TaskSidebar (RHS container) -------------------------------------------
+
+.task-rhs {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: #fff;
+
+    &__title {
+        padding: 12px 16px;
+        font-size: 16px;
+        font-weight: 600;
+        border-bottom: 1px solid $border-color;
+        flex: 0 0 auto;
+    }
+
+    &__body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: $gap;
+    }
+}
+
+// --- Quick List ------------------------------------------------------------
+
+.quick-list {
+    display: flex;
+    flex-direction: column;
+    gap: $gap;
+
+    &__tabs {
+        display: flex;
+        gap: 4px;
+        border-bottom: 1px solid $border-color;
+    }
+
+    &__tab {
+        flex: 1 1 0;
+        padding: 6px 10px;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+        font-size: 13px;
+        color: $text-muted;
+
+        &:hover:not(:disabled) {
+            color: #333;
+        }
+
+        &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        &--active {
+            color: $primary;
+            border-bottom-color: $primary;
+            font-weight: 600;
+        }
+    }
+
+    &__filters {
+        display: flex;
+        gap: $gap;
+        flex-wrap: wrap;
+    }
+
+    &__filter {
+        flex: 1 1 120px;
+        min-width: 100px;
+        padding: 4px 6px;
+        border: 1px solid $border-color;
+        border-radius: $radius;
+        background: #fff;
+        font-size: 13px;
+    }
+
+    &__error {
+        padding: 6px 8px;
+        background: #fdecea;
+        color: $danger;
+        border-radius: $radius;
+        font-size: 13px;
+    }
+
+    &__empty {
+        padding: 16px 8px;
+        text-align: center;
+        color: $text-muted;
+        font-size: 13px;
+    }
+
+    &__items {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    &__item {
+        &-button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 8px 10px;
+            background: $bg-alt;
+            border: 1px solid transparent;
+            border-radius: $radius;
+            cursor: pointer;
+
+            &:hover {
+                background: $bg-hover;
+                border-color: $border-color;
+            }
+        }
+
+        &-summary {
+            font-size: 14px;
+            color: #222;
+            margin-bottom: 4px;
+        }
+
+        &-meta {
+            display: flex;
+            gap: $gap;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: $text-muted;
+        }
+
+        &-status {
+            font-weight: 600;
+
+            &--done,
+            &--cancelled {
+                opacity: 0.7;
+            }
+        }
+
+        &-due {
+            &--overdue {
+                color: $danger;
+                font-weight: 600;
+            }
+        }
+
+        &--done,
+        &--cancelled {
+            .quick-list__item-summary {
+                text-decoration: line-through;
+                color: $text-muted;
+            }
+        }
+    }
+
+    &__load-more,
+    &__new-btn {
+        padding: 8px 12px;
+        border-radius: $radius;
+        cursor: pointer;
+        font-size: 13px;
+        border: 1px solid $border-color;
+        background: #fff;
+
+        &:hover:not(:disabled) {
+            background: $bg-hover;
+        }
+
+        &:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    }
+
+    &__new-btn {
+        background: $primary;
+        color: #fff;
+        border-color: $primary;
+        font-weight: 600;
+
+        &:hover:not(:disabled) {
+            background: $primary-hover;
+            border-color: $primary-hover;
+        }
+    }
+}
+
+// --- New Task dialog -------------------------------------------------------
+
+.task-new-dialog {
+    &__overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1050;
+        padding: 16px;
+    }
+
+    &#{&} {
+        // compound to raise specificity over generic .modal resets
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        width: 100%;
+        max-width: 480px;
+        max-height: 90vh;
+        overflow-y: auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    &__title {
+        font-size: 18px;
+        font-weight: 600;
+    }
+
+    &__error {
+        padding: 8px;
+        background: #fdecea;
+        color: $danger;
+        border-radius: $radius;
+        font-size: 13px;
+    }
+
+    &__field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    &__scope {
+        border: 1px solid $border-color;
+        border-radius: $radius;
+        padding: 8px;
+
+        legend {
+            padding: 0 4px;
+        }
+
+        label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-right: 16px;
+            font-size: 14px;
+        }
+    }
+
+    &__label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #333;
+    }
+
+    &__input,
+    &__textarea {
+        padding: 6px 8px;
+        border: 1px solid $border-color;
+        border-radius: $radius;
+        font-size: 14px;
+        font-family: inherit;
+
+        &:focus {
+            outline: none;
+            border-color: $primary;
+            box-shadow: 0 0 0 2px rgba(28, 88, 217, 0.2);
+        }
+    }
+
+    &__textarea {
+        min-height: 70px;
+        resize: vertical;
+    }
+
+    &__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: $gap;
+    }
+
+    &__btn {
+        padding: 8px 16px;
+        border-radius: $radius;
+        cursor: pointer;
+        font-size: 14px;
+        border: 1px solid $border-color;
+        background: #fff;
+
+        &:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        &--primary {
+            background: $primary;
+            color: #fff;
+            border-color: $primary;
+            font-weight: 600;
+
+            &:hover:not(:disabled) {
+                background: $primary-hover;
+                border-color: $primary-hover;
+            }
+        }
+
+        &--secondary:hover:not(:disabled) {
+            background: $bg-hover;
+        }
+    }
+}
+
+// --- Task Detail panel -----------------------------------------------------
+
+.task-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+
+    &--loading {
+        padding: 16px;
+        text-align: center;
+        color: $text-muted;
+    }
+
+    &__header {
+        display: flex;
+        align-items: center;
+        gap: $gap;
+    }
+
+    &__back {
+        background: transparent;
+        border: 1px solid $border-color;
+        border-radius: $radius;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+        padding: 2px 8px;
+
+        &:hover {
+            background: $bg-hover;
+        }
+    }
+
+    &__summary {
+        font-size: 16px;
+        font-weight: 600;
+        flex: 1 1 auto;
+    }
+
+    &__error {
+        padding: 8px;
+        background: #fdecea;
+        color: $danger;
+        border-radius: $radius;
+        font-size: 13px;
+    }
+
+    &__meta {
+        margin: 0;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 4px $gap;
+        font-size: 13px;
+
+        dt {
+            color: $text-muted;
+            font-weight: 600;
+        }
+
+        dd {
+            margin: 0;
+        }
+    }
+
+    &__status {
+        padding: 4px 6px;
+        border: 1px solid $border-color;
+        border-radius: $radius;
+        font-size: 13px;
+        background: #fff;
+    }
+
+    &__due--overdue {
+        color: $danger;
+        font-weight: 600;
+    }
+
+    &__description {
+        padding: 8px;
+        background: $bg-alt;
+        border-radius: $radius;
+        font-size: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    &__section-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #333;
+        display: flex;
+        gap: $gap;
+        align-items: center;
+        margin-bottom: 4px;
+    }
+
+    &__progress {
+        font-weight: 400;
+        color: $text-muted;
+    }
+
+    &__subtask-list,
+    &__comment-list {
+        list-style: none;
+        margin: 0 0 8px 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    &__subtask {
+        padding: 4px 8px;
+        background: $bg-alt;
+        border-radius: $radius;
+        font-size: 13px;
+
+        &--done,
+        &--cancelled {
+            text-decoration: line-through;
+            color: $text-muted;
+        }
+    }
+
+    &__comment {
+        padding: 6px 8px;
+        background: $bg-alt;
+        border-radius: $radius;
+    }
+
+    &__comment-body {
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    &__comment-meta {
+        font-size: 11px;
+        color: $text-muted;
+        margin-top: 2px;
+    }
+
+    &__add-row {
+        display: flex;
+        gap: $gap;
+    }
+
+    &__input {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border: 1px solid $border-color;
+        border-radius: $radius;
+        font-size: 13px;
+
+        &:focus {
+            outline: none;
+            border-color: $primary;
+        }
+    }
+
+    &__add-btn {
+        flex: 0 0 auto;
+        padding: 6px 12px;
+        background: $primary;
+        color: #fff;
+        border: 1px solid $primary;
+        border-radius: $radius;
+        cursor: pointer;
+        font-weight: 600;
+
+        &:hover {
+            background: $primary-hover;
+        }
+    }
+
+    &__actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 8px;
+    }
+
+    &__delete {
+        padding: 6px 12px;
+        background: #fff;
+        color: $danger;
+        border: 1px solid $danger;
+        border-radius: $radius;
+        cursor: pointer;
+        font-size: 13px;
+
+        &:hover {
+            background: $danger;
+            color: #fff;
+        }
+    }
+}
