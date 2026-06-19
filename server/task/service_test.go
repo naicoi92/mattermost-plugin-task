@@ -638,9 +638,9 @@ func TestCreate_SubtaskDepthCapRejected(t *testing.T) {
 	root, err := svc.Create(CreateInput{Summary: "root", CreatorID: "u1"})
 	require.NoError(t, err)
 	cur := root
-	for i := 0; i < maxSubtaskDepth; i++ {
-		child, err := svc.Create(CreateInput{Summary: "child", CreatorID: "u1", ParentTaskID: cur.ID})
-		require.NoErrorf(t, err, "nest level %d should be allowed", i+1)
+	for i := range maxSubtaskDepth {
+		child, cerr := svc.Create(CreateInput{Summary: "child", CreatorID: "u1", ParentTaskID: cur.ID})
+		require.NoErrorf(t, cerr, "nest level %d should be allowed", i+1)
 		cur = child
 	}
 	// One more level exceeds the cap → rejected as a cycle/depth error.
