@@ -55,8 +55,13 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
     const [error, setError] = useState('');
 
     // loadFirst resets the list and fetches the first page. Memoized so the
-    // effect below depends on a stable reference across renders.
+    // effect below depends on a stable reference across renders. It bails out
+    // when a fetch is already in flight so rapid tab/filter changes can't stack
+    // concurrent requests (the last response would otherwise win out of order).
     const loadFirst = useCallback(async (scope: QuickListTab, status: string, due: string) => {
+        if (loading) {
+            return;
+        }
         setLoading(true);
         setError('');
         try {
@@ -70,7 +75,7 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
         } finally {
             setLoading(false);
         }
-    }, [channelID]);
+    }, [channelID, loading]);
 
     // Fetch the first page whenever the tab or filters change.
     useEffect(() => {
@@ -141,9 +146,9 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                     aria-label={t('webapp.task.filter.due')}
                 >
                     <option value=''>{t('webapp.task.filter.due')}</option>
-                    <option value='overdue'>{'⏰'}</option>
-                    <option value='today'>{'Today'}</option>
-                    <option value='week'>{'This week'}</option>
+                    <option value='overdue'>{t('webapp.task.filter.overdue')}</option>
+                    <option value='today'>{t('webapp.task.filter.today')}</option>
+                    <option value='week'>{t('webapp.task.filter.week')}</option>
                 </select>
             </div>
 
@@ -157,22 +162,28 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                     <li
                         key={task.id}
                         className={`quick-list__item quick-list__item--${task.status}`}
-                        onClick={() => select(task.id)}
                     >
-                        <div className='quick-list__item-summary'>{task.summary}</div>
-                        <div className='quick-list__item-meta'>
-                            <span className={`quick-list__item-status quick-list__item-status--${task.status}`}>
-                                {statusLabel(task.status, t)}
-                            </span>
-                            {task.due && (
-                                <span className={isOverdue(task) ? 'quick-list__item-due quick-list__item-due--overdue' : 'quick-list__item-due'}>
-                                    {formatDueShort(task.due, locale)}
+                        <button
+                            type='button'
+                            className='quick-list__item-button'
+                            onClick={() => select(task.id)}
+                            aria-label={task.summary}
+                        >
+                            <div className='quick-list__item-summary'>{task.summary}</div>
+                            <div className='quick-list__item-meta'>
+                                <span className={`quick-list__item-status quick-list__item-status--${task.status}`}>
+                                    {statusLabel(task.status, t)}
                                 </span>
-                            )}
-                            {task.assignee_id && (
-                                <span className='quick-list__item-assignee'>{task.assignee_id}</span>
-                            )}
-                        </div>
+                                {task.due && (
+                                    <span className={isOverdue(task) ? 'quick-list__item-due quick-list__item-due--overdue' : 'quick-list__item-due'}>
+                                        {formatDueShort(task.due, locale)}
+                                    </span>
+                                )}
+                                {task.assignee_id && (
+                                    <span className='quick-list__item-assignee'>{task.assignee_id}</span>
+                                )}
+                            </div>
+                        </button>
                     </li>
                 ))}
             </ul>
