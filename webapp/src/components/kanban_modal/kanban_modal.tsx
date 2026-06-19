@@ -10,6 +10,7 @@
 // root; it stays hidden until its consumer flips `visible` (via Redux/props),
 // so the placeholder never shows unprompted.
 
+import {useFormatMessage} from 'i18n_utils';
 import React from 'react';
 
 export interface KanbanModalProps {
@@ -20,12 +21,13 @@ export interface KanbanModalProps {
 }
 
 export default function KanbanModal({visible}: KanbanModalProps): JSX.Element | null {
+    const t = useFormatMessage();
     if (!visible) {
         return null;
     }
     return (
         <div className='task-kanban-modal'>
-            {'Kanban board'}
+            {t('webapp.kanban.title')}
         </div>
     );
 }
