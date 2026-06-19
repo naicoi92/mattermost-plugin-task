@@ -26,11 +26,27 @@ type TaskService interface {
 	ClearReminder(id string) (*taskmodel.Task, error)
 }
 
+// TaskNotifier fires task-event DMs. It is the subset of the notification
+// package the command handler invokes after a state change; passing it in keeps
+// this package free of notification imports. May be nil (notifications skipped).
+type TaskNotifier interface {
+	NotifyCompleted(task TaskRef, actorID, creatorID, assigneeID string)
+	NotifyCancelled(task TaskRef, actorID, creatorID, assigneeID string)
+}
+
+// TaskRef is the minimal task view the notifier needs (mirrors
+// notification.TaskSummary without importing that package).
+type TaskRef struct {
+	ID      string
+	Summary string
+}
+
 // Handler dispatches slash commands. Today it owns the /task command; the
 // legacy /hello command from the starter template is retained for reference.
 type Handler struct {
 	client      *pluginapi.Client
 	taskService TaskService
+	notifier    TaskNotifier
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -42,8 +58,9 @@ type Command interface {
 const helloCommandTrigger = "hello"
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
-// wired to the given task service.
-func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Command {
+// wired to the given task service. notifier may be nil to disable task-event
+// DMs from the command path.
+func NewCommandHandler(client *pluginapi.Client, taskService TaskService, notifier TaskNotifier) Command {
 	if err := client.SlashCommand.Register(&model.Command{
 		Trigger:          helloCommandTrigger,
 		AutoComplete:     true,
@@ -111,6 +128,7 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Comman
 	return &Handler{
 		client:      client,
 		taskService: taskService,
+		notifier:    notifier,
 	}
 }
 
@@ -255,6 +273,18 @@ func (c *Handler) setStatus(args *model.CommandArgs, id, status string) (*model.
 			return ephemeral(fmt.Sprintf("Failed to update task %s. Please try again.", id)), nil
 		}
 	}
+
+	// Fire done/cancelled DMs to participants (minus the actor).
+	if c.notifier != nil && t != nil {
+		ref := TaskRef{ID: t.ID, Summary: t.Summary}
+		switch status {
+		case taskmodel.StatusDone:
+			c.notifier.NotifyCompleted(ref, args.UserId, t.CreatorID, t.AssigneeID)
+		case taskmodel.StatusCancelled:
+			c.notifier.NotifyCancelled(ref, args.UserId, t.CreatorID, t.AssigneeID)
+		}
+	}
+
 	return ephemeral(fmt.Sprintf("✅ Task **%s** is now **%s**.", t.Summary, status)), nil
 }
 

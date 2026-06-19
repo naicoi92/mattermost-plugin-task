@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
+	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -264,7 +265,27 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	// Notify participants when a task reaches a terminal status (done/cancelled).
+	// The actor is the authenticated user; they are excluded from the recipients.
+	p.notifyTerminalStatus(updated, req.Status, currentUserID(r))
+
 	p.writeJSON(w, updated)
+}
+
+// notifyTerminalStatus fires the done/cancelled DM to creator + assignee (minus
+// the actor). No-op for non-terminal statuses or when the notifier is unset.
+func (p *Plugin) notifyTerminalStatus(t *taskmodel.Task, status, actorID string) {
+	if p.notifier == nil || t == nil {
+		return
+	}
+	summary := notification.TaskSummary{ID: t.ID, Summary: t.Summary}
+	switch status {
+	case taskmodel.StatusDone:
+		p.notifier.NotifyCompleted(summary, actorID, t.CreatorID, t.AssigneeID)
+	case taskmodel.StatusCancelled:
+		p.notifier.NotifyCancelled(summary, actorID, t.CreatorID, t.AssigneeID)
+	}
 }
 
 // setReminderRequest is the JSON body for POST /tasks/:id/reminder.

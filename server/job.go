@@ -6,6 +6,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/pkg/errors"
 
+	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -51,10 +52,20 @@ func (p *Plugin) runReminderJob() {
 	}
 }
 
-// fireReminderDM posts a reminder direct message to the assignee from the bot.
-// The full notification layer (i18n, rich card) is built in #14; this keeps the
-// reminder pipeline working end-to-end in the meantime.
+// fireReminderDM sends the reminder notification DM to the assignee. It prefers
+// the localized notifier (notification.NotifyReminder) and falls back to a
+// plain DM if the notifier is not initialized (e.g. during activation races).
 func (p *Plugin) fireReminderDM(r task.DueReminder) error {
+	if p.notifier != nil {
+		t, _ := p.taskService.Get(r.TaskID)
+		summary := notification.TaskSummary{ID: r.TaskID}
+		if t != nil {
+			summary.Summary = t.Summary
+		}
+		p.notifier.NotifyReminder(r.AssigneeID, summary)
+		return nil
+	}
+	// Fallback: plain DM (best-effort) when the notifier isn't ready.
 	channel, err := p.API.GetDirectChannel(r.AssigneeID, p.botUserID)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open DM with %s", r.AssigneeID)
