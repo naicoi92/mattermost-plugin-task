@@ -54,14 +54,23 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
+    // fetchingRef tracks whether a first-page fetch is in flight. It's a ref
+    // (not state) so mutating it never changes loadFirst's identity or re-fires
+    // the effect below — adding `loading` to useCallback deps caused a loop
+    // (every fetch-completion flipped loading, recreating loadFirst, re-firing
+    // the effect, starting another fetch). The ref gates concurrent calls
+    // without that side effect.
+    const fetchingRef = React.useRef(false);
+
     // loadFirst resets the list and fetches the first page. Memoized so the
     // effect below depends on a stable reference across renders. It bails out
     // when a fetch is already in flight so rapid tab/filter changes can't stack
     // concurrent requests (the last response would otherwise win out of order).
     const loadFirst = useCallback(async (scope: QuickListTab, status: string, due: string) => {
-        if (loading) {
+        if (fetchingRef.current) {
             return;
         }
+        fetchingRef.current = true;
         setLoading(true);
         setError('');
         try {
@@ -73,9 +82,10 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
         } catch (err) {
             setError(messageFor(err));
         } finally {
+            fetchingRef.current = false;
             setLoading(false);
         }
-    }, [channelID, loading]);
+    }, [channelID]);
 
     // Fetch the first page whenever the tab or filters change.
     useEffect(() => {
