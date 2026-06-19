@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	mmmodel "github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -96,12 +97,22 @@ func (f *fakeTaskStore) SetAtomicWithRetries(string, func([]byte) (any, error)) 
 }
 
 // newTestPlugin wires a Plugin with a router and a task.Service backed by a
-// fresh fake store.
+// fresh fake store. A permissive mock API is set so handlers that log/post
+// don't panic in tests.
 func newTestPlugin() (*Plugin, *fakeTaskStore) {
 	store := newFakeTaskStore()
+	api := &plugintest.API{}
+	api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	api.On("CreatePost", mock.Anything).Return(&mmmodel.Post{}, nil).Maybe()
+	api.On("UpdatePost", mock.Anything).Return(&mmmodel.Post{}, nil).Maybe()
+	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
+	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&mmmodel.Channel{Id: "dm-channel"}, nil).Maybe()
 	p := &Plugin{
 		taskService: task.NewService(store),
+		botUserID:   "bot",
 	}
+	p.SetAPI(api)
 	p.router = p.initRouter()
 	return p, store
 }

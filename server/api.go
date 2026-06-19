@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
+	mmmodel "github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/pkg/errors"
 
@@ -25,6 +27,10 @@ func (p *Plugin) initRouter() *mux.Router {
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
 
 	apiRouter.HandleFunc("/hello", p.HelloWorld).Methods(http.MethodGet)
+
+	// Interactive task-card action callback (issue #15): Done/Cancel/Assign/
+	// Subtask/Comment buttons POST here with context {action, task_id}.
+	apiRouter.HandleFunc("/actions", p.handleCardAction).Methods(http.MethodPost)
 
 	// Task CRUD (issue #7).
 	tasks := apiRouter.PathPrefix("/tasks").Subrouter()
@@ -131,6 +137,22 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 			p.writeError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
+	}
+
+	// Post the interactive task card: in the originating channel (if any) and
+	// as a DM to the assignee (if any, and not the creator). Record the post
+	// ids so the card can be updated on later status changes (issue #15).
+	var channelPostID, dmPostID string
+	if created.ChannelID != "" {
+		channelPostID = p.postCard(created.ChannelID, created)
+	}
+	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
+		dmPostID = p.postCardDM(created.AssigneeID, created)
+	}
+	if channelPostID != "" || dmPostID != "" {
+		if updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID); err == nil && updated != nil {
+			created = updated
+		}
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -272,6 +294,10 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 	// The actor is the authenticated user; they are excluded from the recipients.
 	p.notifyTerminalStatus(updated, req.Status, currentUserID(r))
 
+	// Refresh the interactive card (channel + DM) to reflect the new status.
+	p.updateCard(updated.ChannelPostID, updated)
+	p.updateCard(updated.DMPostID, updated)
+
 	p.writeJSON(w, updated)
 }
 
@@ -393,4 +419,59 @@ func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+}
+
+// handleCardAction handles the interactive task-card button callback
+// (POST /api/v1/actions). Mattermost sends a PostActionIntegrationRequest with
+// the user, channel, post, and context {action, task_id}.
+//
+// Done/Cancel apply a status transition; Assign/Subtask/Comment respond with an
+// ephemeral hint (their full dialog flows land with #8/#17). The response is a
+// JSON body Mattermost interprets to update the source post or show ephemeral
+// text.
+func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
+	var req mmmodel.PostActionIntegrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid action request")
+		return
+	}
+
+	action, _ := req.Context["action"].(string)
+	taskID, _ := req.Context["task_id"].(string)
+	if taskID == "" || action == "" {
+		p.writeError(w, http.StatusBadRequest, "missing action or task_id")
+		return
+	}
+
+	switch action {
+	case string(actionDone), string(actionCancel):
+		status := taskmodel.StatusDone
+		if action == string(actionCancel) {
+			status = taskmodel.StatusCancelled
+		}
+		updated, err := p.taskService.SetStatus(taskID, status)
+		if err != nil {
+			writeCardResponse(w, fmt.Sprintf("⚠️ Could not update task: %s", err.Error()))
+			return
+		}
+		// Update the source post's card in place.
+		p.updateCard(req.PostId, updated)
+		p.updateCard(updated.ChannelPostID, updated)
+		p.updateCard(updated.DMPostID, updated)
+		p.notifyTerminalStatus(updated, status, req.UserId)
+		// Empty ephemeral => Mattermost updates the post and shows nothing extra.
+		writeCardResponse(w, "")
+	case string(actionAssign), string(actionSubtask), string(actionComment):
+		writeCardResponse(w, "Use the /task command for this action (interactive dialogs arrive soon).")
+	default:
+		writeCardResponse(w, "Unknown action.")
+	}
+}
+
+// writeCardResponse responds with the JSON body Mattermost expects from an
+// interactive action callback: {ephemeral_text}. An empty string updates the
+// post without extra text.
+func writeCardResponse(w http.ResponseWriter, ephemeralText string) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ephemeral_text": ephemeralText})
 }

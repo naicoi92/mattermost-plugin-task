@@ -172,6 +172,31 @@ func (s *Service) Get(id string) (*model.Task, error) {
 	return s.store.GetTask(id)
 }
 
+// SetPostIDs records the channel/DM post ids of the task's interactive card so
+// the card can be updated when the task changes (PLAN.md section 4.2). Either
+// value may be empty to leave it unchanged. Used by the REST/dialog handlers
+// after posting a card.
+func (s *Service) SetPostIDs(id, channelPostID, dmPostID string) (*model.Task, error) {
+	t, err := s.store.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, ErrNotFound
+	}
+	if channelPostID != "" {
+		t.ChannelPostID = channelPostID
+	}
+	if dmPostID != "" {
+		t.DMPostID = dmPostID
+	}
+	t.UpdatedAt = nowFunc()
+	if err := s.store.SaveTask(*t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // SetStatus transitions the task to newStatus using the canonical state machine
 // (taskutil.ApplyStatus), refreshing UpdatedAt and clearing/stamping the
 // CompletedAt/CancelledAt fields as appropriate:
