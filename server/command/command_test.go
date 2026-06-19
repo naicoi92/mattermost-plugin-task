@@ -334,6 +334,8 @@ func TestTaskComment_RequiresPermission(t *testing.T) {
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task comment T1 hi", UserId: "u-stranger"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "permission")
+	// Guard authorization order: AddComment must never be reached when denied.
+	assert.Empty(t, svc.commentTaskID)
 }
 
 // When a CommentAuthorizer is wired, it gates commenting (covers channel members).
