@@ -307,7 +307,9 @@ func (s *remStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 	if !ok {
 		return kvstore.ErrTaskNotFound
 	}
-	t.UpdatedAt = updatedAt
+	if updatedAt > t.UpdatedAt {
+		t.UpdatedAt = updatedAt
+	}
 	return nil
 }
 func (s *remStore) DeleteTask(id string) error { delete(s.tasks, id); return nil }

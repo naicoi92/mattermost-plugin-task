@@ -52,8 +52,10 @@ func (f *fakeTaskStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 	if !ok {
 		return kvstore.ErrTaskNotFound
 	}
-	t.UpdatedAt = updatedAt
-	f.tasks[id] = t
+	if updatedAt > t.UpdatedAt {
+		t.UpdatedAt = updatedAt
+		f.tasks[id] = t
+	}
 	return nil
 }
 func (f *fakeTaskStore) DeleteTask(id string) error { delete(f.tasks, id); return nil }

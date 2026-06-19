@@ -51,15 +51,18 @@ func (f *fakeStore) SaveTask(task model.Task) error {
 	return nil
 }
 
-// TouchTaskUpdatedAt mirrors the real CAS store: update only UpdatedAt,
-// preserving concurrent changes to other fields.
+// TouchTaskUpdatedAt mirrors the real CAS store: update only UpdatedAt, and only
+// when the candidate is newer (monotonic), preserving concurrent changes to
+// other fields and never regressing the WS seq.
 func (f *fakeStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 	t, ok := f.tasks[id]
 	if !ok {
 		return kvstore.ErrTaskNotFound
 	}
-	t.UpdatedAt = updatedAt
-	f.tasks[id] = t
+	if updatedAt > t.UpdatedAt {
+		t.UpdatedAt = updatedAt
+		f.tasks[id] = t
+	}
 	return nil
 }
 
