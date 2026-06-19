@@ -264,3 +264,14 @@ func TestPatchTaskStatus_NotFound(t *testing.T) {
 		"/api/v1/tasks/missing/status", `{"status":"done"}`, "u1"))
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestPatchTaskStatus_BadJSON(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch,
+		"/api/v1/tasks/"+created.ID+"/status", `{"status":"done"`, "u1")) // malformed JSON
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}

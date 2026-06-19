@@ -141,6 +141,10 @@ func TestTaskStatus_UsageErrors(t *testing.T) {
 	resp, err = handler.Handle(&model.CommandArgs{Command: "/task done"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "Usage")
+
+	resp, err = handler.Handle(&model.CommandArgs{Command: "/task cancel"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Usage")
 }
 
 func TestTaskHelp(t *testing.T) {

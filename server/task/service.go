@@ -206,10 +206,10 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 
 	switch newStatus {
 	case model.StatusDone, model.StatusCancelled:
-		// Stop reminders on terminal statuses.
-		if rerr := s.store.DeleteReminder(task.ID); rerr != nil {
-			return nil, rerr
-		}
+		// Stop reminders on terminal statuses. Best-effort: the task is already
+		// terminal so a leftover reminder edge is harmless (the scheduler skips
+		// reminders for done/cancelled tasks), matching Delete's handling.
+		_ = s.store.DeleteReminder(task.ID)
 	}
 
 	// Cascade-cancel open subtasks when the parent is cancelled.
