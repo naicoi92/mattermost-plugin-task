@@ -210,14 +210,21 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 		return nil, err
 	}
 
+	// Side effects, ordered so none can be skipped by a failure in another.
+	//
+	// 1. Cascade-cancel open subtasks when the parent is cancelled — runs first
+	//    so a later reminder-cleanup error can never prevent it.
+	if newStatus == model.StatusCancelled {
+		if err := s.cascadeCancelSubtasks(task.ID); err != nil {
+			return nil, err
+		}
+	}
+
 	switch newStatus {
 	case model.StatusDone, model.StatusCancelled:
-		// Best-effort reminder-edge cleanup on terminal statuses. We do NOT
-		// return the error: doing so would skip subsequent side effects (e.g.
-		// the cancelled-parent cascade). FireReadyReminders self-heals by
-		// dropping any stale edge it finds for a terminal task, so a transient
-		// cleanup failure here cannot cause a spurious DM — it just means the
-		// edge gets cleaned up lazily on the next scheduler tick.
+		// 2. Best-effort reminder-edge cleanup on terminal statuses. FireReadyReminders
+		//    self-heals by dropping any stale edge for a terminal task, so a transient
+		//    cleanup failure cannot cause a spurious DM (it's cleaned lazily next tick).
 		_ = s.store.DeleteReminder(task.ID)
 	case model.StatusTodo, model.StatusInProgress:
 		// Reopening allows a reminder to fire again: reset the fired flag and
@@ -227,13 +234,6 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 			return nil, err
 		}
 		if err := s.rebuildReminderIndex(task); err != nil {
-			return nil, err
-		}
-	}
-
-	// Cascade-cancel open subtasks when the parent is cancelled.
-	if newStatus == model.StatusCancelled {
-		if err := s.cascadeCancelSubtasks(task.ID); err != nil {
 			return nil, err
 		}
 	}
