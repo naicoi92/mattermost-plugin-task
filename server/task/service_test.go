@@ -378,6 +378,32 @@ func TestCreateSubtask_InheritsFromParent(t *testing.T) {
 	assert.Equal(t, "u2", child.AssigneeID, "inherits parent assignee")
 }
 
+// TestCreateSubtask_BumpsParentUpdatedAt verifies the subtask stale-seq fix: a
+// new subtask must bump the parent's UpdatedAt so the parent's "subtasks
+// changed" WebSocket event isn't dropped by the client's stale-seq guard (#32,
+// CodeRabbit follow-up #6 on PR #84).
+func TestCreateSubtask_BumpsParentUpdatedAt(t *testing.T) {
+	// Stamp times deterministically so the UpdatedAt-bump assertion is exact.
+	origNow := nowFunc
+	defer func() { nowFunc = origNow }()
+	t0 := int64(1000)
+	nowFunc = func() int64 { t0++; return t0 }
+
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	parentUpdatedAt := parent.UpdatedAt
+
+	_, err = svc.CreateSubtask(parent.ID, "u2", "child", "", nil)
+	require.NoError(t, err)
+
+	reloaded, err := svc.Get(parent.ID)
+	require.NoError(t, err)
+	assert.Greater(t, reloaded.UpdatedAt, parentUpdatedAt,
+		"CreateSubtask must bump the parent's UpdatedAt so the WS seq advances")
+}
+
 func TestCreateSubtask_MissingParentRejected(t *testing.T) {
 	svc := NewService(newFakeStore())
 	_, err := svc.CreateSubtask("ghost", "u1", "child", "", nil)
