@@ -2,6 +2,7 @@ package command
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -15,18 +16,19 @@ import (
 // taskCommandTrigger is the root slash command for the plugin.
 const taskCommandTrigger = "task"
 
-// StatusService is the subset of task.Service the command handler needs. Kept
-// as an interface so the handler is testable with a fake, and so future command
-// scopes (assignee, edit, ...) can be added without touching this file's shape.
-type StatusService interface {
+// TaskService is the subset of task.Service the command handler needs. Kept as
+// an interface so the handler is testable with a fake and each command scope
+// (status, edit, assignee, ...) can be added without changing this file's shape.
+type TaskService interface {
 	SetStatus(id, status string) (*taskmodel.Task, error)
+	Patch(id string, in task.PatchInput) (*taskmodel.Task, error)
 }
 
 // Handler dispatches slash commands. Today it owns the /task command; the
 // legacy /hello command from the starter template is retained for reference.
 type Handler struct {
 	client      *pluginapi.Client
-	taskService StatusService
+	taskService TaskService
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -39,7 +41,7 @@ const helloCommandTrigger = "hello"
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
 // wired to the given task service.
-func NewCommandHandler(client *pluginapi.Client, taskService StatusService) Command {
+func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Command {
 	if err := client.SlashCommand.Register(&model.Command{
 		Trigger:          helloCommandTrigger,
 		AutoComplete:     true,
@@ -72,6 +74,12 @@ func NewCommandHandler(client *pluginapi.Client, taskService StatusService) Comm
 	cancelCmd := model.NewAutocompleteData("cancel", "<id>", "Cancel a task")
 	cancelCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
 	taskCmd.AddCommand(cancelCmd)
+
+	// /task edit <id> [summary=...] [due=...] [desc=...]
+	editCmd := model.NewAutocompleteData("edit", "<id> [summary=...] [due=...] [desc=...]", "Edit task fields")
+	editCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
+	editCmd.AddTextArgument("summary=..., due=<ms>, desc=...", "key=value pairs to update", "")
+	taskCmd.AddCommand(editCmd)
 
 	// /task help
 	helpCmd := model.NewAutocompleteData("help", "", "Show task command help")
@@ -110,8 +118,8 @@ func (c *Handler) Handle(args *model.CommandArgs) (*model.CommandResponse, error
 	}
 }
 
-// handleTask dispatches /task subcommands. Only the status workflow subcommands
-// (status/done/cancel) are implemented here; other subcommands are added by
+// handleTask dispatches /task subcommands. The status workflow (status/done/
+// cancel) and partial edit are implemented here; other subcommands are added by
 // downstream issues.
 func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*model.CommandResponse, error) {
 	if len(subFields) == 0 {
@@ -124,6 +132,8 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return c.handleShortcut(args, subFields[1:], taskmodel.StatusDone, "done")
 	case "cancel":
 		return c.handleShortcut(args, subFields[1:], taskmodel.StatusCancelled, "cancelled")
+	case "edit":
+		return c.handleEdit(args, subFields[1:])
 	case "help":
 		return ephemeral(taskHelp()), nil
 	default:
@@ -168,6 +178,118 @@ func (c *Handler) setStatus(args *model.CommandArgs, id, status string) (*model.
 	return ephemeral(fmt.Sprintf("✅ Task **%s** is now **%s**.", t.Summary, status)), nil
 }
 
+// handleEdit implements /task edit <id> [key=value ...].
+//
+// Recognized keys:
+//
+//	summary=<text>   new summary
+//	desc=<text>      new description (description= is accepted too)
+//	due=<ms>         new due date as a millisecond timestamp (use 0 to clear)
+//
+// Only the supplied keys are modified (partial update). Fields not listed are
+// left untouched.
+func (c *Handler) handleEdit(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 1 {
+		return ephemeral("Usage: /task edit <id> [summary=...] [due=<ms>] [desc=...]"), nil
+	}
+	id := rest[0]
+	if len(rest) < 2 {
+		return ephemeral("Nothing to edit. Use key=value pairs, e.g. /task edit <id> summary=New due=1700000000000"), nil
+	}
+
+	in, bad := parseEditFields(rest[1:])
+	if bad != "" {
+		return ephemeral(fmt.Sprintf("Could not parse %q. Expected key=value (summary, due, desc).", bad)), nil
+	}
+
+	t, err := c.taskService.Patch(id, in)
+	if err != nil {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
+			return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
+		default:
+			c.client.Log.Error("Failed to edit task", "task_id", id, "error", err)
+			return ephemeral(fmt.Sprintf("Failed to update task %s: %s", id, err.Error())), nil
+		}
+	}
+	return ephemeral(fmt.Sprintf("✏️ Task **%s** updated.", t.Summary)), nil
+}
+
+// parseEditFields parses the key=value tokens after /task edit <id> into a
+// PatchInput. It returns the input plus the first offending token (empty when
+// all tokens parsed successfully). due=<ms> must be a valid integer.
+//
+// Text fields (summary/description) may contain spaces: their value runs from
+// the text after "key=" up to (but not including) the next recognized key
+// token, so "summary=New title due=1700000000000" sets summary to "New title".
+func parseEditFields(tokens []string) (task.PatchInput, string) {
+	var in task.PatchInput
+	i := 0
+	for i < len(tokens) {
+		tok := tokens[i]
+		key, value, found := strings.Cut(tok, "=")
+		if !found {
+			return in, tok
+		}
+
+		switch strings.ToLower(key) {
+		case "summary":
+			// Consume following tokens until the next recognized key token.
+			value, i = collectValue(value, tokens, i+1)
+			in.UpdateFields = append(in.UpdateFields, "summary")
+			in.Summary = &value
+		case "desc", "description":
+			value, i = collectValue(value, tokens, i+1)
+			in.UpdateFields = append(in.UpdateFields, "description")
+			in.Description = &value
+		case "due":
+			ms, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return in, tok
+			}
+			in.UpdateFields = append(in.UpdateFields, "due")
+			if ms == 0 {
+				in.Due = nil // clear
+			} else {
+				in.Due = &ms
+			}
+		default:
+			return in, tok
+		}
+		i++
+	}
+	return in, ""
+}
+
+// knownEditKey reports whether tok begins with a recognized edit key, e.g.
+// "summary=", "desc=", "description=", "due=".
+func knownEditKey(tok string) bool {
+	key, _, found := strings.Cut(tok, "=")
+	if !found {
+		return false
+	}
+	switch strings.ToLower(key) {
+	case "summary", "desc", "description", "due":
+		return true
+	}
+	return false
+}
+
+// collectValue appends to value every token from tokens[start:] that is not a
+// recognized edit key, joining them with spaces. It returns the joined value
+// and the index of the last consumed token (or start-1 when nothing consumed).
+func collectValue(value string, tokens []string, start int) (string, int) {
+	last := start - 1
+	for j := start; j < len(tokens); j++ {
+		if knownEditKey(tokens[j]) {
+			break
+		}
+		value = strings.TrimSpace(value + " " + tokens[j])
+		last = j
+	}
+	return strings.TrimSpace(value), last
+}
+
 func (c *Handler) executeHelloCommand(args *model.CommandArgs) *model.CommandResponse {
 	parts := strings.Fields(args.Command)
 	if len(parts) < 2 {
@@ -190,5 +312,6 @@ func taskHelp() string {
 		"• `/task status <id> <todo|in_progress|done|cancelled>` — change status\n" +
 		"• `/task done <id>` — mark a task done\n" +
 		"• `/task cancel <id>` — cancel a task\n" +
+		"• `/task edit <id> [summary=...] [due=<ms>] [desc=...]` — partial update\n" +
 		"• `/task help` — show this help"
 }
