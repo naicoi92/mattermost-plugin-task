@@ -25,15 +25,38 @@ import (
 // override it to get deterministic timestamps.
 var nowFunc = func() int64 { return time.Now().UnixMilli() }
 
+// errorLogger is the minimal logging surface the service needs to report
+// non-fatal store failures. The plugin wires it to pluginapi.Client; tests can
+// inject a no-op. Keeping it local avoids importing pluginapi into this package.
+type errorLogger interface {
+	Error(message string, keyValuePairs ...any)
+}
+
 // Service provides the task lifecycle operations used by the REST API and slash
 // commands.
 type Service struct {
-	store kvstore.KVStore
+	store  kvstore.KVStore
+	logger errorLogger
 }
 
-// NewService returns a Service backed by the given store.
-func NewService(store kvstore.KVStore) *Service {
-	return &Service{store: store}
+// NewService returns a Service backed by the given store. An optional logger
+// surfaces non-fatal store failures (e.g. a comment's UpdatedAt touch) for
+// debugging; nil disables logging.
+func NewService(store kvstore.KVStore, logger ...errorLogger) *Service {
+	var l errorLogger
+	if len(logger) > 0 {
+		l = logger[0]
+	}
+	return &Service{store: store, logger: l}
+}
+
+// logUnexpected records a non-fatal error when a logger is configured; a no-op
+// otherwise so callers don't need to nil-check.
+func (s *Service) logUnexpected(msg string, err error) {
+	if s.logger == nil || err == nil {
+		return
+	}
+	s.logger.Error(msg, "error", err)
 }
 
 // CreateInput is the validated payload for creating a task. Only Summary is
@@ -273,10 +296,10 @@ func (s *Service) AddComment(taskID, userID, content string) (model.Comment, Com
 	// a concurrent change to other fields (status/assignee/due) is preserved,
 	// and a missing task yields ErrNotFound.
 	if err := s.store.TouchTaskUpdatedAt(taskID, now); err != nil {
-		// The comment is already persisted; a touch failure only means the seq
-		// may not advance. Log and continue so the comment isn't lost.
-		// (Store errors here are unexpected and worth investigating.)
-		_ = err
+		// The comment is already persisted, so a touch failure is non-fatal — it
+		// only means the seq may not advance. Log it so the unexpected store
+		// error is observable and debuggable rather than silently dropped.
+		s.logUnexpected("failed to touch task UpdatedAt after comment", err)
 	}
 
 	return comment, CommentEvent{

@@ -86,7 +86,7 @@ func (p *Plugin) OnActivate() error {
 
 	p.kvstore = kvstore.NewKVStore(p.client)
 
-	p.taskService = task.NewService(p.kvstore)
+	p.taskService = task.NewService(p.kvstore, &p.client.Log)
 
 	p.commandClient = command.NewCommandHandler(p.client, p.taskService, command.Options{
 		Notifier:          commandNotifier{p.notifier},
