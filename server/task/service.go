@@ -327,8 +327,11 @@ var ErrReminderNeedsDue = errors.New("reminder requires a due date")
 //	due != nil AND status ∈ {todo, in_progress} AND ReminderOffset != nil AND !ReminderFired
 //
 // and deletes it otherwise. Call this on every update path that can affect
-// reminders: create, due change, offset change, status change, assignee change
-// (the stored ReminderMetadata.AssigneeID tracks the current assignee).
+// reminders. Currently wired into: create, due change (Patch), offset change
+// (SetReminder/ClearReminder), and status change (SetStatus). An assignee
+// change also flips eligibility via the stored ReminderMetadata.AssigneeID, so
+// the dedicated Assign path (added in the assignee-management issue) must call
+// this too — the trigger is listed for completeness here.
 func (s *Service) rebuildReminderIndex(task *model.Task) error {
 	if task == nil {
 		return nil

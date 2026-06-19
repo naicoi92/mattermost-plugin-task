@@ -201,8 +201,11 @@ func TestNotifyReminder_DMAssignee(t *testing.T) {
 }
 
 func TestNotifyReminder_EmptyAssigneeNoop(t *testing.T) {
-	n := newTestNotifier(&fakeAPI{})
+	api := &fakeAPI{}
+	n := newTestNotifier(api)
 	require.NoError(t, n.NotifyReminder("", TaskSummary{}))
+	// Empty assignee must never enqueue a DM.
+	assert.Empty(t, api.posts)
 }
 
 func TestLocaleFor_DefaultsWhenUserMissing(t *testing.T) {
