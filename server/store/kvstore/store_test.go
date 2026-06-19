@@ -228,6 +228,9 @@ func TestSetAtomicWithRetries_UpdateMutationDoesNotCorruptCAS(t *testing.T) {
 	// Without the defensive copy, OldValue would be the zeroed-out buffer.
 	assert.True(t, captured.Atomic, "CAS option must be atomic")
 	assert.Equal(t, snapshot, captured.OldValue, "CAS OldValue must be the original, unmutated bytes")
+	// Confirm every mocked call (KVGet, KVSetWithOptions) was actually invoked,
+	// so a future bug that silently skips the CAS layer can't pass this test.
+	api.AssertExpectations(t)
 }
 
 // casBackend documentation removed — see the test above for why a custom
@@ -254,6 +257,7 @@ func TestClient_SetAtomicWithRetries_Wiring(t *testing.T) {
 		return []byte("v"), nil
 	})
 	require.NoError(t, err)
+	api.AssertExpectations(t)
 }
 
 // --- helpers and fakes ---
