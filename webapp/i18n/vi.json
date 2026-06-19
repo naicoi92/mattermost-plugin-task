@@ -47,7 +47,7 @@
   "command.help.search": "`/task search <từ khóa>` - Tìm kiếm task",
   "command.help.footer": "Dùng `/task help` để hiển thị lại hướng dẫn này.",
 
-  "webapp.task.title": "Tasks",
+  "webapp.task.title": "Danh sách task",
   "webapp.task.quicklist": "Danh sách nhanh",
   "webapp.task.new": "Tạo task",
   "webapp.task.empty": "Không tìm thấy task.",
