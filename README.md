@@ -1,223 +1,161 @@
-# Plugin Starter Template
+# Task
 
-[![Build Status](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/ci.yml/badge.svg)](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/ci.yml)
-[![E2E Status](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/e2e.yml/badge.svg)](https://github.com/mattermost/mattermost-plugin-starter-template/actions/workflows/e2e.yml)
+A Mattermost plugin that brings Lark-Suite-style task management into the chat flow — create tasks, assign teammates, set reminders, track progress, and discuss work without leaving the channel.
 
-This plugin serves as a starting point for writing a Mattermost plugin. Feel free to base your own plugin off this repository.
+> **Status:** v0.1.0 — first test release. See [Known limitations](#known-limitations) before relying on it.
 
-To learn more about plugins, see [our plugin documentation](https://developers.mattermost.com/extend/plugins/).
+## Features
 
-This template requires node v16 and npm v8. You can download and install nvm to manage your node versions by following the instructions [here](https://github.com/nvm-sh/nvm). Once you've setup the project simply run `nvm i` within the root folder to use the suggested version of node.
+**Core task management**
+- Task CRUD with a 4-status workflow: **To Do · In Progress · Done · Cancelled**.
+- Single assignee per task, with a direct-message notification when assigned (skipped when the assignee is the creator).
+- Due dates, descriptions, and all-day flag.
+- Reminders that fire once at `due − offset` via the plugin bot (cluster-scheduled, fires on a single node).
+- Interactive task cards posted to the channel and DM'd to the assignee, with `Done` / `Cancel` buttons.
 
-## Getting Started
-Use GitHub's template feature to make a copy of this repository by clicking the "Use this template" button.
+**Subtasks & comments**
+- Subtasks inherit the parent's channel and (by default) assignee; each has its own independent status.
+- Parent can be marked `done` only when every subtask is `done`/`cancelled`; cancelling a parent cascade-cancels its open subtasks.
+- Comments notify task participants (creator + assignee), excluding the commenter.
 
-Alternatively shallow clone the repository matching your plugin name:
-```
-git clone --depth 1 https://github.com/mattermost/mattermost-plugin-starter-template com.example.my-plugin
-```
+**Cross-platform access**
+- Slash command `/task` works everywhere (desktop, mobile, API).
+- Interactive message cards (with action buttons) render on both desktop and mobile.
+- On mobile, `/task add`, `/task list`, and `/task show` open **Interactive Dialogs** so the experience matches desktop.
 
-Note that this project uses [Go modules](https://github.com/golang/go/wiki/Modules). Be sure to locate the project outside of `$GOPATH`.
+**Desktop webapp enhancement**
+- Channel-header button opens the Right-Hand Sidebar: a **Quick List** (My Tasks / Channel Tasks tabs, status & due filters, cursor pagination) and a **Task Detail** panel (summary, status, due, assignee, subtasks with `x/y done`, comments).
+- **New Task** popup dialog with a `@username` assignee resolver.
+- Real-time updates across clients via WebSocket (`task_updated` events with seq-based stale-drop).
+- **Bilingual UI** — English and Vietnamese, switching with the user's Mattermost locale.
 
-Edit the following files:
-1. `plugin.json` with your `id`, `name`, and `description`:
-```json
-{
-    "id": "com.example.my-plugin",
-    "name": "My Plugin",
-    "description": "A plugin to enhance Mattermost."
-}
-```
-
-2. `go.mod` with your Go module path, following the `<hosting-site>/<repository>/<module>` convention:
-```
-module github.com/example/my-plugin
-```
-
-3. Replace all occurrences of `github.com/mattermost/mattermost-plugin-starter-template` in the codebase with your Go module path:
-```bash
-sed -i '' 's|github.com/mattermost/mattermost-plugin-starter-template|github.com/example/my-plugin|g' server/*.go
-```
-
-4. Replace `.golangci.yml` `local-prefixes` attribute with your Go module path:
-```yml
-linters-settings:
-  # [...]
-  goimports:
-    local-prefixes: github.com/example/my-plugin
-```
-
-5. Build your plugin:
-```
-make
-```
-
-This will produce a single plugin file (with support for multiple architectures) for upload to your Mattermost server:
+## Slash commands
 
 ```
-dist/com.example.my-plugin.tar.gz
+/task add "<summary>"                                          create a task (opens a dialog)
+/task list [mine|channel|all] [status] [due]                   list and filter tasks
+/task show <id>                                                view task details
+/task search <keyword>                                         search tasks by keyword
+/task status <id> <todo|in_progress|done|cancelled>            change status
+/task done <id>                                                mark a task done
+/task cancel <id>                                              cancel a task
+/task edit <id> [summary=...] [due=<ms>] [desc=...]            partial update
+/task assign <id> @user                                        assign a task to a user
+/task unassign <id>                                            remove the assignee
+/task subtask <parentId> <summary>                             add a subtask
+/task comment <id> <text>                                      add a comment
+/task remind <id> <15m|1h|1d|off>                              set or turn off a reminder
+/task help                                                     show this help
 ```
+
+Status values: `todo` · `in_progress` · `done` · `cancelled`.
+Due filter values: `overdue` · `today` · `week`.
+
+## REST API
+
+All endpoints are prefixed with `/plugins/com.mattermost.plugin-task/api/v1/` and require an authenticated session.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/tasks` | Create a task |
+| `GET` | `/tasks` | List/filter tasks (`scope`, `channel_id`, `status`, `due`, `after_order_key`, `limit`) |
+| `GET` | `/tasks/:id` | Get task details |
+| `PATCH` | `/tasks/:id` | Partial update (`update_fields`) |
+| `DELETE` | `/tasks/:id` | Delete (hard-delete cascade) |
+| `PATCH` | `/tasks/:id/status` | Change status |
+| `POST` | `/tasks/:id/assignee` | Set assignee |
+| `DELETE` | `/tasks/:id/assignee` | Clear assignee |
+| `POST` | `/tasks/:id/reminder` | Set reminder (`offset_ms`) |
+| `DELETE` | `/tasks/:id/reminder` | Turn reminder off |
+| `POST` | `/tasks/:id/subtasks` | Create a subtask |
+| `GET` | `/tasks/:id/subtasks` | List subtasks |
+| `POST` | `/tasks/:id/comments` | Add a comment |
+| `GET` | `/tasks/:id/comments` | List comments |
+| `POST` | `/actions` | Interactive task-card button callback |
+| `POST` | `/dialogs/quicklist` | Quick List dialog submit |
+| `POST` | `/dialogs/taskdetail` | Task Detail dialog submit |
+| `POST` | `/dialogs/newtask` | New Task dialog submit |
+| `POST` | `/dialogs/open-task-detail` | Open Task Detail dialog (opener) |
+| `POST` | `/dialogs/open-new-task` | Open New Task dialog (opener) |
+
+## Requirements
+
+- **Mattermost server** ≥ 10.7.0.
+- Plugin uploads enabled (`EnableUploads: true` in `PluginSettings`).
+
+## Installation
+
+Build the plugin:
+
+```
+make dist
+```
+
+This produces `dist/com.mattermost.plugin-task-<version>.tar.gz` (server binaries for linux/darwin/windows × amd64/arm64, plus the webapp bundle and i18n assets).
+
+Install via **System Console → Plugins → Upload**, or with `mmctl`:
+
+```
+mmctl plugin upload dist/com.mattermost.plugin-task-0.1.0.tar.gz
+```
+
+Enable the plugin. On activation it ensures a `task-bot` account that authors DM/card posts.
+
+## Configuration
+
+System Console → Plugins → Task exposes two settings:
+
+| Setting | Default | Description |
+|---|---|---|
+| Default Reminder Offset (minutes) | `15` | Default minutes before due to send a reminder. |
+| Enable DM Notifications | `true` | When enabled, the bot DMs on assignment, completion, cancellation, comment, and reminder. |
+
+The four Kanban statuses (To Do / In Progress / Done / Cancelled) are fixed and not configurable.
+
+## Desktop vs mobile
+
+| Capability | Desktop | Mobile |
+|---|---|---|
+| Slash command `/task *` | ✅ | ✅ |
+| Interactive task card (with buttons) | ✅ | ✅ |
+| Interactive Dialogs (`/task add`, `/task list`, `/task show`) | ✅ | ✅ |
+| RHS Quick List + Task Detail (React) | ✅ | ❌ |
+| New Task popup dialog (React) | ✅ | ❌ |
+| Kanban board (drag-and-drop) | 🚧 planned | ❌ |
+
+Mobile relies on slash commands + interactive cards/dialogs (cross-platform); the React RHS and Kanban are desktop enhancements.
 
 ## Development
 
-To avoid having to manually install your plugin, build and deploy your plugin using one of the following options. In order for the below options to work, you must first enable plugin uploads via your config.json or API and restart Mattermost.
-
-```json
-    "PluginSettings" : {
-        ...
-        "EnableUploads" : true
-    }
+```
+make            # build server + webapp
+make deploy     # build and deploy to a local server (requires local mode or credentials)
+make watch      # rebuild + redeploy on file change
 ```
 
-### Development guidance
+For local-mode deploy, enable `EnableLocalMode` in `ServiceSettings` and set `MM_SERVICESETTINGS_SITEURL`. See the [Mattermost plugin docs](https://developers.mattermost.com/extend/plugins/) for details.
 
-1. Fewer packages is better: default to the main package unless there's good reason for a new package.
+Tests:
 
-2. Coupling implies same package: don't jump through hoops to break apart code that's naturally coupled.
-
-3. New package for a new interface: a classic example is the sqlstore with layers for monitoring performance, caching and mocking.
-
-4. New package for upstream integration: a discrete client package for interfacing with a 3rd party is often a great place to break out into a new package
-
-### Modifying the server boilerplate
-
-The server code comes with some boilerplate for creating an api, using slash commands, accessing the kvstore and using the cluster package for jobs.
-
-#### Api
-
-api.go implements the ServeHTTP hook which allows the plugin to implement the http.Handler interface. Requests destined for the `/plugins/{id}` path will be routed to the plugin. This file also contains a sample `HelloWorld` endpoint that is tested in plugin_test.go.
-
-#### Command package
-
-This package contains the boilerplate for adding a slash command and an instance of it is created in the `OnActivate` hook in plugin.go. If you don't need it you can delete the package and remove any reference to `commandClient` in plugin.go. The package also contains an example of how to create a mock for testing.
-
-#### KVStore package
-
-This is a central place for you to access the KVStore methods that are available in the `pluginapi.Client`. The package contains an interface for you to define your methods that will wrap the KVStore methods. An instance of the KVStore is created in the `OnActivate` hook.
-
-### Deploying with Local Mode
-
-If your Mattermost server is running locally, you can enable [local mode](https://docs.mattermost.com/administration/mmctl-cli-tool.html#local-mode) to streamline deploying your plugin. Edit your server configuration as follows:
-
-```json
-{
-    "ServiceSettings": {
-        ...
-        "EnableLocalMode": true,
-        "LocalModeSocketLocation": "/var/tmp/mattermost_local.socket"
-    },
-}
+```
+cd server && go test ./...        # server unit + integration tests
+cd server && golangci-lint run ./...
+cd webapp && npm test             # webapp Jest suite
+cd webapp && npm run lint
 ```
 
-and then deploy your plugin:
-```
-make deploy
-```
+The i18n bundles live under `assets/i18n/{en,vi}.json` and are copied to `webapp/i18n/` at build time (single source for server and webapp).
 
-You may also customize the Unix socket path:
-```bash
-export MM_LOCALSOCKETPATH=/var/tmp/alternate_local.socket
-make deploy
-```
+## Releasing
 
-If developing a plugin with a webapp, watch for changes and deploy those automatically:
-```bash
-export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_TOKEN=j44acwd8obn78cdcx7koid4jkr
-make watch
-```
+The version is pinned in `plugin.json` (`"version"`). To cut a release, bump that field, tag `v<version>`, build `make dist`, and attach the tarball to a GitHub Release.
 
-### Deploying with credentials
+## Known limitations (v0.1.0)
 
-Alternatively, you can authenticate with the server's API with credentials:
-```bash
-export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_USERNAME=admin
-export MM_ADMIN_PASSWORD=password
-make deploy
-```
+- The Kanban board (drag-and-drop, `OrderKey` fractional indexing) is **not yet implemented** — planned for a later phase.
+- Out-of-MVP items deferred: multi-assignee + completion mode, followers, tasklist (project) entity, custom fields, file attachments, repeat rules, AI task agent.
+- `KVStore`-backed storage with a safe operating range of roughly ~2,000 tasks/user and ~10,000 tasks/channel. A dedicated-DB migration is a roadmap item if benchmarks exceed that.
 
-or with a [personal access token](https://docs.mattermost.com/developer/personal-access-tokens.html):
-```bash
-export MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-export MM_ADMIN_TOKEN=j44acwd8obn78cdcx7koid4jkr
-make deploy
-```
+## License
 
-### Releasing new versions
-
-The version of a plugin is determined at compile time, automatically populating a `version` field in the [plugin manifest](plugin.json):
-* If the current commit matches a tag, the version will match after stripping any leading `v`, e.g. `1.3.1`.
-* Otherwise, the version will combine the nearest tag with `git rev-parse --short HEAD`, e.g. `1.3.1+d06e53e1`.
-* If there is no version tag, an empty version will be combined with the short hash, e.g. `0.0.0+76081421`.
-
-To disable this behaviour, manually populate and maintain the `version` field.
-
-## How to Release
-
-To trigger a release, follow these steps:
-
-1. **For Patch Release:** Run the following command:
-    ```
-    make patch
-    ```
-   This will release a patch change.
-
-2. **For Minor Release:** Run the following command:
-    ```
-    make minor
-    ```
-   This will release a minor change.
-
-3. **For Major Release:** Run the following command:
-    ```
-    make major
-    ```
-   This will release a major change.
-
-4. **For Patch Release Candidate (RC):** Run the following command:
-    ```
-    make patch-rc
-    ```
-   This will release a patch release candidate.
-
-5. **For Minor Release Candidate (RC):** Run the following command:
-    ```
-    make minor-rc
-    ```
-   This will release a minor release candidate.
-
-6. **For Major Release Candidate (RC):** Run the following command:
-    ```
-    make major-rc
-    ```
-   This will release a major release candidate.
-
-## Q&A
-
-### How do I make a server-only or web app-only plugin?
-
-Simply delete the `server` or `webapp` folders and remove the corresponding sections from `plugin.json`. The build scripts will skip the missing portions automatically.
-
-### How do I include assets in the plugin bundle?
-
-Place them into the `assets` directory. To use an asset at runtime, build the path to your asset and open as a regular file:
-
-```go
-bundlePath, err := p.API.GetBundlePath()
-if err != nil {
-    return errors.Wrap(err, "failed to get bundle path")
-}
-
-profileImage, err := ioutil.ReadFile(filepath.Join(bundlePath, "assets", "profile_image.png"))
-if err != nil {
-    return errors.Wrap(err, "failed to read profile image")
-}
-
-if appErr := p.API.SetProfileImage(userID, profileImage); appErr != nil {
-    return errors.Wrap(err, "failed to set profile image")
-}
-```
-
-### How do I build the plugin with unminified JavaScript?
-Setting the `MM_DEBUG` environment variable will invoke the debug builds. The simplist way to do this is to simply include this variable in your calls to `make` (e.g. `make dist MM_DEBUG=1`).
+See [LICENSE](LICENSE).
