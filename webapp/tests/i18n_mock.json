@@ -1,1 +1,8 @@
-{}
+{
+  "webapp.task.title": "Tasks",
+  "webapp.task.new": "New Task",
+  "webapp.task.quicklist": "Quick List",
+  "webapp.task.subtasks.progress": "%s/%s done",
+  "webapp.task.empty": "No tasks found.",
+  "webapp.task.create": "Create"
+}

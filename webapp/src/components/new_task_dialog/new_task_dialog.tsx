@@ -9,6 +9,7 @@
 // This shell renders nothing visible until opened; issue #30 will add the
 // summary/assignee/due/description/scope fields and POST submission.
 
+import {useFormatMessage} from 'i18n_utils';
 import React from 'react';
 
 export interface NewTaskDialogProps {
@@ -21,12 +22,13 @@ export interface NewTaskDialogProps {
 }
 
 export default function NewTaskDialog({visible}: NewTaskDialogProps): JSX.Element | null {
+    const t = useFormatMessage();
     if (!visible) {
         return null;
     }
     return (
         <div className='task-new-dialog'>
-            {'New Task dialog (issue #30)'}
+            {t('webapp.task.new')}
         </div>
     );
 }
