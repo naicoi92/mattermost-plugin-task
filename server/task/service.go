@@ -533,6 +533,75 @@ func derefBool(p *bool) bool {
 // ErrNotFound is returned by Get/Patch/Delete when the task id does not exist.
 var ErrNotFound = errors.New("task not found")
 
+// AssignEvent describes the result of an assignee change so callers (REST/
+// command handlers) can fire the appropriate notification without re-reading
+// the task. OldAssigneeID is empty when the task had no assignee before.
+type AssignEvent struct {
+	TaskID        string
+	OldAssigneeID string
+	NewAssigneeID string
+	CreatorID     string
+}
+
+// Assign sets the task's single assignee to newAssigneeID, swapping the
+// idx:u:{old}:assigned:{id} and idx:u:{new}:assigned:{id} index edges and
+// refreshing UpdatedAt. It also keeps any active reminder edge consistent by
+// rebuilding the reminder index (the stored ReminderMetadata.AssigneeID tracks
+// the current assignee). An empty newAssigneeID clears the assignee.
+//
+// It returns the updated task and an AssignEvent describing the change. A
+// no-op assign (same user) returns the task without touching indexes.
+func (s *Service) Assign(id, newAssigneeID string) (*model.Task, AssignEvent, error) {
+	task, err := s.store.GetTask(id)
+	if err != nil {
+		return nil, AssignEvent{}, err
+	}
+	if task == nil {
+		return nil, AssignEvent{}, ErrNotFound
+	}
+
+	oldAssigneeID := task.AssigneeID
+	if oldAssigneeID == newAssigneeID {
+		return task, AssignEvent{
+			TaskID:        task.ID,
+			OldAssigneeID: oldAssigneeID,
+			NewAssigneeID: newAssigneeID,
+			CreatorID:     task.CreatorID,
+		}, nil
+	}
+
+	// Swap the assigned index edges by their full known keys (no scan).
+	if oldAssigneeID != "" {
+		if err := s.store.DeleteIndex(kvstore.UserAssignedKey(oldAssigneeID, task.ID)); err != nil {
+			return nil, AssignEvent{}, err
+		}
+	}
+	if newAssigneeID != "" {
+		if err := s.store.SaveIndex(kvstore.UserAssignedKey(newAssigneeID, task.ID)); err != nil {
+			return nil, AssignEvent{}, err
+		}
+	}
+
+	task.AssigneeID = newAssigneeID
+	task.UpdatedAt = nowFunc()
+	if err := s.store.SaveTask(*task); err != nil {
+		return nil, AssignEvent{}, err
+	}
+
+	// Keep the reminder edge's stored assignee in sync (rebuild is a no-op when
+	// the task isn't reminder-eligible).
+	if err := s.rebuildReminderIndex(task); err != nil {
+		return nil, AssignEvent{}, err
+	}
+
+	return task, AssignEvent{
+		TaskID:        task.ID,
+		OldAssigneeID: oldAssigneeID,
+		NewAssigneeID: newAssigneeID,
+		CreatorID:     task.CreatorID,
+	}, nil
+}
+
 // Delete hard-deletes the task and everything attached to it, following the
 // cascade order from PLAN.md section 4.3:
 //

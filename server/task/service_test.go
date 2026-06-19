@@ -546,6 +546,72 @@ func TestSetStatus_NoOpWhenUnchanged(t *testing.T) {
 	assert.Equal(t, created.UpdatedAt, updated.UpdatedAt, "no rewrite when status unchanged")
 }
 
+func TestAssign_SwapsIndexEdges(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	require.NoError(t, err)
+	assert.Contains(t, store.indexes, kvstore.UserAssignedKey("u-old", created.ID))
+
+	updated, ev, err := svc.Assign(created.ID, "u-new")
+	require.NoError(t, err)
+	assert.Equal(t, "u-new", updated.AssigneeID)
+	assert.Equal(t, "u-old", ev.OldAssigneeID)
+	assert.Equal(t, "u-new", ev.NewAssigneeID)
+
+	// Old edge removed, new edge added.
+	assert.NotContains(t, store.indexes, kvstore.UserAssignedKey("u-old", created.ID))
+	assert.Contains(t, store.indexes, kvstore.UserAssignedKey("u-new", created.ID))
+}
+
+func TestAssign_FromUnassigned(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+	require.Empty(t, created.AssigneeID)
+
+	_, ev, err := svc.Assign(created.ID, "u-new")
+	require.NoError(t, err)
+	assert.Empty(t, ev.OldAssigneeID)
+	assert.Equal(t, "u-new", ev.NewAssigneeID)
+	assert.Contains(t, store.indexes, kvstore.UserAssignedKey("u-new", created.ID))
+}
+
+func TestAssign_ClearRemovesEdge(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	require.NoError(t, err)
+
+	updated, _, err := svc.Assign(created.ID, "")
+	require.NoError(t, err)
+	assert.Empty(t, updated.AssigneeID)
+	assert.NotContains(t, store.indexes, kvstore.UserAssignedKey("u-old", created.ID))
+}
+
+func TestAssign_NoOpSameAssignee(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	require.NoError(t, err)
+	originalUpdated := store.tasks[created.ID].UpdatedAt
+
+	_, ev, err := svc.Assign(created.ID, "u-old")
+	require.NoError(t, err)
+	assert.Equal(t, "u-old", ev.OldAssigneeID)
+	assert.Equal(t, "u-old", ev.NewAssigneeID)
+	// Index untouched, UpdatedAt unchanged.
+	assert.Contains(t, store.indexes, kvstore.UserAssignedKey("u-old", created.ID))
+	assert.Equal(t, originalUpdated, store.tasks[created.ID].UpdatedAt)
+}
+
+func TestAssign_NotFound(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, _, err := svc.Assign("nope", "u-new")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
 func ptrInt64(v int64) *int64 { return &v }
 
 // --- Reminder subsystem ---

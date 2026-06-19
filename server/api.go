@@ -36,6 +36,8 @@ func (p *Plugin) initRouter() *mux.Router {
 	tasks.HandleFunc("/{id:[^/]+}/status", p.patchTaskStatus).Methods(http.MethodPatch)
 	tasks.HandleFunc("/{id:[^/]+}/reminder", p.setReminder).Methods(http.MethodPost)
 	tasks.HandleFunc("/{id:[^/]+}/reminder", p.deleteReminder).Methods(http.MethodDelete)
+	tasks.HandleFunc("/{id:[^/]+}/assignee", p.setAssignee).Methods(http.MethodPost)
+	tasks.HandleFunc("/{id:[^/]+}/assignee", p.deleteAssignee).Methods(http.MethodDelete)
 
 	return router
 }
@@ -333,6 +335,61 @@ func (p *Plugin) deleteReminder(w http.ResponseWriter, r *http.Request) {
 		}
 		// Don't leak internal error text; match the set-reminder handler.
 		p.writeError(w, http.StatusInternalServerError, "failed to clear reminder")
+		return
+	}
+	p.writeJSON(w, updated)
+}
+
+// setAssigneeRequest is the JSON body for POST /tasks/:id/assignee.
+type setAssigneeRequest struct {
+	UserID string `json:"user_id"`
+}
+
+// setAssignee handles POST /tasks/:id/assignee. Replaces the current assignee
+// and DMs the new assignee (unless they are the creator).
+func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	var req setAssigneeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		p.writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+
+	updated, ev, err := p.taskService.Assign(id, req.UserID)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// DM the newly assigned user (skipped when assignee == creator). No DM on
+	// unassign, and no DM to the previous assignee (PLAN §7).
+	if p.notifier != nil {
+		p.notifier.NotifyAssigned(ev.NewAssigneeID, ev.CreatorID, notification.TaskSummary{
+			ID: updated.ID, Summary: updated.Summary,
+		})
+	}
+	p.writeJSON(w, updated)
+}
+
+// deleteAssignee handles DELETE /tasks/:id/assignee (clears the assignee). No
+// notification is sent on unassign.
+func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	updated, _, err := p.taskService.Assign(id, "")
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	p.writeJSON(w, updated)
