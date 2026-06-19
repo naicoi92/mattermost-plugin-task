@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
@@ -36,6 +37,15 @@ type TaskService interface {
 	// AddComment persists a comment on taskID by userID and returns the comment
 	// plus an event describing the task's participants for notification.
 	AddComment(taskID, userID, content string) (taskmodel.Comment, task.CommentEvent, error)
+	// List returns the tasks matching the given query (scope/status/due/cursor).
+	// Used by /task list (#9).
+	List(q task.ListQuery) ([]taskmodel.Task, error)
+	// Search returns up to limit tasks whose summary or description contains
+	// keyword (case-insensitive). Used by /task search (#9).
+	Search(keyword string, limit int) ([]taskmodel.Task, error)
+	// Create persists a new top-level task and returns it. Used by /task add (#8)
+	// and the New Task dialog / post-dropdown action (#16).
+	Create(in task.CreateInput) (*taskmodel.Task, error)
 }
 
 // AssignNotifier fires the assignee-change DM. It is the subset of the
@@ -98,6 +108,7 @@ type Handler struct {
 	commentNotifier   CommentNotifier
 	commentAuthorizer CommentAuthorizer
 	users             UserResolver
+	botUserID         string
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -116,6 +127,7 @@ type Options struct {
 	CommentNotifier   CommentNotifier   // comment DM
 	CommentAuthorizer CommentAuthorizer // view/comment permission (channel-aware)
 	Users             UserResolver      // @username -> user id for /task assign
+	BotUserID         string            // plugin bot id, used to detect bot DMs for /task add scope
 }
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
@@ -198,6 +210,30 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 	helpCmd := model.NewAutocompleteData("help", "", "Show task command help")
 	taskCmd.AddCommand(helpCmd)
 
+	// /task add "<summary>"
+	addCmd := model.NewAutocompleteData("add", "\"<summary>\"", "Create a new task")
+	addCmd.AddTextArgument("task summary", "\"<summary>\"", "")
+	taskCmd.AddCommand(addCmd)
+
+	// /task list [mine|channel|all] [status ...] [due ...]
+	listCmd := model.NewAutocompleteData("list", "[mine|channel|all] [status] [due]", "List tasks")
+	listCmd.AddStaticListArgument("scope", false, []model.AutocompleteListItem{
+		{Item: "mine", HelpText: "Tasks assigned to me"},
+		{Item: "channel", HelpText: "Tasks in this channel"},
+		{Item: "all", HelpText: "All tasks I can see"},
+	})
+	taskCmd.AddCommand(listCmd)
+
+	// /task show <id>
+	showCmd := model.NewAutocompleteData("show", "<id>", "Show a task's details")
+	showCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
+	taskCmd.AddCommand(showCmd)
+
+	// /task search <keyword>
+	searchCmd := model.NewAutocompleteData("search", "<keyword>", "Search tasks by keyword")
+	searchCmd.AddTextArgument("keyword", "<keyword>", "")
+	taskCmd.AddCommand(searchCmd)
+
 	if err := client.SlashCommand.Register(&model.Command{
 		Trigger:          taskCommandTrigger,
 		AutoComplete:     true,
@@ -216,6 +252,7 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 		commentNotifier:   opts.CommentNotifier,
 		commentAuthorizer: opts.CommentAuthorizer,
 		users:             opts.Users,
+		botUserID:         opts.BotUserID,
 	}
 }
 
@@ -244,6 +281,14 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return ephemeral(taskHelp()), nil
 	}
 	switch subFields[0] {
+	case "add":
+		return c.handleAdd(args, subFields[1:])
+	case "list":
+		return c.handleList(args, subFields[1:])
+	case "show":
+		return c.handleShow(args, subFields[1:])
+	case "search":
+		return c.handleSearch(args, subFields[1:])
 	case "status":
 		return c.handleStatus(args, subFields[1:])
 	case "done":
@@ -268,6 +313,171 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return ephemeral(fmt.Sprintf("Unknown /task subcommand: %s\n\n%s", subFields[0], taskHelp())), nil
 	}
 }
+
+// handleAdd implements /task add ["<summary>"] (issue #8). It accepts an
+// optional quoted summary and creates a task immediately with sensible defaults
+// (scope = current channel, unless in a DM with the bot where it's Personal).
+// The full New Task dialog prefill is a desktop/webapp concern; on the command
+// path we create directly so mobile users aren't blocked.
+func (c *Handler) handleAdd(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	summary := strings.TrimSpace(strings.Join(rest, " "))
+	// Strip surrounding quotes if the user quoted the summary.
+	summary = strings.Trim(summary, "\"'")
+	if summary == "" {
+		return ephemeral("Usage: /task add \"<summary>\" — a summary is required."), nil
+	}
+
+	channelID := args.ChannelId
+	// A DM with the bot defaults to a Personal task (no channel scope).
+	if c.isBotDM(args.ChannelId) {
+		channelID = ""
+	}
+
+	created, err := c.taskService.Create(task.CreateInput{
+		Summary:   summary,
+		CreatorID: args.UserId,
+		ChannelID: channelID,
+	})
+	if err != nil {
+		return ephemeral(fmt.Sprintf("Failed to create task: %s", err.Error())), nil
+	}
+	return ephemeral(fmt.Sprintf("➕ Task created: **%s** (`%s`)", created.Summary, created.ID)), nil
+}
+
+// handleList implements /task list [mine|channel|all] [status ...] [due ...]
+// (issue #9). Returns an ephemeral, paginated text list of tasks. The desktop
+// RHS is the rich view; this is the chat/mobile fallback.
+func (c *Handler) handleList(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	scope := task.ScopeMine
+	status := ""
+	due := ""
+	for _, tok := range rest {
+		switch tok {
+		case "mine", "channel", "all":
+			scope = task.Scope(tok)
+		case "todo", "in_progress", "done", "cancelled":
+			status = tok
+		case "overdue", "today", "week":
+			due = tok
+		}
+	}
+
+	// channel scope requires the current channel; mine/all are user-scoped.
+	channelID := ""
+	if scope == task.ScopeChannel {
+		channelID = args.ChannelId
+	}
+
+	tasks, err := c.taskService.List(task.ListQuery{
+		Scope:     scope,
+		UserID:    args.UserId,
+		ChannelID: channelID,
+		Status:    status,
+		Due:       due,
+		Limit:     listResultLimit,
+	})
+	if err != nil {
+		return ephemeral(fmt.Sprintf("Failed to list tasks: %s", err.Error())), nil
+	}
+	if len(tasks) == 0 {
+		return ephemeral("No tasks found."), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tasks (%s) — %d\n", scope, len(tasks))
+	for _, t := range tasks {
+		fmt.Fprintf(&b, "• `%s` %s — %s\n", t.ID, statusGlyph(t.Status), t.Summary)
+	}
+	return ephemeral(b.String()), nil
+}
+
+// handleShow implements /task show <id> (issue #9). Returns an ephemeral card
+// with the task's details.
+func (c *Handler) handleShow(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 1 {
+		return ephemeral("Usage: /task show <id>"), nil
+	}
+	id := rest[0]
+	t, err := c.taskService.Get(id)
+	if err != nil {
+		return ephemeral(fmt.Sprintf("Failed to load task %s.", id)), nil
+	}
+	if t == nil {
+		return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
+	}
+	return ephemeral(formatTaskDetail(t)), nil
+}
+
+// handleSearch implements /task search <keyword> (issue #9) as an escape hatch
+// for finding tasks not in the top-N dialog list. Scans summary/description.
+func (c *Handler) handleSearch(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	keyword := strings.TrimSpace(strings.Join(rest, " "))
+	if keyword == "" {
+		return ephemeral("Usage: /task search <keyword>"), nil
+	}
+	tasks, err := c.taskService.Search(keyword, searchResultLimit)
+	if err != nil {
+		return ephemeral(fmt.Sprintf("Search failed: %s", err.Error())), nil
+	}
+	if len(tasks) == 0 {
+		return ephemeral(fmt.Sprintf("No tasks matching %q.", keyword)), nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tasks matching %q — %d\n", keyword, len(tasks))
+	for _, t := range tasks {
+		fmt.Fprintf(&b, "• `%s` %s — %s\n", t.ID, statusGlyph(t.Status), t.Summary)
+	}
+	return ephemeral(b.String()), nil
+}
+
+// isBotDM reports whether channelID is a DM with the plugin bot. Used by
+// handleAdd to default to a Personal task there. Best-effort: if the DM lookup
+// fails (permissions, transient), it returns false so the task defaults to the
+// channel scope rather than blocking creation.
+func (c *Handler) isBotDM(channelID string) bool {
+	if c.botUserID == "" || channelID == "" {
+		return false
+	}
+	dm, err := c.client.Channel.GetDirect(c.botUserID, channelID)
+	return err == nil && dm.Id == channelID
+}
+
+// statusGlyph returns a compact status indicator for list/search output.
+func statusGlyph(status string) string {
+	switch status {
+	case taskmodel.StatusDone:
+		return "✅"
+	case taskmodel.StatusCancelled:
+		return "🚫"
+	case taskmodel.StatusInProgress:
+		return "🔄"
+	default:
+		return "◻️"
+	}
+}
+
+// formatTaskDetail renders a single task as an ephemeral text card.
+func formatTaskDetail(t *taskmodel.Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "**%s** %s `%s`\n", t.Summary, statusGlyph(t.Status), t.ID)
+	if t.Description != "" {
+		fmt.Fprintf(&b, "\n%s\n", t.Description)
+	}
+	fmt.Fprintf(&b, "\nStatus: %s", t.Status)
+	if t.AssigneeID != "" {
+		fmt.Fprintf(&b, " · Assignee: %s", t.AssigneeID)
+	}
+	if t.Due != nil {
+		fmt.Fprintf(&b, " · Due: %s", time.UnixMilli(*t.Due).Format("2006-01-02 15:04"))
+	}
+	return b.String()
+}
+
+// listResultLimit / searchResultLimit cap ephemeral output length.
+const (
+	listResultLimit   = 25
+	searchResultLimit = 15
+)
 
 // handleStatus implements /task status <id> <status>.
 func (c *Handler) handleStatus(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
@@ -667,6 +877,10 @@ func ephemeral(text string) *model.CommandResponse {
 // taskHelp returns the help text for the /task command.
 func taskHelp() string {
 	return "`/task` commands:\n" +
+		"• `/task add \"<summary>\"` — create a new task\n" +
+		"• `/task list [mine|channel|all] [status] [due]` — list and filter tasks\n" +
+		"• `/task show <id>` — view task details\n" +
+		"• `/task search <keyword>` — search tasks by keyword\n" +
 		"• `/task status <id> <todo|in_progress|done|cancelled>` — change status\n" +
 		"• `/task done <id>` — mark a task done\n" +
 		"• `/task cancel <id>` — cancel a task\n" +

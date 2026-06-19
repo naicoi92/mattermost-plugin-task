@@ -73,6 +73,18 @@ type fakeStatusService struct {
 	commentResult  taskmodel.Comment
 	commentEvent   task.CommentEvent
 	commentErr     error
+
+	listQuery  task.ListQuery
+	listResult []taskmodel.Task
+	listErr    error
+
+	searchKeyword string
+	searchResult  []taskmodel.Task
+	searchErr     error
+
+	createInput task.CreateInput
+	createTask  *taskmodel.Task
+	createErr   error
 }
 
 func (f *fakeStatusService) SetStatus(id, status string) (*taskmodel.Task, error) {
@@ -122,6 +134,21 @@ func (f *fakeStatusService) AddComment(taskID, userID, content string) (taskmode
 	f.commentUserID = userID
 	f.commentContent = content
 	return f.commentResult, f.commentEvent, f.commentErr
+}
+
+func (f *fakeStatusService) List(q task.ListQuery) ([]taskmodel.Task, error) {
+	f.listQuery = q
+	return f.listResult, f.listErr
+}
+
+func (f *fakeStatusService) Search(keyword string, limit int) ([]taskmodel.Task, error) {
+	f.searchKeyword = keyword
+	return f.searchResult, f.searchErr
+}
+
+func (f *fakeStatusService) Create(in task.CreateInput) (*taskmodel.Task, error) {
+	f.createInput = in
+	return f.createTask, f.createErr
 }
 
 func TestHelloCommand(t *testing.T) {

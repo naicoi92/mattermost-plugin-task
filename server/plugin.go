@@ -94,6 +94,7 @@ func (p *Plugin) OnActivate() error {
 		CommentNotifier:   commandCommentNotifier{p.notifier},
 		CommentAuthorizer: commandCommentAuthorizer{channels: channelMembershipChecker{api: p.API}},
 		Users:             userResolver{p.API},
+		BotUserID:         p.botUserID,
 	})
 
 	p.router = p.initRouter()
