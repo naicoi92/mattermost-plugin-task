@@ -72,7 +72,14 @@ func SetAtomicWithRetries(backend atomicBackend, log conflictLogger, key string,
 			return errors.Wrapf(err, "failed to get value for key %s", key)
 		}
 
-		newVal, err := update(old)
+		// Hand update a defensive copy so any in-place mutation it performs
+		// cannot corrupt the bytes used for the CAS precondition below. Without
+		// this, an update that reuses/appends to old's backing array would make
+		// SetAtomic compare against the mutated value and spuriously fail (or
+		// worse, succeed against a precondition the DB never held).
+		oldForUpdate := append([]byte(nil), old...)
+
+		newVal, err := update(oldForUpdate)
 		if err != nil {
 			return errors.Wrap(err, "update function failed")
 		}

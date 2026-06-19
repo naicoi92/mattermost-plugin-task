@@ -13,6 +13,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -177,6 +178,63 @@ func TestSetAtomicWithRetries_NilUpdateRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "update function must not be nil")
 }
+
+// TestSetAtomicWithRetries_UpdateMutationDoesNotCorruptCAS is a regression test
+// for the defensive copy of the old value. The update callback receives a copy
+// of the current bytes; if it mutates them in place, the CAS precondition
+// passed to pluginapi.SetAtomic must still describe the *original* value.
+//
+// It drives the production Client path (pluginapi.KVService.Set →
+// KVSetWithOptions) against a plugintest.API mock, which records the exact
+// OldValue bytes used for the CAS comparison. Without the defensive copy in the
+// retry loop, mutating old's backing array would make the CAS compare against
+// the mutated bytes.
+func TestSetAtomicWithRetries_UpdateMutationDoesNotCorruptCAS(t *testing.T) {
+	api := &plugintest.API{}
+	driver := &plugintest.Driver{}
+	client := pluginapi.NewClient(api, driver)
+	store := NewKVStore(client)
+
+	key := "edge:u1:t1:comments"
+	// stored is what the DB holds. snapshot is an independent copy the test
+	// compares against, so it is unaffected by any mutation of the Get result.
+	stored := bytes.Repeat([]byte{0xAB}, 16)
+	snapshot := append([]byte(nil), stored...)
+
+	// Get returns stored; update will mutate its input in place.
+	api.On("KVGet", key).Return(stored, nil).Once()
+	// Capture the exact OldValue the CAS layer received.
+	var captured model.PluginKVSetOptions
+	api.On("KVSetWithOptions", key, []byte{0x01}, mock.AnythingOfType("model.PluginKVSetOptions")).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(2).(model.PluginKVSetOptions)
+		}).
+		Return(true, nil).Once()
+
+	mutated := false
+	err := store.SetAtomicWithRetries(key, func(old []byte) (any, error) {
+		for i := range old {
+			if old[i] != 0 {
+				old[i] = 0 // mutate the input buffer in place
+				mutated = true
+			}
+		}
+		return []byte{0x01}, nil
+	})
+
+	require.True(t, mutated, "sanity: update must have mutated its input buffer")
+	require.NoError(t, err)
+	// The CAS OldValue must equal the untouched snapshot of the original bytes.
+	// Without the defensive copy, OldValue would be the zeroed-out buffer.
+	assert.True(t, captured.Atomic, "CAS option must be atomic")
+	assert.Equal(t, snapshot, captured.OldValue, "CAS OldValue must be the original, unmutated bytes")
+}
+
+// casBackend documentation removed — see the test above for why a custom
+// backend cannot validate this regression (pluginapi.KVSetOptions.oldValue is
+// unexported). The production Client path through plugintest.API is used
+// instead, where OldValue surfaces as the exported
+// model.PluginKVSetOptions.OldValue field.
 
 // TestClient_SetAtomicWithRetries_Wiring confirms the Client method delegates
 // to SetAtomicWithRetries against the pluginapi KV service, using a plugintest
