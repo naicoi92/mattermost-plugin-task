@@ -12,11 +12,21 @@ package permission
 
 import "github.com/naicoi92/mattermost-plugin-task/server/model"
 
-// ChannelAdminChecker reports whether userID is a channel admin of channelID.
+// ChannelMembershipChecker reports channel-level access for a user. It separates
+// the two distinct concepts the permission rules need: plain membership (used to
+// decide viewing/commenting on a channel task) and admin status (used to decide
+// who may delete a channel task). Keeping these as distinct methods avoids the
+// ambiguity of overloading a single "IsChannelAdmin" check to mean both.
+//
 // It is supplied by the caller (REST/command layer), which has access to the
 // Mattermost channel membership API, keeping this package free of pluginapi
 // dependencies and therefore unit-testable in isolation.
-type ChannelAdminChecker interface {
+type ChannelMembershipChecker interface {
+	// IsChannelMember reports whether userID is any member (admin or not) of
+	// channelID. Used by the view/comment rules.
+	IsChannelMember(userID, channelID string) bool
+	// IsChannelAdmin reports whether userID is a channel admin of channelID.
+	// Used by the delete rule for channel-scoped tasks.
 	IsChannelAdmin(userID, channelID string) bool
 }
 
@@ -33,7 +43,7 @@ func CanUserModifyTask(userID string, task *model.Task) bool {
 // CanUserDeleteTask reports whether userID may hard-delete the task. Only the
 // creator may always delete; for channel-scoped tasks a channel admin may also
 // delete. The assignee may NOT delete (avoids total loss of control).
-func CanUserDeleteTask(userID string, task *model.Task, channels ChannelAdminChecker) bool {
+func CanUserDeleteTask(userID string, task *model.Task, channels ChannelMembershipChecker) bool {
 	if userID == "" || task == nil {
 		return false
 	}
@@ -49,7 +59,7 @@ func CanUserDeleteTask(userID string, task *model.Task, channels ChannelAdminChe
 // CanUserViewTask reports whether userID may view the task. The creator and
 // assignee can always view. For channel-scoped tasks every channel member may
 // view; for personal tasks (ChannelID == "") nobody else may view.
-func CanUserViewTask(userID string, task *model.Task, channels ChannelAdminChecker) bool {
+func CanUserViewTask(userID string, task *model.Task, channels ChannelMembershipChecker) bool {
 	if userID == "" || task == nil {
 		return false
 	}
@@ -60,14 +70,12 @@ func CanUserViewTask(userID string, task *model.Task, channels ChannelAdminCheck
 	if task.ChannelID == "" {
 		return false
 	}
-	// Channel-scoped tasks are visible to any channel member. We treat channel
-	// membership uniformly via the checker (which returns true for any member,
-	// admin or not); admins are a subset of members.
-	return channels != nil && channels.IsChannelAdmin(userID, task.ChannelID)
+	// Channel-scoped tasks are visible to any channel member.
+	return channels != nil && channels.IsChannelMember(userID, task.ChannelID)
 }
 
 // CanUserCommentTask reports whether userID may comment on the task. Commenting
 // follows the view rule: anyone who can view the task may comment on it.
-func CanUserCommentTask(userID string, task *model.Task, channels ChannelAdminChecker) bool {
+func CanUserCommentTask(userID string, task *model.Task, channels ChannelMembershipChecker) bool {
 	return CanUserViewTask(userID, task, channels)
 }
