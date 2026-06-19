@@ -212,15 +212,18 @@ func TestClient_GetSubtaskIDs_Validation(t *testing.T) {
 func TestClient_SaveReminder_DeleteReminder_Validation(t *testing.T) {
 	_, store := setupTest()
 
-	assert.EqualError(t, store.SaveReminder("", 900000), "task ID is required")
+	assert.EqualError(t, store.SaveReminder("", pmodel.ReminderMetadata{OffsetMS: 900000}), "task ID is required")
 	assert.EqualError(t, store.DeleteReminder(""), "task ID is required")
+	_, err := store.GetReminder("")
+	assert.EqualError(t, err, "task ID is required")
 }
 
 func TestClient_SaveReminder_DeleteReminder_ListReminderKeys(t *testing.T) {
 	api, store := setupTest()
 
-	api.On("KVSetWithOptions", "idx:reminder:task1", jsonEquals(t, int64(900000)), model.PluginKVSetOptions{}).Return(true, nil).Once()
-	require.NoError(t, store.SaveReminder("task1", 900000))
+	meta := pmodel.ReminderMetadata{DueMS: 1_000_000, OffsetMS: 900000, AssigneeID: "u1"}
+	api.On("KVSetWithOptions", "idx:reminder:task1", jsonEquals(t, meta), model.PluginKVSetOptions{}).Return(true, nil).Once()
+	require.NoError(t, store.SaveReminder("task1", meta))
 
 	api.On("KVList", 0, pageSize).Return([]string{"idx:reminder:task1", "idx:reminder:task2"}, nil).Once()
 	keys, err := store.ListReminderKeys()
@@ -229,6 +232,27 @@ func TestClient_SaveReminder_DeleteReminder_ListReminderKeys(t *testing.T) {
 
 	api.On("KVSetWithOptions", "idx:reminder:task1", []byte(nil), model.PluginKVSetOptions{}).Return(true, nil).Once()
 	require.NoError(t, store.DeleteReminder("task1"))
+}
+
+func TestClient_GetReminder(t *testing.T) {
+	api, store := setupTest()
+
+	t.Run("returns metadata when present", func(t *testing.T) {
+		meta := pmodel.ReminderMetadata{DueMS: 5, OffsetMS: 1, AssigneeID: "u1"}
+		api.On("KVGet", "idx:reminder:task1").Return(mustMarshal(t, meta), nil).Once()
+
+		got, err := store.GetReminder("task1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, meta, *got)
+	})
+
+	t.Run("returns nil when no reminder", func(t *testing.T) {
+		api.On("KVGet", "idx:reminder:task2").Return(nil, nil).Once()
+		got, err := store.GetReminder("task2")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
 }
 
 // mustMarshal returns the JSON encoding of v.
