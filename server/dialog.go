@@ -259,15 +259,22 @@ func parseTaskDetailSubmission(sub map[string]any, current *taskmodel.Task) (tas
 
 // openTaskDetailDialogFor loads a task and opens the Task Detail dialog for the
 // user (used by the Quick List "Open task" submit). It is best-effort: a missing
-// task yields an error.
+// task yields an error. The dialog's read-only intro shows live subtask progress
+// and the most recent comments (issue #25).
 func (p *Plugin) openTaskDetailDialogFor(triggerID, taskID string) error {
 	t, err := p.taskService.Get(taskID)
 	if err != nil || t == nil {
 		return fmt.Errorf("task %s not found", taskID)
 	}
-	dialog := buildTaskDetailDialog(t, 0, 0, nil)
+	done, total := p.subtaskProgress(taskID)
+	recent := p.recentComments(taskID, detailCommentsLimit)
+	dialog := buildTaskDetailDialog(t, done, total, recent)
 	return p.openDialog(triggerID, dialog)
 }
+
+// detailCommentsLimit is the maximum number of recent comments shown in the Task
+// Detail dialog introduction (kept short for the mobile/fallback view).
+const detailCommentsLimit = 3
 
 // openDialog wraps p.API.OpenInteractiveDialog, building the request with the
 // plugin-relative callback URL for the dialog's callback id.

@@ -23,11 +23,11 @@ func sampleTask(status string, due *int64) *taskmodel.Task {
 
 func TestBuildTaskCard_FieldsAndTitle(t *testing.T) {
 	due := int64(1_800_000_000_000)
-	card := buildTaskCard(sampleTask(taskmodel.StatusTodo, &due), 1_500_000_000_000, 1, 3)
+	card := buildTaskCard(sampleTask(taskmodel.StatusTodo, &due), 1_500_000_000_000, 1, 3, 2)
 
 	assert.Equal(t, "Review PR", card.Title)
-	// Fields: status, assignee, due, subtasks.
-	require.Len(t, card.Fields, 4)
+	// Fields: status, assignee, due, subtasks, comments.
+	require.Len(t, card.Fields, 5)
 	assert.Equal(t, "Status", card.Fields[0].Title)
 	assert.Contains(t, card.Fields[0].Value, "To Do")
 	assert.Equal(t, "Assignee", card.Fields[1].Title)
@@ -36,23 +36,34 @@ func TestBuildTaskCard_FieldsAndTitle(t *testing.T) {
 	assert.NotContains(t, card.Fields[2].Value, "overdue", "due is in the future relative to now")
 	assert.Equal(t, "Subtasks", card.Fields[3].Title)
 	assert.Equal(t, "1/3 done", card.Fields[3].Value)
+	assert.Equal(t, "Comments", card.Fields[4].Title)
+	assert.Equal(t, "2", card.Fields[4].Value)
+}
+
+func TestBuildTaskCard_NoCommentIndicatorWhenZero(t *testing.T) {
+	due := int64(1_800_000_000_000)
+	card := buildTaskCard(sampleTask(taskmodel.StatusTodo, &due), 1_500_000_000_000, 0, 0, 0)
+	for _, f := range card.Fields {
+		assert.NotEqual(t, "Comments", f.Title, "no Comments field when count is 0")
+		assert.NotEqual(t, "Subtasks", f.Title, "no Subtasks field when total is 0")
+	}
 }
 
 func TestBuildTaskCard_DoneStrikesThroughTitle(t *testing.T) {
-	card := buildTaskCard(sampleTask(taskmodel.StatusDone, nil), 0, 0, 0)
+	card := buildTaskCard(sampleTask(taskmodel.StatusDone, nil), 0, 0, 0, 0)
 	assert.Equal(t, "~~Review PR~~", card.Title)
 }
 
 func TestBuildTaskCard_OverdueOpenTaskIsRed(t *testing.T) {
 	pastDue := int64(1_000) // before now
-	card := buildTaskCard(sampleTask(taskmodel.StatusTodo, &pastDue), 2_000, 0, 0)
+	card := buildTaskCard(sampleTask(taskmodel.StatusTodo, &pastDue), 2_000, 0, 0, 0)
 	assert.Equal(t, "#D92D20", card.Color)
 }
 
 func TestBuildTaskCard_OverdueDoneTaskNotRed(t *testing.T) {
 	// A done task is not flagged overdue even if its due is in the past.
 	pastDue := int64(1_000)
-	card := buildTaskCard(sampleTask(taskmodel.StatusDone, &pastDue), 2_000, 0, 0)
+	card := buildTaskCard(sampleTask(taskmodel.StatusDone, &pastDue), 2_000, 0, 0, 0)
 	assert.NotEqual(t, "#D92D20", card.Color)
 	assert.Equal(t, "#1A7140", card.Color, "done status color")
 }

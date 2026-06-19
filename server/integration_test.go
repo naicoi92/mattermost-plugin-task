@@ -104,7 +104,7 @@ func TestIntegration_CreateAssignStatusNotifies(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, done.CompletedAt)
 
-	card := buildTaskCard(done, 0, 0, 0)
+	card := buildTaskCard(done, 0, 0, 0, 0)
 	assert.Equal(t, "~~Ship release~~", card.Title, "done task struck-through")
 
 	api.dms = nil
