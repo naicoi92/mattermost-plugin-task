@@ -423,7 +423,9 @@ func (p *Plugin) openTaskDetailDialog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.openTaskDetailDialogFor(req.TriggerID, req.TaskID); err != nil {
-		writeDialogResponse(w, err.Error())
+		// HTTP opener endpoint (not a dialog submit callback): return a plain
+		// HTTP error rather than a SubmitDialogResponse body.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -452,7 +454,11 @@ const dialogFieldNewScope = "new_scope"
 // otherwise (or when opened from a DM with the bot — PLAN §5.1.A). The state
 // carries the chosen channel id (empty for a personal task) so the submit
 // handler doesn't have to re-derive scope.
-func buildNewTaskDialog(prefillSummary, channelID string, isPersonal bool) model.Dialog {
+//
+// isPersonal is derived internally from channelID == "" so callers can't pass
+// an inconsistent (channelID, isPersonal) pair.
+func buildNewTaskDialog(prefillSummary, channelID string) model.Dialog {
+	isPersonal := channelID == ""
 	scopeDefault := "channel"
 	if isPersonal {
 		scopeDefault = "personal"
@@ -460,15 +466,19 @@ func buildNewTaskDialog(prefillSummary, channelID string, isPersonal bool) model
 
 	// Scope options: the channel option is only meaningful when a channel
 	// context exists. When there is no channel (e.g. a DM with the bot), only
-	// the personal option is offered.
-	scopeOptions := []*model.PostActionOptions{
-		{Text: "Personal", Value: "personal"},
-	}
+	// the personal option is offered. The default option is listed first so the
+	// pre-selected value sits at the top of the dropdown (matches user
+	// expectation).
+	var scopeOptions []*model.PostActionOptions
 	if channelID != "" {
-		scopeOptions = append(scopeOptions, &model.PostActionOptions{
-			Text:  "Channel",
-			Value: "channel",
-		})
+		scopeOptions = []*model.PostActionOptions{
+			{Text: "Channel", Value: "channel"},
+			{Text: "Personal", Value: "personal"},
+		}
+	} else {
+		scopeOptions = []*model.PostActionOptions{
+			{Text: "Personal", Value: "personal"},
+		}
 	}
 
 	return model.Dialog{
@@ -521,8 +531,7 @@ func buildNewTaskDialog(prefillSummary, channelID string, isPersonal bool) model
 // the text the user typed after `/task add`. channelID is the originating
 // channel (empty for a DM with the bot, which forces personal scope).
 func (p *Plugin) openNewTaskDialogFor(triggerID, prefillSummary, channelID string) error {
-	isPersonal := channelID == ""
-	dialog := buildNewTaskDialog(prefillSummary, channelID, isPersonal)
+	dialog := buildNewTaskDialog(prefillSummary, channelID)
 	return p.openDialog(triggerID, dialog)
 }
 
@@ -613,8 +622,37 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 	// Real-time: the new task is visible to Quick List / Kanban clients (#32).
 	p.broadcastTaskUpdated(created, []string{"created"})
 
+	// When the task has no channel card (personal task, no assignee ≠ creator),
+	// the dialog closes with no visible feedback. Send a brief ephemeral
+	// confirmation so the user knows the task was created. For channel/DM
+	// tasks the posted card is the feedback, so no ephemeral is needed.
+	if channelPostID == "" && dmPostID == "" {
+		p.SendEphemeralTaskCreated(req.UserId, created)
+	}
+
 	// Empty error closes the dialog.
 	writeDialogResponse(w, "")
+}
+
+// SendEphemeralTaskCreated posts a brief ephemeral confirmation to userID so a
+// New Task dialog submit that produces no visible card (personal task with no
+// assignee ≠ creator) still gives the user feedback that the task was created.
+// Best-effort: a send failure is logged but does not change the dialog result.
+func (p *Plugin) SendEphemeralTaskCreated(userID string, t *taskmodel.Task) {
+	if userID == "" || t == nil {
+		return
+	}
+	post := &model.Post{
+		UserId:    p.botUserID,
+		ChannelId: "",
+		Message:   fmt.Sprintf("➕ Task created: **%s** (`%s`)", t.Summary, t.ID),
+	}
+	// SendEphemeralPost resolves the DM channel for userID internally when
+	// ChannelId is empty; a returned nil (send failure) is logged but not fatal.
+	if created := p.API.SendEphemeralPost(userID, post); created == nil {
+		p.API.LogError("Failed to send ephemeral task-created confirmation",
+			"user_id", userID, "task_id", t.ID)
+	}
 }
 
 // openNewTaskDialogRequest is the body for POST /dialogs/open-new-task, the
@@ -637,7 +675,9 @@ func (p *Plugin) openNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.openNewTaskDialogFor(req.TriggerID, req.PrefillSummary, req.ChannelID); err != nil {
-		writeDialogResponse(w, err.Error())
+		// This is an HTTP opener endpoint, not a dialog submit callback, so
+		// return a plain HTTP error rather than a SubmitDialogResponse body.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

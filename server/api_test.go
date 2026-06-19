@@ -157,6 +157,9 @@ func newTestPlugin() (*Plugin, *fakeTaskStore) {
 	// PublishWebSocketEvent is invoked by the real-time broadcast helpers
 	// (server/websocket.go); a permissive mock keeps mutation tests panic-free.
 	api.On("PublishWebSocketEvent", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	// SendEphemeralPost is invoked by the New Task dialog submit handler when a
+	// personal task (no channel card) is created (fix #4, PR #102 review).
+	api.On("SendEphemeralPost", mock.Anything, mock.Anything).Return(&mmmodel.Post{}).Maybe()
 	p := &Plugin{
 		taskService: task.NewService(store),
 		botUserID:   "bot",
