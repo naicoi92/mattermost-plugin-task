@@ -7,7 +7,7 @@
 
 import {ClientError} from 'client';
 
-import {messageFor, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
+import {messageFor, normalizeAssigneeUsername, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
 
 describe('parseDueLocal', () => {
     test('returns null for an empty string', () => {
@@ -53,5 +53,27 @@ describe('ClientError handling in the dialog path', () => {
 
     test('a non-Error value falls back', () => {
         expect(messageFor(null)).toBe('request failed');
+    });
+});
+
+describe('normalizeAssigneeUsername (#96)', () => {
+    test('strips a single leading @', () => {
+        expect(normalizeAssigneeUsername('@bob')).toBe('bob');
+    });
+
+    test('leaves a bare username untouched', () => {
+        expect(normalizeAssigneeUsername('bob')).toBe('bob');
+    });
+
+    test('only strips the first @ so emails stay intact', () => {
+        expect(normalizeAssigneeUsername('bob@company')).toBe('bob@company');
+    });
+
+    test('trims surrounding whitespace', () => {
+        expect(normalizeAssigneeUsername('  @bob  ')).toBe('bob');
+    });
+
+    test('returns empty for a whitespace-only value', () => {
+        expect(normalizeAssigneeUsername('   ')).toBe('');
     });
 });

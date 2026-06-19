@@ -67,6 +67,7 @@
   "webapp.task.summary": "Tiêu đề",
   "webapp.task.summary.placeholder": "Tiêu đề task",
   "webapp.task.assignee": "Người làm",
+  "webapp.task.assignee.not_found": "Không tìm thấy người dùng. Nhập @username hợp lệ.",
   "webapp.task.due": "Hạn chót",
   "webapp.task.description": "Mô tả",
   "webapp.task.scope": "Phạm vi",

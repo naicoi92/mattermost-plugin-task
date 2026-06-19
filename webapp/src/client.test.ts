@@ -251,3 +251,37 @@ describe('id encoding', () => {
         expect(capturedUrl).toBe(`${PLUGIN_API_BASE_URL}/tasks/a%2Fb`);
     });
 });
+
+describe('getUserByUsername (#96)', () => {
+    test('hits the host /api/v4 path (not the plugin API prefix)', async () => {
+        let capturedUrl = '';
+        mockFetch((url) => {
+            capturedUrl = url;
+            return okResponse({id: 'u1', username: 'bob'});
+        });
+        const {getUserByUsername} = await importClient();
+        const user = await getUserByUsername('bob');
+        expect(capturedUrl).toBe('/api/v4/users/username/bob');
+        expect(user).toEqual({id: 'u1', username: 'bob'});
+    });
+
+    test('encodes the username segment', async () => {
+        let capturedUrl = '';
+        mockFetch((url) => {
+            capturedUrl = url;
+            return okResponse({id: 'u1', username: 'a b'});
+        });
+        const {getUserByUsername} = await importClient();
+        await getUserByUsername('a b');
+        expect(capturedUrl).toBe('/api/v4/users/username/a%20b');
+    });
+
+    test('a 404 (unknown user) surfaces as a ClientError', async () => {
+        mockFetch(() => mockResponse(404, 'user not found'));
+        const {getUserByUsername} = await importClient();
+        await expect(getUserByUsername('nobody')).rejects.toMatchObject({
+            status: 404,
+            message: 'user not found',
+        });
+    });
+});
