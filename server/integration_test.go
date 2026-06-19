@@ -116,6 +116,173 @@ func TestIntegration_CreateAssignStatusNotifies(t *testing.T) {
 	assert.Equal(t, "dm:u-assignee:bot", api.dms[0].ChannelId, "DM targets the assignee")
 }
 
+// --- Phase 2 integration tests (issue #26) ---
+
+// newIntegrationNotifier builds a notifier over a fresh fake API for the
+// Phase 2 flows.
+func newIntegrationNotifier(api *fakeAPIForIntegration) *notification.Notifier {
+	if api.users == nil {
+		api.users = map[string]*model.User{}
+	}
+	return notification.New(notifAPIAdapter{api}, fakeTranslation{}, "bot")
+}
+
+// TestIntegration_Phase2_SubtaskInheritsAndProgress exercises the subtask
+// create-from-parent flow end-to-end: a subtask inherits the parent's channel
+// and assignee, and the parent card reflects subtask progress.
+func TestIntegration_Phase2_SubtaskInheritsAndProgress(t *testing.T) {
+	store := newFakeTaskStore()
+	svc := task.NewService(store)
+
+	parent, err := svc.Create(task.CreateInput{
+		Summary: "Epic", CreatorID: "u-creator", AssigneeID: "u-doer", ChannelID: "ch1",
+	})
+	require.NoError(t, err)
+
+	// Add two subtasks; both inherit ch1 and the parent's assignee by default.
+	sub1, err := svc.CreateSubtask(parent.ID, "u-creator", "part A", "", nil)
+	require.NoError(t, err)
+	sub2, err := svc.CreateSubtask(parent.ID, "u-creator", "part B", "", nil)
+	require.NoError(t, err)
+	for _, s := range []*taskmodel.Task{sub1, sub2} {
+		assert.Equal(t, "ch1", s.ChannelID, "subtask inherits parent channel")
+		assert.Equal(t, "u-doer", s.AssigneeID, "subtask default assignee = parent assignee")
+	}
+
+	// Complete one subtask: parent progress becomes 1/2.
+	_, err = svc.SetStatus(sub1.ID, taskmodel.StatusDone)
+	require.NoError(t, err)
+	done, total, err := svc.SubtaskProgress(parent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, done)
+	assert.Equal(t, 2, total)
+
+	// The card renders the progress.
+	parent2, gerr := svc.Get(parent.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, parent2)
+	card := buildTaskCard(parent2, 0, done, total, 0)
+	var subtaskField string
+	for _, f := range card.Fields {
+		if f.Title == "Subtasks" {
+			if s, ok := f.Value.(string); ok {
+				subtaskField = s
+			}
+		}
+	}
+	assert.Equal(t, "1/2 done", subtaskField)
+}
+
+// TestIntegration_Phase2_ParentDoneBlockedThenAllowed covers the manual E2E
+// step "mark subtasks done and then mark parent done": the parent can't be done
+// with an open subtask, but can once all are terminal.
+func TestIntegration_Phase2_ParentDoneBlockedThenAllowed(t *testing.T) {
+	store := newFakeTaskStore()
+	svc := task.NewService(store)
+
+	parent, err := svc.Create(task.CreateInput{Summary: "Epic", CreatorID: "u-creator"})
+	require.NoError(t, err)
+	sub, err := svc.CreateSubtask(parent.ID, "u-creator", "only part", "", nil)
+	require.NoError(t, err)
+
+	// Parent done blocked while the subtask is open.
+	_, err = svc.SetStatus(parent.ID, taskmodel.StatusDone)
+	require.Error(t, err)
+	var blocked task.ErrOpenSubtasks
+	require.ErrorAs(t, err, &blocked)
+	assert.Contains(t, err.Error(), "only part", "blocking message lists the open subtask")
+
+	// Complete the subtask, then the parent can be done.
+	_, err = svc.SetStatus(sub.ID, taskmodel.StatusDone)
+	require.NoError(t, err)
+	updated, err := svc.SetStatus(parent.ID, taskmodel.StatusDone)
+	require.NoError(t, err)
+	assert.Equal(t, taskmodel.StatusDone, updated.Status)
+}
+
+// TestIntegration_Phase2_CancelParentCascades covers "cancel parent and observe
+// subtasks cancelled": cancelling the parent cascade-cancels its open subtask,
+// and participants are notified once (for the parent) — not per subtask.
+func TestIntegration_Phase2_CancelParentCascades(t *testing.T) {
+	api := &fakeAPIForIntegration{
+		users: map[string]*model.User{
+			"u-creator": {Id: "u-creator", Username: "creator", Locale: "en"},
+			"u-doer":    {Id: "u-doer", Username: "doer", Locale: "en"},
+		},
+	}
+	notifier := newIntegrationNotifier(api)
+	store := newFakeTaskStore()
+	svc := task.NewService(store)
+
+	parent, err := svc.Create(task.CreateInput{
+		Summary: "Epic", CreatorID: "u-creator", AssigneeID: "u-doer",
+	})
+	require.NoError(t, err)
+	open, err := svc.CreateSubtask(parent.ID, "u-creator", "open part", "", nil)
+	require.NoError(t, err)
+	done, err := svc.CreateSubtask(parent.ID, "u-creator", "done part", "", nil)
+	require.NoError(t, err)
+	_, err = svc.SetStatus(done.ID, taskmodel.StatusDone)
+	require.NoError(t, err)
+
+	// Cancel the parent: the open subtask is cascade-cancelled, the done one untouched.
+	cancelled, err := svc.SetStatus(parent.ID, taskmodel.StatusCancelled)
+	require.NoError(t, err)
+	assert.Equal(t, taskmodel.StatusCancelled, cancelled.Status)
+	openGot, gerr := svc.Get(open.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, taskmodel.StatusCancelled, openGot.Status, "open subtask cascade-cancelled")
+	doneGot, derr := svc.Get(done.ID)
+	require.NoError(t, derr)
+	assert.Equal(t, taskmodel.StatusDone, doneGot.Status, "already-done subtask untouched")
+
+	// Notify-once contract: only the parent cancellation fires the DM (the service
+	// cascade is silent). The caller (here the test) notifies once.
+	api.dms = nil
+	notifier.NotifyCancelled(notification.TaskSummary{ID: parent.ID, Summary: parent.Summary},
+		"u-creator", parent.CreatorID, parent.AssigneeID)
+	require.Len(t, api.dms, 1, "participants notified once for the parent cancellation")
+	assert.Equal(t, "dm:u-doer:bot", api.dms[0].ChannelId, "only the non-actor participant is DM'd")
+}
+
+// TestIntegration_Phase2_CommentNotifiesParticipants covers "add comment and see
+// participants notified": a new comment DMs the creator + assignee, excluding
+// the commenter.
+func TestIntegration_Phase2_CommentNotifiesParticipants(t *testing.T) {
+	api := &fakeAPIForIntegration{
+		users: map[string]*model.User{
+			"u-creator": {Id: "u-creator", Username: "creator", Locale: "en"},
+			"u-doer":    {Id: "u-doer", Username: "doer", Locale: "vi"},
+		},
+	}
+	notifier := newIntegrationNotifier(api)
+	store := newFakeTaskStore()
+	svc := task.NewService(store)
+
+	task1, err := svc.Create(task.CreateInput{
+		Summary: "Task", CreatorID: "u-creator", AssigneeID: "u-doer",
+	})
+	require.NoError(t, err)
+
+	// The creator comments; both participants (minus the commenter) are notified.
+	_, ev, err := svc.AddComment(task1.ID, "u-creator", "looks good")
+	require.NoError(t, err)
+	notifier.NotifyCommented(notification.TaskSummary{ID: task1.ID, Summary: task1.Summary},
+		ev.UserID, ev.CreatorID, ev.AssigneeID)
+	require.Len(t, api.dms, 1, "only the assignee DM'd (commenter=creator excluded)")
+	assert.Equal(t, "dm:u-doer:bot", api.dms[0].ChannelId)
+
+	// The comments are visible in the list, in creation order. A second comment
+	// (by the assignee this time) makes the ordering assertion non-vacuous.
+	_, _, err = svc.AddComment(task1.ID, "u-doer", "ship it")
+	require.NoError(t, err)
+	comments, err := svc.ListComments(task1.ID)
+	require.NoError(t, err)
+	require.Len(t, comments, 2)
+	assert.Equal(t, "looks good", comments[0].Content)
+	assert.Equal(t, "ship it", comments[1].Content)
+}
+
 // remStore is a KVStore fake that actually persists reminders (unlike the
 // api-test stub), so FireReadyReminders can scan them. It delegates task/index
 // storage to an in-memory map.
