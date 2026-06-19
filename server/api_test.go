@@ -142,6 +142,9 @@ func newTestPlugin() (*Plugin, *fakeTaskStore) {
 	api.On("UpdatePost", mock.Anything).Return(&mmmodel.Post{}, nil).Maybe()
 	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
 	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&mmmodel.Channel{Id: "dm-channel"}, nil).Maybe()
+	// PublishWebSocketEvent is invoked by the real-time broadcast helpers
+	// (server/websocket.go); a permissive mock keeps mutation tests panic-free.
+	api.On("PublishWebSocketEvent", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	p := &Plugin{
 		taskService: task.NewService(store),
 		botUserID:   "bot",

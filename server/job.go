@@ -49,6 +49,12 @@ func (p *Plugin) runReminderJob() {
 			p.API.LogError("Reminder job failed to mark fired",
 				"task_id", r.TaskID, "error", err)
 		}
+
+		// Real-time: the reminder fired flag changed; clients can surface the
+		// "due soon" indicator (#32). Best-effort: a missing task is skipped.
+		if t, _ := p.taskService.Get(r.TaskID); t != nil {
+			p.broadcastTaskUpdated(t, []string{"reminder_fired"})
+		}
 	}
 }
 

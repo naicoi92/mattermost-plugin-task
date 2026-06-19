@@ -185,6 +185,9 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	p.writeJSON(w, created)
+
+	// Real-time: a new task is visible to Quick List / Kanban clients (#32).
+	p.broadcastTaskUpdated(created, []string{"created"})
 }
 
 // listTasks handles GET /tasks with scope/status/due/cursor query params.
@@ -269,11 +272,19 @@ func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+
+	// Real-time: summary/description/due/is_all_day changed (#32).
+	p.broadcastTaskUpdated(updated, req.UpdateFields)
 }
 
 // deleteTask handles DELETE /tasks/:id (hard-delete cascade).
 func (p *Plugin) deleteTask(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+
+	// Snapshot the task before deleting so the real-time event can target the
+	// right recipients (creator/assignee/channel) and clients can drop it.
+	snapshot, _ := p.taskService.Get(id)
+
 	if err := p.taskService.Delete(id); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			p.writeError(w, http.StatusNotFound, "task not found")
@@ -283,6 +294,9 @@ func (p *Plugin) deleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+
+	// Real-time: clients remove the task from their caches (#32).
+	p.broadcastTaskDeleted(snapshot)
 }
 
 // patchTaskStatusRequest is the JSON body for PATCH /tasks/:id/status.
@@ -330,6 +344,9 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 	p.updateCard(updated.DMPostID, updated)
 
 	p.writeJSON(w, updated)
+
+	// Real-time: status changed — Kanban column + Quick List badges refresh (#32).
+	p.broadcastTaskUpdated(updated, []string{"status"})
 }
 
 // notifyTerminalStatus fires the done/cancelled DM to creator + assignee (minus
@@ -379,6 +396,9 @@ func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+
+	// Real-time: reminder offset changed (#32).
+	p.broadcastTaskUpdated(updated, []string{"reminder_offset"})
 }
 
 // deleteReminder handles DELETE /tasks/:id/reminder (turn reminders off).
@@ -395,6 +415,9 @@ func (p *Plugin) deleteReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+
+	// Real-time: reminder cleared (#32).
+	p.broadcastTaskUpdated(updated, []string{"reminder_offset"})
 }
 
 // setAssigneeRequest is the JSON body for POST /tasks/:id/assignee.
@@ -434,6 +457,9 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	p.writeJSON(w, updated)
+
+	// Real-time: assignee changed — Quick List "My Tasks" + avatars refresh (#32).
+	p.broadcastTaskUpdated(updated, []string{"assignee_id"})
 }
 
 // deleteAssignee handles DELETE /tasks/:id/assignee (clears the assignee). No
@@ -450,6 +476,9 @@ func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+
+	// Real-time: assignee cleared (#32).
+	p.broadcastTaskUpdated(updated, []string{"assignee_id"})
 }
 
 // createSubtaskRequest is the JSON body for POST /tasks/:id/subtasks.
@@ -533,6 +562,11 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	p.writeJSON(w, created)
+
+	// Real-time: the new subtask appears in Quick List, and the parent's progress
+	// badge updates (#32).
+	p.broadcastTaskUpdated(created, []string{"created"})
+	p.broadcastTaskUpdated(parent, []string{"subtasks"})
 }
 
 // listSubtasks handles GET /tasks/:id/subtasks, returning the parent's direct
@@ -605,6 +639,9 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	p.writeJSON(w, comment)
+
+	// Real-time: a new comment arrived — Task Detail comment list refreshes (#32).
+	p.broadcastTaskUpdated(t, []string{"comment"})
 }
 
 // listComments handles GET /tasks/:id/comments, returning comments sorted by
@@ -692,6 +729,8 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 		p.updateCard(updated.ChannelPostID, updated)
 		p.updateCard(updated.DMPostID, updated)
 		p.notifyTerminalStatus(updated, status, req.UserId)
+		// Real-time: status changed via the interactive card (#32).
+		p.broadcastTaskUpdated(updated, []string{"status"})
 		// Empty ephemeral => Mattermost updates the post and shows nothing extra.
 		writeCardResponse(w, "")
 	case string(actionAssign), string(actionSubtask), string(actionComment):
