@@ -123,6 +123,15 @@ func TestParseTaskDetailSubmission_InvalidDue(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Regression: fmt.Sscanf("%d") silently accepted a numeric prefix, so a value
+// like "1700000000000abc" parsed as 1700000000000. strconv.ParseInt rejects it.
+// CodeRabbit review on PR #102.
+func TestParseTaskDetailSubmission_NumericPrefixSuffixRejected(t *testing.T) {
+	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo}
+	_, err := parseTaskDetailSubmission(map[string]any{dialogFieldTaskDue: "1700000000000abc"}, current)
+	require.Error(t, err, "trailing non-numeric suffix must be rejected, not parsed as a prefix")
+}
+
 func TestParseTaskDetailSubmission_ClearsDue(t *testing.T) {
 	oldDue := int64(1_000)
 	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo, Due: &oldDue}

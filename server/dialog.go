@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -227,16 +228,19 @@ func parseTaskDetailSubmission(sub map[string]any, current *taskmodel.Task) (tas
 		out.NewStatus = st
 	}
 
-	// Due.
+	// Due. Use strconv.ParseInt (not fmt.Sscanf) so a trailing non-numeric
+	// suffix is rejected rather than silently accepted as a prefix — see
+	// TestParseTaskDetailSubmission_NumericPrefixSuffixRejected.
 	if raw, ok := sub[dialogFieldTaskDue].(string); ok {
+		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			if current.Due != nil {
 				out.Patch.UpdateFields = append(out.Patch.UpdateFields, "due")
 				out.Patch.Due = nil
 			}
 		} else {
-			var ms int64
-			if _, err := fmt.Sscanf(raw, "%d", &ms); err != nil {
+			ms, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
 				return out, fmt.Errorf("due must be a numeric millisecond timestamp")
 			}
 			if current.Due == nil || *current.Due != ms {
@@ -560,13 +564,20 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 	if desc, ok := req.Submission[dialogFieldDescription].(string); ok {
 		in.Description = desc
 	}
-	if dueRaw, ok := req.Submission[dialogFieldTaskDue].(string); ok && dueRaw != "" {
-		var ms int64
-		if _, err := fmt.Sscanf(dueRaw, "%d", &ms); err != nil || ms <= 0 {
-			writeDialogResponse(w, "Due must be a numeric millisecond timestamp.")
-			return
+	// Parse the due timestamp strictly: strconv.ParseInt rejects a trailing
+	// non-numeric suffix that fmt.Sscanf("%d") would silently accept (e.g.
+	// "1700000000000abc"). Trim whitespace first so a stray space is not a
+	// validation failure.
+	if dueRaw, ok := req.Submission[dialogFieldTaskDue].(string); ok {
+		dueRaw = strings.TrimSpace(dueRaw)
+		if dueRaw != "" {
+			ms, err := strconv.ParseInt(dueRaw, 10, 64)
+			if err != nil || ms <= 0 {
+				writeDialogResponse(w, "Due must be a numeric millisecond timestamp.")
+				return
+			}
+			in.Due = &ms
 		}
-		in.Due = &ms
 	}
 
 	created, err := p.taskService.Create(in)
