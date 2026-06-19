@@ -17,18 +17,23 @@ import {ACTION_TYPES} from 'reducer';
 
 import type {Task, Comment} from 'types/tasks';
 
-// TaskDetailState is the slice the panel reads from the plugin store.
-interface TaskDetailState {
+// The plugin reducer is mounted by registerReducer at
+// state['plugins-<pluginId>'] (Mattermost convention), so the slice lives at a
+// top-level key named with the plugin id — not under state.plugins. This type
+// models the relevant slice of GlobalState the panel reads.
+interface PluginState {
     selectedTaskID: string;
     selectedTask: Task | null;
 }
 
-interface PluginSlice {
-    'plugins-com.mattermost.plugin-task'?: TaskDetailState;
-}
+type GlobalStateWithPlugin = Record<string, unknown> & {
+    'plugins-com.mattermost.plugin-task'?: PluginState;
+};
 
-function selectSlice(state: {plugins?: Record<string, TaskDetailState>} & PluginSlice): TaskDetailState {
-    return state['plugins-com.mattermost.plugin-task'] ?? {selectedTaskID: '', selectedTask: null};
+const PLUGIN_STATE_KEY = 'plugins-com.mattermost.plugin-task';
+
+function selectSlice(state: GlobalStateWithPlugin): PluginState {
+    return state[PLUGIN_STATE_KEY] ?? {selectedTaskID: '', selectedTask: null};
 }
 
 export interface TaskDetailPanelProps {
@@ -149,6 +154,12 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         try {
             await client.deleteTask(full.id);
             dispatch({type: ACTION_TYPES.DELETE_TASK, taskID: full.id});
+
+            // Clear local state so no stale task remains rendered even if the
+            // host doesn't supply onBack (e.g. the panel is the only view).
+            setFull(null);
+            setSubtasks([]);
+            setComments([]);
             onBack?.();
         } catch (err) {
             setError(messageFor(err));
@@ -167,6 +178,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         className='task-detail__back'
                         onClick={onBack}
                         type='button'
+                        aria-label={t('webapp.task.filter.status')}
                     >
                         {'‹'}
                     </button>
@@ -177,7 +189,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
             {error && <div className='task-detail__error'>{error}</div>}
 
             <dl className='task-detail__meta'>
-                <dt>{t('webapp.task.status.todo').split(' ')[0]}</dt>
+                <dt>{t('webapp.task.filter.status')}</dt>
                 <dd>
                     <select
                         className='task-detail__status'
@@ -230,6 +242,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         className='task-detail__add-btn'
                         onClick={addSubtask}
                         type='button'
+                        aria-label={t('webapp.task.add_subtask')}
                     >
                         {'+'}
                     </button>
@@ -262,6 +275,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         className='task-detail__add-btn'
                         onClick={addComment}
                         type='button'
+                        aria-label={t('webapp.task.add_comment')}
                     >
                         {'+'}
                     </button>
@@ -285,7 +299,8 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
 
 // messageFor extracts a user-facing message from a thrown error, preferring the
 // server's text body (ClientError) and falling back to a generic string.
-function messageFor(err: unknown): string {
+// Exported so tests verify the production logic rather than a hand-copied twin.
+export function messageFor(err: unknown): string {
     if (err instanceof ClientError) {
         return err.message || 'request failed';
     }

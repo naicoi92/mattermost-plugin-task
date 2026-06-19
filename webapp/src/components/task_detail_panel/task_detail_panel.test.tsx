@@ -13,7 +13,7 @@
 
 import {ClientError} from 'client';
 
-import {formatDue, formatTimestamp} from 'components/task_detail_panel/task_detail_panel';
+import {formatDue, formatTimestamp, messageFor} from 'components/task_detail_panel/task_detail_panel';
 
 describe('formatDue', () => {
     test('renders a localized date+time for a known locale', () => {
@@ -74,29 +74,24 @@ describe('formatTimestamp', () => {
 });
 
 describe('ClientError message extraction', () => {
-    // messageFor logic, replicated here for unit testing without a component.
-    function messageFor(err: unknown): string {
-        if (err instanceof ClientError) {
-            return err.message;
-        }
-        if (err instanceof Error) {
-            return err.message;
-        }
-        return 'request failed';
-    }
-
+    // Tests the production messageFor directly (exported) rather than a copy.
     test('a ClientError surfaces its server message', () => {
-        const err = new ClientError(404, 'task not found');
-        expect(messageFor(err)).toBe('task not found');
+        expect(messageFor(new ClientError(404, 'task not found'))).toBe('task not found');
+    });
+
+    test('a ClientError with empty message falls back', () => {
+        expect(messageFor(new ClientError(500, ''))).toBe('request failed');
     });
 
     test('a generic Error surfaces its message', () => {
-        const err: unknown = new Error('network down');
-        expect(messageFor(err)).toBe('network down');
+        expect(messageFor(new Error('network down'))).toBe('network down');
     });
 
     test('a non-Error value falls back to a generic message', () => {
-        const err: unknown = 'something weird';
-        expect(messageFor(err)).toBe('request failed');
+        expect(messageFor('something weird')).toBe('request failed');
+    });
+
+    test('null falls back to a generic message', () => {
+        expect(messageFor(null)).toBe('request failed');
     });
 });
