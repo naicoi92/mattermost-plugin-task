@@ -92,6 +92,11 @@ func (p *Plugin) OnActivate() error {
 		p.runReminderJob,
 	)
 	if err != nil {
+		// OnActivate failed: OnDeactivate won't run, so clean up the already-
+		// scheduled backgroundJob to avoid an orphaned job.
+		if closeErr := p.backgroundJob.Close(); closeErr != nil {
+			p.API.LogError("Failed to close background job during cleanup", "err", closeErr)
+		}
 		return errors.Wrap(err, "failed to schedule reminder job")
 	}
 	p.reminderJob = reminderJob
