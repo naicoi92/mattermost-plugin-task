@@ -638,17 +638,26 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 // New Task dialog submit that produces no visible card (personal task with no
 // assignee ≠ creator) still gives the user feedback that the task was created.
 // Best-effort: a send failure is logged but does not change the dialog result.
+//
+// The ephemeral post is routed through the user's DM channel with the bot:
+// SendEphemeralPost needs a valid channel context to reach the client, so we
+// resolve the DM channel first rather than leaving ChannelId empty (which
+// would silently return nil).
 func (p *Plugin) SendEphemeralTaskCreated(userID string, t *taskmodel.Task) {
 	if userID == "" || t == nil {
 		return
 	}
+	dm, err := p.API.GetDirectChannel(userID, p.botUserID)
+	if err != nil || dm == nil {
+		p.API.LogError("Failed to open DM for task-created confirmation",
+			"user_id", userID, "task_id", t.ID, "error", err)
+		return
+	}
 	post := &model.Post{
 		UserId:    p.botUserID,
-		ChannelId: "",
+		ChannelId: dm.Id,
 		Message:   fmt.Sprintf("➕ Task created: **%s** (`%s`)", t.Summary, t.ID),
 	}
-	// SendEphemeralPost resolves the DM channel for userID internally when
-	// ChannelId is empty; a returned nil (send failure) is logged but not fatal.
 	if created := p.API.SendEphemeralPost(userID, post); created == nil {
 		p.API.LogError("Failed to send ephemeral task-created confirmation",
 			"user_id", userID, "task_id", t.ID)
