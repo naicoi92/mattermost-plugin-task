@@ -34,10 +34,12 @@ func (p *Plugin) initRouter() *mux.Router {
 	// Subtask/Comment buttons POST here with context {action, task_id}.
 	apiRouter.HandleFunc("/actions", p.handleCardAction).Methods(http.MethodPost)
 
-	// Interactive Dialog submit callbacks + openers (issues #8, #17).
+	// Interactive Dialog submit callbacks + openers (issues #8, #17, #95).
 	apiRouter.HandleFunc("/dialogs/quicklist", p.submitQuickListDialog).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/dialogs/taskdetail", p.submitTaskDetailDialog).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/dialogs/newtask", p.submitNewTaskDialog).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/dialogs/open-task-detail", p.openTaskDetailDialog).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/dialogs/open-new-task", p.openNewTaskDialog).Methods(http.MethodPost)
 
 	// Task CRUD (issue #7).
 	tasks := apiRouter.PathPrefix("/tasks").Subrouter()

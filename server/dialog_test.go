@@ -123,6 +123,15 @@ func TestParseTaskDetailSubmission_InvalidDue(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Regression: fmt.Sscanf("%d") silently accepted a numeric prefix, so a value
+// like "1700000000000abc" parsed as 1700000000000. strconv.ParseInt rejects it.
+// CodeRabbit review on PR #102.
+func TestParseTaskDetailSubmission_NumericPrefixSuffixRejected(t *testing.T) {
+	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo}
+	_, err := parseTaskDetailSubmission(map[string]any{dialogFieldTaskDue: "1700000000000abc"}, current)
+	require.Error(t, err, "trailing non-numeric suffix must be rejected, not parsed as a prefix")
+}
+
 func TestParseTaskDetailSubmission_ClearsDue(t *testing.T) {
 	oldDue := int64(1_000)
 	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo, Due: &oldDue}
@@ -159,4 +168,48 @@ func TestParseTaskDetailSubmission_ClearsAssignee(t *testing.T) {
 
 func TestTopNTasksDefault_Is20(t *testing.T) {
 	assert.Equal(t, 20, topNTasksDefault, "issue #17: default top-N is 20")
+}
+
+// --- New Task dialog (#95) -------------------------------------------------
+
+func TestBuildNewTaskDialog_PrefilledSummaryAndFields(t *testing.T) {
+	dialog := buildNewTaskDialog("buy milk", "ch1")
+
+	assert.Equal(t, dialogCallbackNewTask, dialog.CallbackId)
+	assert.Equal(t, "New Task", dialog.Title)
+	assert.Equal(t, "Create", dialog.SubmitLabel)
+	assert.Equal(t, "ch1", dialog.State, "state carries the channel id for the submit handler")
+
+	require.Len(t, dialog.Elements, 5, "summary, assignee, due, description, scope")
+	assert.Equal(t, dialogFieldSummary, dialog.Elements[0].Name)
+	assert.Equal(t, "buy milk", dialog.Elements[0].Default, "summary is prefilled")
+
+	// Assignee uses the users data source (single user picker, optional).
+	assert.Equal(t, dialogFieldAssignee, dialog.Elements[1].Name)
+	assert.Equal(t, "users", dialog.Elements[1].DataSource)
+	assert.True(t, dialog.Elements[1].Optional)
+
+	// Description and due are optional.
+	assert.Equal(t, dialogFieldTaskDue, dialog.Elements[2].Name)
+	assert.True(t, dialog.Elements[2].Optional)
+	assert.Equal(t, dialogFieldDescription, dialog.Elements[3].Name)
+	assert.True(t, dialog.Elements[3].Optional)
+
+	// Scope defaults to channel when a channel context exists, and the default
+	// option is listed first so the pre-selected value sits at the top.
+	assert.Equal(t, dialogFieldNewScope, dialog.Elements[4].Name)
+	assert.Equal(t, "channel", dialog.Elements[4].Default)
+	require.Len(t, dialog.Elements[4].Options, 2, "channel + personal options when a channel context exists")
+	assert.Equal(t, "channel", dialog.Elements[4].Options[0].Value, "default option listed first")
+	assert.Equal(t, "personal", dialog.Elements[4].Options[1].Value)
+}
+
+func TestBuildNewTaskDialog_PersonalScopeWhenNoChannel(t *testing.T) {
+	// A DM with the bot (no channel id) forces personal scope: only the personal
+	// option is offered (PLAN §5.1.A).
+	dialog := buildNewTaskDialog("", "")
+	scope := dialog.Elements[4]
+	assert.Equal(t, "personal", scope.Default)
+	require.Len(t, scope.Options, 1, "channel option hidden when there is no channel context")
+	assert.Equal(t, "personal", scope.Options[0].Value)
 }
