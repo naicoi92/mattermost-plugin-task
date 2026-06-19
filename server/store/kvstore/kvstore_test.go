@@ -209,6 +209,36 @@ func TestClient_GetSubtaskIDs_Validation(t *testing.T) {
 	assert.Nil(t, ids)
 }
 
+// Issue #20/#23: subtask and comment IDs are sorted by ULID (creation order)
+// regardless of the order ListKeys returns them.
+func TestClient_GetSubtaskIDs_SortedByULID(t *testing.T) {
+	api, store := setupTest()
+
+	// ListKeys returns keys out of order; the store must sort by the embedded id.
+	api.On("KVList", 0, pageSize).Return([]string{
+		"idx:t:p:sub:02GNF8", "idx:t:p:sub:01HXY9", "idx:t:p:sub:03ABCD",
+	}, nil).Once()
+	api.On("KVGet", "t:02GNF8").Return(mustMarshal(t, pmodel.Task{ID: "02GNF8"}), nil).Once()
+	api.On("KVGet", "t:01HXY9").Return(mustMarshal(t, pmodel.Task{ID: "01HXY9"}), nil).Once()
+	api.On("KVGet", "t:03ABCD").Return(mustMarshal(t, pmodel.Task{ID: "03ABCD"}), nil).Once()
+
+	ids, err := store.GetSubtaskIDs("p")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"01HXY9", "02GNF8", "03ABCD"}, ids, "sorted by ULID/creation order")
+}
+
+func TestClient_GetCommentIDs_SortedByULID(t *testing.T) {
+	api, store := setupTest()
+
+	api.On("KVList", 0, pageSize).Return([]string{
+		"t:task1:c:02C", "t:task1:c:01A", "t:task1:c:03B",
+	}, nil).Once()
+
+	ids, err := store.GetCommentIDs("task1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"01A", "02C", "03B"}, ids, "sorted by ULID/creation order")
+}
+
 func TestClient_SaveReminder_DeleteReminder_Validation(t *testing.T) {
 	_, store := setupTest()
 

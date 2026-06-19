@@ -277,6 +277,53 @@ func TestCreate_SubtaskWritesMembershipAndInheritsNothing(t *testing.T) {
 	assert.Contains(t, store.subtasks[parent.ID], child.ID)
 }
 
+// Issue #20: a subtask inherits ChannelID and the parent's assignee as its
+// default assignee. The subtask membership index edge is also written.
+func TestCreate_SubtaskInheritsChannelAndAssignee(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	parent, err := svc.Create(CreateInput{
+		Summary: "parent", CreatorID: "u1", AssigneeID: "u2", ChannelID: "ch1",
+	})
+	require.NoError(t, err)
+
+	child, err := svc.Create(CreateInput{
+		Summary: "child", CreatorID: "u3", ParentTaskID: parent.ID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ch1", child.ChannelID, "subtask inherits parent ChannelID")
+	assert.Equal(t, "u2", child.AssigneeID, "subtask default assignee is parent's assignee")
+	assert.Equal(t, parent.ID, child.ParentTaskID)
+	assert.Contains(t, store.subtasks[parent.ID], child.ID)
+}
+
+// Issue #20: an explicit assignee on subtask creation overrides the inherited
+// default.
+func TestCreate_SubtaskExplicitAssigneeOverridesInherited(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	parent, err := svc.Create(CreateInput{
+		Summary: "parent", CreatorID: "u1", AssigneeID: "u2", ChannelID: "ch1",
+	})
+	require.NoError(t, err)
+
+	child, err := svc.Create(CreateInput{
+		Summary: "child", CreatorID: "u3", AssigneeID: "u9", ParentTaskID: parent.ID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "u9", child.AssigneeID, "explicit assignee wins over inherited")
+	assert.Equal(t, "ch1", child.ChannelID, "channel still inherited")
+}
+
+// Issue #20: a subtask referencing a non-existent parent is rejected.
+func TestCreate_SubtaskMissingParentRejected(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, err := svc.Create(CreateInput{Summary: "orphan", CreatorID: "u1", ParentTaskID: "ghost"})
+	assert.ErrorIs(t, err, ErrParentNotFound)
+}
+
 func TestPatch_PartialUpdate(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)
