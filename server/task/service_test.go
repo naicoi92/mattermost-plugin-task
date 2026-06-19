@@ -587,7 +587,9 @@ func TestSetStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
 	assert.Contains(t, err.Error(), "still open", "error lists the open subtask")
 
 	// Parent status unchanged after the rejection.
-	got, _ := svc.Get(parent.ID)
+	got, gerr := svc.Get(parent.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, got)
 	assert.Equal(t, model.StatusTodo, got.Status)
 }
 
@@ -626,7 +628,9 @@ func TestSetStatus_CancelCascadeIsSilentInService(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.StatusCancelled, updated.Status)
 	// The open subtask is cascade-cancelled.
-	got, _ := svc.Get(open.ID)
+	got, gerr := svc.Get(open.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, got)
 	assert.Equal(t, model.StatusCancelled, got.Status)
 }
 
