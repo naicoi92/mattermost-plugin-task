@@ -96,7 +96,8 @@ func SetAtomicWithRetries(backend atomicBackend, log conflictLogger, key string,
 		// (key + attempt count) so contention is debuggable, then back off and
 		// retry. We only sleep between attempts, not after the final one.
 		if log != nil {
-			log("KV atomic conflict",
+			log(
+				"KV atomic conflict",
 				"key", key,
 				"retry", attempt,
 				"max_retries", MaxRetries,

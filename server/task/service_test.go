@@ -429,4 +429,112 @@ func TestSearch_MatchesSummaryOrDescription(t *testing.T) {
 	assert.Empty(t, empty)
 }
 
+func TestSetStatus_InvalidStatus(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, err := svc.SetStatus("any", "bogus")
+	assert.ErrorIs(t, err, ErrInvalidStatus)
+}
+
+func TestSetStatus_NotFound(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, err := svc.SetStatus("nope", model.StatusDone)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestSetStatus_DoneStampsCompletedAtClearsCancelled(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	origNow := nowFunc
+	nowFunc = fixedNow(5_000)
+	defer func() { nowFunc = origNow }()
+
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	// Pre-set CancelledAt to confirm it gets cleared on done.
+	stored := store.tasks[created.ID]
+	stored.CancelledAt = ptrInt64(1)
+	store.tasks[created.ID] = stored
+
+	nowFunc = fixedNow(9_000)
+	updated, err := svc.SetStatus(created.ID, model.StatusDone)
+	require.NoError(t, err)
+	require.NotNil(t, updated.CompletedAt)
+	assert.Nil(t, updated.CancelledAt)
+	assert.Equal(t, int64(9_000), *updated.CompletedAt)
+	assert.Equal(t, model.StatusDone, updated.Status)
+}
+
+func TestSetStatus_TodoClearsTimestamps(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+	_, err = svc.SetStatus(created.ID, model.StatusDone)
+	require.NoError(t, err)
+
+	updated, err := svc.SetStatus(created.ID, model.StatusTodo)
+	require.NoError(t, err)
+	assert.Nil(t, updated.CompletedAt)
+	assert.Nil(t, updated.CancelledAt)
+	assert.Equal(t, model.StatusTodo, updated.Status)
+}
+
+func TestSetStatus_TerminalStopsReminder(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+	require.NoError(t, store.SaveReminder(created.ID, 60_000))
+	require.Contains(t, store.reminders, created.ID)
+
+	_, err = svc.SetStatus(created.ID, model.StatusDone)
+	require.NoError(t, err)
+	assert.NotContains(t, store.reminders, created.ID, "done removes reminder edge")
+
+	require.NoError(t, store.SaveReminder(created.ID, 60_000))
+	_, err = svc.SetStatus(created.ID, model.StatusCancelled)
+	require.NoError(t, err)
+	assert.NotContains(t, store.reminders, created.ID, "cancelled removes reminder edge")
+}
+
+func TestSetStatus_CancelCascadesToOpenSubtasks(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	openSub, err := svc.Create(CreateInput{Summary: "open", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	doneSub, err := svc.Create(CreateInput{Summary: "done", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	// Mark one subtask already done — it must not be re-cancelled.
+	_, err = svc.SetStatus(doneSub.ID, model.StatusDone)
+	require.NoError(t, err)
+
+	_, err = svc.SetStatus(parent.ID, model.StatusCancelled)
+	require.NoError(t, err)
+
+	open, _ := svc.Get(openSub.ID)
+	require.NotNil(t, open)
+	assert.Equal(t, model.StatusCancelled, open.Status, "open subtask cascade-cancelled")
+
+	done, _ := svc.Get(doneSub.ID)
+	require.NotNil(t, done)
+	assert.Equal(t, model.StatusDone, done.Status, "already-done subtask left untouched")
+}
+
+func TestSetStatus_NoOpWhenUnchanged(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	updated, err := svc.SetStatus(created.ID, model.StatusTodo)
+	require.NoError(t, err)
+	assert.Equal(t, created.UpdatedAt, updated.UpdatedAt, "no rewrite when status unchanged")
+}
+
 func ptrInt64(v int64) *int64 { return &v }
