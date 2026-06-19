@@ -627,14 +627,14 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 	// confirmation so the user knows the task was created. For channel/DM
 	// tasks the posted card is the feedback, so no ephemeral is needed.
 	if channelPostID == "" && dmPostID == "" {
-		p.SendEphemeralTaskCreated(req.UserId, created)
+		p.sendEphemeralTaskCreated(req.UserId, created)
 	}
 
 	// Empty error closes the dialog.
 	writeDialogResponse(w, "")
 }
 
-// SendEphemeralTaskCreated posts a brief ephemeral confirmation to userID so a
+// sendEphemeralTaskCreated posts a brief ephemeral confirmation to userID so a
 // New Task dialog submit that produces no visible card (personal task with no
 // assignee ≠ creator) still gives the user feedback that the task was created.
 // Best-effort: a send failure is logged but does not change the dialog result.
@@ -643,7 +643,7 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 // SendEphemeralPost needs a valid channel context to reach the client, so we
 // resolve the DM channel first rather than leaving ChannelId empty (which
 // would silently return nil).
-func (p *Plugin) SendEphemeralTaskCreated(userID string, t *taskmodel.Task) {
+func (p *Plugin) sendEphemeralTaskCreated(userID string, t *taskmodel.Task) {
 	if userID == "" || t == nil {
 		return
 	}
