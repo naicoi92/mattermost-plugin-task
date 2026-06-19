@@ -101,29 +101,29 @@ export default class Plugin {
         registry.registerTranslations(getTranslationsForLocale);
 
         // Post dropdown action: "Tạo task" creates a task from a message (#16).
-        // At runtime the registry passes the source Post to the action; we split
-        // its message into summary (first line) and description (rest), then open
-        // the New Task dialog pre-filled. The dialog submits through POST /tasks
-        // like the normal New Task flow.
+        // At runtime the registry passes the source post id to the action; we
+        // resolve the post's message from the host Redux store, split it into
+        // summary (first line) and description (rest), then open the New Task
+        // dialog pre-filled. The dialog submits through POST /tasks like the
+        // normal New Task flow.
         registry.registerPostDropdownMenuAction(
             'Tạo task',
-            (post?: {message?: string; channel_id?: string}) => {
-                openNewTaskFromMessage(store, post);
+            (postId?: string) => {
+                openNewTaskFromMessage(store, postId);
             },
             () => true,
         );
     }
 }
 
-// openNewTaskFromMessage is the post-dropdown handler (#16). It splits the
-// source message into a summary (first non-empty line, truncated) and a
-// description (the remaining lines), then dispatches OPEN_NEW_TASK_DIALOG so the
+// openNewTaskFromMessage is the post-dropdown handler (#16). It resolves the
+// source post's message and channel from the host Redux store, splits the
+// message into a summary (first non-empty line, truncated) and a description
+// (the remaining lines), then dispatches OPEN_NEW_TASK_DIALOG so the
 // NewTaskDialog root component opens pre-filled. Declared module-level so it can
 // be referenced by name in the registration and unit-tested independently.
-export function openNewTaskFromMessage(
-    store: Store<GlobalState>,
-    post?: {message?: string; channel_id?: string},
-): void {
+export function openNewTaskFromMessage(store: Store<GlobalState>, postId?: string): void {
+    const post = postId ? resolvePost(store.getState(), postId) : undefined;
     const message = post?.message ?? '';
     const {summary, description} = splitMessageForTask(message);
     store.dispatch({
@@ -132,6 +132,20 @@ export function openNewTaskFromMessage(
         prefillDescription: description,
         channelID: post?.channel_id,
     });
+}
+
+// PostLike is the minimal shape we read from the host post entities.
+interface PostLike {
+    message?: string;
+    channel_id?: string;
+}
+
+// resolvePost reads a post by id from the host Redux store. Mattermost stores
+// posts at state.entities.posts.posts[postId]; we access it defensively so a
+// missing or differently-shaped store yields undefined rather than throwing.
+export function resolvePost(state: unknown, postId: string): PostLike | undefined {
+    const entities = (state as {entities?: {posts?: {posts?: Record<string, PostLike>}}})?.entities;
+    return entities?.posts?.posts?.[postId];
 }
 
 // splitMessageForTask derives a task summary and description from a message body.

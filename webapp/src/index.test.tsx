@@ -7,7 +7,7 @@
 // reducer, translations, and the post dropdown action. Uses a fake registry +
 // store so no host app is needed.
 
-import Plugin, {openNewTaskFromMessage, splitMessageForTask} from 'index';
+import Plugin, {openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
@@ -15,13 +15,15 @@ import type {GlobalState} from '@mattermost/types/store';
 
 // A minimal store whose dispatch records every action, used to assert the
 // channel header button and post dropdown action dispatch the right thing.
-function fakeStore() {
+// `state` is returned by getState (defaults to empty) so post-dropdown tests can
+// seed the host post entities.
+function fakeStore(state: unknown = {}) {
     const actions: Array<{type: string}> = [];
     const store = {
         dispatch: jest.fn((a: {type: string}) => {
             actions.push(a);
         }),
-        getState: jest.fn(),
+        getState: jest.fn(() => state),
         subscribe: jest.fn(),
         replaceReducer: jest.fn(),
         [Symbol.observable]: jest.fn(),
@@ -108,9 +110,18 @@ describe('Plugin.initialize registrations (#27)', () => {
 });
 
 describe('openNewTaskFromMessage', () => {
-    test('opens the New Task dialog with prefilled summary/description from the message', () => {
-        const {store, actions} = fakeStore();
-        openNewTaskFromMessage(store, {message: 'Fix the bug\nDetails here\nMore detail', channel_id: 'ch1'});
+    // A host state shape with a post under entities.posts.posts, matching where
+    // Mattermost stores posts.
+    function stateWithPost(postId: string, message: string, channelID: string) {
+        return {
+            entities: {posts: {posts: {[postId]: {message, channel_id: channelID}}}},
+        };
+    }
+
+    test('opens the New Task dialog with prefilled summary/description from the resolved post', () => {
+        const state = stateWithPost('p1', 'Fix the bug\nDetails here\nMore detail', 'ch1');
+        const {store, actions} = fakeStore(state);
+        openNewTaskFromMessage(store, 'p1');
         expect(actions).toContainEqual({
             type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
             prefillSummary: 'Fix the bug',
@@ -120,8 +131,20 @@ describe('openNewTaskFromMessage', () => {
     });
 
     test('an empty message opens the dialog with blank fields', () => {
-        const {store, actions} = fakeStore();
-        openNewTaskFromMessage(store, {message: ''});
+        const state = stateWithPost('p1', '', 'ch1');
+        const {store, actions} = fakeStore(state);
+        openNewTaskFromMessage(store, 'p1');
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: '',
+            prefillDescription: '',
+            channelID: 'ch1',
+        });
+    });
+
+    test('an unknown postId opens the dialog blank', () => {
+        const {store, actions} = fakeStore(stateWithPost('p1', 'msg', 'ch1'));
+        openNewTaskFromMessage(store, 'nope');
         expect(actions).toContainEqual({
             type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
             prefillSummary: '',
@@ -130,7 +153,7 @@ describe('openNewTaskFromMessage', () => {
         });
     });
 
-    test('a missing post opens the dialog blank', () => {
+    test('a missing postId opens the dialog blank', () => {
         const {store, actions} = fakeStore();
         openNewTaskFromMessage(store);
         expect(actions).toContainEqual({
@@ -139,6 +162,22 @@ describe('openNewTaskFromMessage', () => {
             prefillDescription: '',
             channelID: undefined,
         });
+    });
+});
+
+describe('resolvePost', () => {
+    test('reads a post from state.entities.posts.posts', () => {
+        const state = {entities: {posts: {posts: {p1: {message: 'hi', channel_id: 'c1'}}}}};
+        expect(resolvePost(state, 'p1')).toEqual({message: 'hi', channel_id: 'c1'});
+    });
+
+    test('returns undefined for a missing post', () => {
+        expect(resolvePost({entities: {posts: {posts: {}}}}, 'p1')).toBeUndefined();
+    });
+
+    test('returns undefined when the entities shape is absent', () => {
+        expect(resolvePost({}, 'p1')).toBeUndefined();
+        expect(resolvePost(null, 'p1')).toBeUndefined();
     });
 });
 

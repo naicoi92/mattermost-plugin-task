@@ -72,8 +72,12 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
 
     // openNewTask opens the New Task dialog. When the host supplies onNewTask
     // (legacy/imperative path), defer to it; otherwise dispatch into the store so
-    // the ConnectedNewTaskDialog root component opens.
-    const openNewTask = onNewTask ?? (() => dispatch({type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG}));
+    // the ConnectedNewTaskDialog root component opens, passing the channel context
+    // so the dialog keeps channel scope when opened from a channel RHS.
+    const openNewTask = onNewTask ?? (() => dispatch({
+        type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+        channelID,
+    }));
 
     return (
         <div className='task-rhs'>
