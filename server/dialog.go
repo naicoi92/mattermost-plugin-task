@@ -336,27 +336,45 @@ func (p *Plugin) submitTaskDetailDialog(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Apply PATCH fields (summary/description/due).
+	// Apply the requested changes. These are separate service calls (KVStore has
+	// no multi-key transaction), so we track each one and report partial success
+	// transparently rather than claiming total failure after some fields saved.
+	// Order: PATCH fields first (least likely to fail), then status, then
+	// assignee. A failure short-circuits and reports what already succeeded.
+	var applied []string
+	var failed string
+
 	if len(update.Patch.UpdateFields) > 0 {
 		if _, err := p.taskService.Patch(taskID, update.Patch); err != nil {
-			writeDialogResponse(w, "Failed to save the task. Please try again.")
-			return
+			failed = "save fields"
+		} else {
+			applied = append(applied, "fields")
 		}
 	}
-	// Status transition.
-	if update.NewStatus != "" {
+	if failed == "" && update.NewStatus != "" {
 		if _, err := p.taskService.SetStatus(taskID, update.NewStatus); err != nil {
-			writeDialogResponse(w, "Failed to change the status. Please try again.")
-			return
+			failed = "change status"
+		} else {
+			applied = append(applied, "status")
 		}
 	}
-	// Assignee change (including a clear to ""). AssigneeSet distinguishes
-	// "cleared" from "unchanged".
-	if update.AssigneeSet {
+	if failed == "" && update.AssigneeSet {
 		if _, _, err := p.taskService.Assign(taskID, update.NewAssignee); err != nil {
-			writeDialogResponse(w, "Failed to change the assignee. Please try again.")
-			return
+			failed = "change assignee"
+		} else {
+			applied = append(applied, "assignee")
 		}
+	}
+
+	if failed != "" {
+		// Partial success: some fields saved before the failure. Be explicit so
+		// the user isn't misled into thinking nothing changed.
+		msg := fmt.Sprintf("Failed to %s.", failed)
+		if len(applied) > 0 {
+			msg += fmt.Sprintf(" Already applied: %s.", strings.Join(applied, ", "))
+		}
+		writeDialogResponse(w, msg)
+		return
 	}
 
 	writeDialogResponse(w, "")
