@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -16,20 +17,24 @@ import (
 // task/comment/subtask/index records and the reminder edge so the service can be
 // exercised end-to-end without the Mattermost pluginapi.
 type fakeStore struct {
-	tasks     map[string]model.Task
-	comments  map[string][]model.Comment // taskID -> comments
-	subtasks  map[string]map[string]struct{}
-	indexes   map[string]struct{}
-	reminders map[string]model.ReminderMetadata
+	tasks        map[string]model.Task
+	comments     map[string][]model.Comment // taskID -> comments
+	subtasks     map[string]map[string]struct{}
+	indexes      map[string]struct{}
+	reminders    map[string]model.ReminderMetadata
+	skipComments map[string]struct{} // comment ids to treat as corrupt (defensive skip)
+	corruptErr   map[string]error    // comment ids whose GetComment returns a decode error
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		tasks:     map[string]model.Task{},
-		comments:  map[string][]model.Comment{},
-		subtasks:  map[string]map[string]struct{}{},
-		indexes:   map[string]struct{}{},
-		reminders: map[string]model.ReminderMetadata{},
+		tasks:        map[string]model.Task{},
+		comments:     map[string][]model.Comment{},
+		subtasks:     map[string]map[string]struct{}{},
+		indexes:      map[string]struct{}{},
+		reminders:    map[string]model.ReminderMetadata{},
+		skipComments: map[string]struct{}{},
+		corruptErr:   map[string]error{},
 	}
 }
 
@@ -120,6 +125,27 @@ func (f *fakeStore) GetSubtaskIDs(parentID string) ([]string, error) {
 func (f *fakeStore) SaveComment(taskID string, comment model.Comment) error {
 	f.comments[taskID] = append(f.comments[taskID], comment)
 	return nil
+}
+
+// GetComment returns the comment with commentID on taskID, or nil. The fake
+// store keeps comments in memory so JSON never fails to decode; this method
+// still mirrors the production read so ListComments is exercised faithfully.
+// An id listed in skipComments simulates a corrupt payload (returns nil) so the
+// service's defensive skip can be tested.
+func (f *fakeStore) GetComment(taskID, commentID string) (*model.Comment, error) {
+	if err, corrupt := f.corruptErr[commentID]; corrupt {
+		return nil, err
+	}
+	if _, skip := f.skipComments[commentID]; skip {
+		return nil, nil
+	}
+	for _, c := range f.comments[taskID] {
+		if c.ID == commentID {
+			out := c
+			return &out, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeStore) GetCommentIDs(taskID string) ([]string, error) {
@@ -660,6 +686,48 @@ func TestAssign_NotFound(t *testing.T) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// --- Comments (issue #23) ---
+
+func TestListComments_ReturnsCommentsInCreationOrder(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "01A", UserID: "u1", Content: "first"}))
+	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "02B", UserID: "u2", Content: "second"}))
+
+	comments, err := svc.ListComments("t1")
+	require.NoError(t, err)
+	require.Len(t, comments, 2)
+	assert.Equal(t, "01A", comments[0].ID)
+	assert.Equal(t, "02B", comments[1].ID)
+}
+
+// Issue #23: a comment whose stored JSON fails to deserialize is skipped rather
+// than failing the whole list. Simulates a corrupt payload by making the store
+// return a decode error for that id (matching what the production store returns
+// when KV.Get can't unmarshal the bytes).
+func TestListComments_SkipsCorruptComment(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "01A", Content: "good"}))
+	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "02B", Content: "corrupt"}))
+	require.NoError(t, store.SaveComment("t1", model.Comment{ID: "03C", Content: "also good"}))
+	// Mark 02B as corrupt: GetComment returns a decode error for it.
+	store.corruptErr["02B"] = errors.New("invalid character 'z' looking for beginning of value")
+
+	comments, err := svc.ListComments("t1")
+	require.NoError(t, err)
+	require.Len(t, comments, 2, "corrupt comment skipped, not fatal")
+	assert.Equal(t, "01A", comments[0].ID)
+	assert.Equal(t, "03C", comments[1].ID)
+}
+
+func TestListComments_EmptyWhenNone(t *testing.T) {
+	svc := NewService(newFakeStore())
+	comments, err := svc.ListComments("none")
+	require.NoError(t, err)
+	assert.Empty(t, comments)
+}
 
 func TestSubtaskProgress(t *testing.T) {
 	store := newFakeStore()

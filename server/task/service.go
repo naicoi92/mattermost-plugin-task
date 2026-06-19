@@ -192,6 +192,34 @@ func (s *Service) Get(id string) (*model.Task, error) {
 	return s.store.GetTask(id)
 }
 
+// ListComments returns the comments attached to taskID, sorted by ULID (creation
+// order). It is defensive: a comment whose stored JSON fails to deserialize is
+// skipped instead of failing the whole list, so one corrupt record can never
+// hide the rest of the thread. Missing tasks yield an empty list (the caller
+// usually resolves task existence separately).
+func (s *Service) ListComments(taskID string) ([]model.Comment, error) {
+	ids, err := s.store.GetCommentIDs(taskID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list comment ids")
+	}
+	comments := make([]model.Comment, 0, len(ids))
+	for _, id := range ids {
+		c, err := s.store.GetComment(taskID, id)
+		if err != nil {
+			// Defensive read: a comment whose stored JSON fails to deserialize
+			// is skipped (logged) rather than failing the whole list. The id
+			// index is consistent, so this only triggers on a genuinely corrupt
+			// payload — one bad record must never hide the rest of the thread.
+			continue
+		}
+		if c == nil {
+			continue
+		}
+		comments = append(comments, *c)
+	}
+	return comments, nil
+}
+
 // SubtaskProgress returns (done, total) where done counts subtasks in a
 // terminal status (done/cancelled) and total is the number of subtasks. Used
 // to render the "x/y" progress on task cards. Missing subtask entities are

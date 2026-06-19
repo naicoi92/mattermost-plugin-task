@@ -52,6 +52,9 @@ type KVStore interface {
 
 	// SaveComment persists a comment under t:{taskID}:c:{comment.ID}.
 	SaveComment(taskID string, comment model.Comment) error
+	// GetComment returns the comment with the given id on taskID, or nil if it
+	// does not exist.
+	GetComment(taskID, commentID string) (*model.Comment, error)
 	// GetCommentIDs returns the IDs of comments attached to taskID.
 	GetCommentIDs(taskID string) ([]string, error)
 

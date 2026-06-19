@@ -143,7 +143,10 @@ func (s *remStore) GetSubtaskIDs(parentID string) ([]string, error) {
 	return nil, nil
 }
 func (s *remStore) SaveComment(taskID string, c taskmodel.Comment) error { return nil }
-func (s *remStore) GetCommentIDs(taskID string) ([]string, error)        { return nil, nil }
+func (s *remStore) GetComment(taskID, commentID string) (*taskmodel.Comment, error) {
+	return nil, nil
+}
+func (s *remStore) GetCommentIDs(taskID string) ([]string, error) { return nil, nil }
 func (s *remStore) SaveReminder(taskID string, m taskmodel.ReminderMetadata) error {
 	s.reminders[taskID] = m
 	return nil

@@ -59,7 +59,10 @@ func (f *fakeTaskStore) SaveSubtask(parentID, taskID string) error {
 }
 func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) { return nil, nil }
 func (f *fakeTaskStore) SaveComment(string, model.Comment) error         { return nil }
-func (f *fakeTaskStore) GetCommentIDs(string) ([]string, error)          { return nil, nil }
+func (f *fakeTaskStore) GetComment(string, string) (*model.Comment, error) {
+	return nil, nil
+}
+func (f *fakeTaskStore) GetCommentIDs(string) ([]string, error) { return nil, nil }
 func (f *fakeTaskStore) SaveReminder(string, model.ReminderMetadata) error {
 	return nil
 }
