@@ -88,7 +88,9 @@ export default function reducer(state: TaskState = initialState, action: PluginA
     case ACTION_TYPES.UPSERT_TASK:
         // WebSocket (#32) and successful mutations land here. If the updated task
         // is the one in detail, refresh the detail view too.
-        if (!action.task) {
+        // Guard against a malformed payload (e.g. a WebSocket event missing the
+        // id): a task without an id can't be cached under a key, so drop it.
+        if (!action.task || typeof action.task.id !== 'string' || !action.task.id.trim()) {
             return state;
         }
         return {

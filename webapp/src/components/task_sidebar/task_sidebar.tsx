@@ -6,8 +6,11 @@
 // component passed to registerRightHandSidebarComponent.
 //
 // This is a minimal, render-safe shell: it dispatches OPEN_RHS on mount and
-// renders a translated title. The full Quick List (tabs, filters, flat task
-// list, "+ New Task" button) lands in #28 by extending this component.
+// renders a title. The full Quick List (tabs, filters, flat task list, "+ New
+// Task" button) lands in #28 by extending this component, and all user-visible
+// strings become i18n-backed in #33 (which adds the gettext helper this shell
+// will adopt). The title passed to registerRightHandSidebarComponent already
+// localizes the RHS tab; the body placeholder here is development-only text.
 
 import React from 'react';
 import {useDispatch} from 'react-redux';
@@ -26,10 +29,12 @@ export default function TaskSidebar(): JSX.Element {
         };
     }, [dispatch]);
 
+    // TODO(#28, #33): replace this development-only placeholder with the Quick
+    // List and translate every string via the i18n helper wired in #33.
     return (
         <div className='task-rhs'>
             <div className='task-rhs__title'>{'Tasks'}</div>
-            <div className='task-rhs__body'>{'Quick List (issue #28)'}</div>
+            <div className='task-rhs__body'>{'Quick List'}</div>
         </div>
     );
 }

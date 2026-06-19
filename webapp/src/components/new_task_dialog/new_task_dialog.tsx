@@ -14,12 +14,14 @@ import React from 'react';
 export interface NewTaskDialogProps {
 
     // visible gates rendering so the host can mount the component once and
-    // toggle visibility. Issue #30 will drive this from Redux.
+    // toggle visibility. Defaults to hidden so the registered root component
+    // doesn't paint the placeholder until a consumer opens it. Issue #30 drives
+    // this prop from Redux.
     visible?: boolean;
 }
 
 export default function NewTaskDialog({visible}: NewTaskDialogProps): JSX.Element | null {
-    if (visible === false) {
+    if (!visible) {
         return null;
     }
     return (
