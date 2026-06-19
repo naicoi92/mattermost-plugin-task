@@ -475,7 +475,7 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createSubtaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -510,9 +510,10 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 		dmPostID = p.postCardDM(created.AssigneeID, created)
 	}
 	if channelPostID != "" || dmPostID != "" {
-		if updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID); err != nil {
+		updated, uerr := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID)
+		if uerr != nil {
 			p.API.LogError("Failed to persist subtask card post IDs",
-				"task_id", created.ID, "error", err)
+				"task_id", created.ID, "error", uerr)
 		} else if updated != nil {
 			created = updated
 		}

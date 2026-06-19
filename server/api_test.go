@@ -58,6 +58,7 @@ func (f *fakeTaskStore) SaveSubtask(parentID, taskID string) error {
 	f.subs[parentID][taskID] = struct{}{}
 	return nil
 }
+
 func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) {
 	var ids []string
 	for id := range f.subs[parentID] {
