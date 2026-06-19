@@ -19,20 +19,27 @@ import reducer, {ACTION_TYPES} from 'reducer';
 import {combineReducers, createStore} from 'redux';
 import type {Store} from 'redux';
 
-import type {GlobalState} from '@mattermost/types/store';
-
 // The plugin reducer is mounted under state['plugins-<pluginId>'] by the host;
 // replicate that mount here so the real reducer runs against dispatched actions.
 const PLUGIN_KEY = 'plugins-com.mattermost.plugin-task';
 
-function buildStore(): Store<GlobalState> {
+// IntegrationTestState is the minimal state shape these tests need: only the
+// plugin slice. Using it (instead of casting to the host's full GlobalState)
+// keeps the store type honest — Plugin.initialize accepts a Store<GlobalState>,
+// and the test exercises only the plugin slice, so the cast at the call site is
+// the single, explicit boundary rather than a pervasive unsafe cast.
+type IntegrationTestState = {
+    [PLUGIN_KEY]: ReturnType<typeof reducer>;
+};
+
+function buildStore(): Store<IntegrationTestState> {
     const combined = combineReducers({
 
         // The host mounts plugin reducers under a 'plugins' namespace; we mount
         // ours directly under the plugin key the reducer expects.
         [PLUGIN_KEY]: reducer,
     });
-    return createStore(combined) as Store<GlobalState>;
+    return createStore(combined);
 }
 
 // A recording registry capturing only the methods the integration path touches.
@@ -58,7 +65,7 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         const store = buildStore();
         const registry = recordingRegistry();
         const plugin = new Plugin();
-        await plugin.initialize(registry as never, store);
+        await plugin.initialize(registry as never, store as never);
 
         // The handler the plugin registered for "task_updated".
         const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
@@ -68,15 +75,15 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         // Simulate a server task_updated event with a fresh task.
         handler({data: {task_id: 't1', seq: 10, task: {id: 't1', summary: 'buy milk', status: 'todo'}}});
 
-        const slice = (store.getState() as never as {[k: string]: {tasks: Record<string, unknown>}})[PLUGIN_KEY];
+        const slice = store.getState()[PLUGIN_KEY];
         expect(slice.tasks.t1).toBeDefined();
-        expect((slice.tasks.t1 as {summary: string}).summary).toBe('buy milk');
+        expect(slice.tasks.t1.summary).toBe('buy milk');
     });
 
     test('a stale task_updated (older seq) does NOT overwrite the cache', async () => {
         const store = buildStore();
         const registry = recordingRegistry();
-        await new Plugin().initialize(registry as never, store);
+        await new Plugin().initialize(registry as never, store as never);
         const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
             msg: {data: Record<string, unknown>},
         ) => void;
@@ -87,14 +94,14 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         // Older event arrives late — must be dropped.
         handler({data: {task_id: 't1', seq: 20, task: {id: 't1', summary: 'stale'}}});
 
-        const slice = (store.getState() as never as {[k: string]: {tasks: Record<string, unknown>}})[PLUGIN_KEY];
-        expect((slice.tasks.t1 as {summary: string}).summary).toBe('fresh');
+        const slice = store.getState()[PLUGIN_KEY];
+        expect(slice.tasks.t1.summary).toBe('fresh');
     });
 
     test('a delete event removes the task from the cache', async () => {
         const store = buildStore();
         const registry = recordingRegistry();
-        await new Plugin().initialize(registry as never, store);
+        await new Plugin().initialize(registry as never, store as never);
         const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
             msg: {data: Record<string, unknown>},
         ) => void;
@@ -103,14 +110,14 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         handler({data: {task_id: 't1', seq: 1, task: {id: 't1', summary: 'x'}}});
         handler({data: {task_id: 't1', seq: 2}}); // delete (task_id, no task body)
 
-        const slice = (store.getState() as never as {[k: string]: {tasks: Record<string, unknown>}})[PLUGIN_KEY];
+        const slice = store.getState()[PLUGIN_KEY];
         expect(slice.tasks.t1).toBeUndefined();
     });
 
     test('selecting a task then upserting it refreshes the selection', async () => {
         const store = buildStore();
         const registry = recordingRegistry();
-        await new Plugin().initialize(registry as never, store);
+        await new Plugin().initialize(registry as never, store as never);
         const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
             msg: {data: Record<string, unknown>},
         ) => void;
@@ -121,9 +128,7 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         // A WS upsert for the same task updates the selected detail.
         handler({data: {task_id: 't1', seq: 5, task: {id: 't1', summary: 'new', status: 'done'}}});
 
-        const slice = (store.getState() as never as {
-            [k: string]: {selectedTaskID: string; selectedTask: {summary: string} | null};
-        })[PLUGIN_KEY];
+        const slice = store.getState()[PLUGIN_KEY];
         expect(slice.selectedTaskID).toBe('t1');
         expect(slice.selectedTask?.summary).toBe('new');
     });
