@@ -1,6 +1,7 @@
 package kvstore
 
 import (
+	"math/rand/v2"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/pluginapi"
@@ -13,10 +14,16 @@ const (
 	// MaxRetries is the maximum number of compare-and-set attempts before
 	// SetAtomicWithRetries gives up and returns an error.
 	MaxRetries = 5
-	// RetryBackoff is the delay slept between conflicting CAS attempts. It is
-	// intentionally small (cooperative scheduling) to avoid hammering the DB
+	// RetryBackoff is the base delay slept between conflicting CAS attempts. It
+	// is intentionally small (cooperative scheduling) to avoid hammering the DB
 	// while letting competing writers make progress.
 	RetryBackoff = 10 * time.Millisecond
+	// MaxJitter is the upper bound of the random component added to
+	// RetryBackoff. Adding jitter staggers goroutines that collided on the same
+	// attempt so they don't all wake up together and collide again (thundering
+	// herd on hot keys). The top-level rand functions are concurrency-safe and
+	// auto-seeded as of Go 1.20, so no manual seeding is needed.
+	MaxJitter = 10 * time.Millisecond
 )
 
 // conflictLogger is the shape of a logger call used to report each CAS
@@ -89,7 +96,12 @@ func SetAtomicWithRetries(backend atomicBackend, log conflictLogger, key string,
 			)
 		}
 		if attempt < MaxRetries {
-			time.Sleep(RetryBackoff)
+			// Jitter the backoff so contending writers don't all retry in
+			// lockstep and re-collide. Sleep is in [RetryBackoff,
+			// RetryBackoff+MaxJitter). Non-crypto randomness is intentional
+			// here, hence rand/v2 (nolint: gosec G404).
+			//nolint:gosec // G404: jitter does not require cryptographic randomness
+			time.Sleep(RetryBackoff + time.Duration(rand.Int64N(int64(MaxJitter)+1)))
 		}
 	}
 
