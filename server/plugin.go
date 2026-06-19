@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/command"
+	"github.com/naicoi92/mattermost-plugin-task/server/dialog"
 	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
@@ -56,7 +58,7 @@ func (p *Plugin) OnActivate() error {
 
 	p.taskService = task.NewService(p.kvstore)
 
-	p.commandClient = command.NewCommandHandler(p.client, p.taskService)
+	p.commandClient = command.NewCommandHandler(p.client, p.taskService, dialogOpener{p})
 
 	p.router = p.initRouter()
 
@@ -95,3 +97,30 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 }
 
 // See https://developers.mattermost.com/extend/plugins/server/reference/
+
+// dialogOpener adapts plugin.API.OpenInteractiveDialog to the command.DialogOpener
+// interface. The plugin's site URL is needed to build the dialog submit callback
+// URL; we resolve it lazily so activation order doesn't matter.
+type dialogOpener struct {
+	p *Plugin
+}
+
+func (d dialogOpener) OpenNewTaskDialog(triggerID, prefillSummary, channelID string) error {
+	dialogDef := dialog.NewTaskDialog(prefillSummary, channelID)
+	siteURL := ""
+	if cfg := d.p.API.GetConfig(); cfg != nil && cfg.ServiceSettings.SiteURL != nil {
+		siteURL = *cfg.ServiceSettings.SiteURL
+	}
+	request := model.OpenDialogRequest{
+		TriggerId: triggerID,
+		URL:       fmt.Sprintf("%s/plugins/%s/api/v1/dialogs/task/create", siteURL, manifestID),
+		Dialog:    dialogDef,
+	}
+	if appErr := d.p.API.OpenInteractiveDialog(request); appErr != nil {
+		return appErr
+	}
+	return nil
+}
+
+// manifestID is the plugin id from plugin.json, used to build callback URLs.
+const manifestID = "com.mattermost.plugin-task"

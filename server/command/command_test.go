@@ -72,7 +72,7 @@ func TestHelloCommand(t *testing.T) {
 	}).Return(nil)
 	// /task registration also happens; stub it permissively.
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	cmdHandler := NewCommandHandler(env.client, &fakeStatusService{})
+	cmdHandler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
 
 	args := &model.CommandArgs{
 		Command: "/hello world",
@@ -86,7 +86,7 @@ func TestTaskStatus_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "Review PR"}}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task status T1 done"})
 	require.NoError(t, err)
@@ -99,7 +99,7 @@ func TestTaskDone_Shortcut(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "x"}}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task done T1"})
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestTaskCancel_Shortcut(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "x"}}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task cancel T1"})
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestTaskCancel_Shortcut(t *testing.T) {
 func TestTaskStatus_InvalidStatus(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	handler := NewCommandHandler(env.client, &fakeStatusService{})
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task status T1 bogus"})
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestTaskStatus_NotFound(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{err: task.ErrNotFound}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task status T1 done"})
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestTaskStatus_NotFound(t *testing.T) {
 func TestTaskStatus_UsageErrors(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	handler := NewCommandHandler(env.client, &fakeStatusService{})
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task status"})
 	require.NoError(t, err)
@@ -161,7 +161,7 @@ func TestTaskStatus_UsageErrors(t *testing.T) {
 func TestTaskHelp(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	handler := NewCommandHandler(env.client, &fakeStatusService{})
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task help"})
 	require.NoError(t, err)
@@ -175,7 +175,7 @@ func TestTaskStatus_InternalError(t *testing.T) {
 	// LogError is variadic (message + key/value...); match anything.
 	env.api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	svc := &fakeStatusService{err: errors.New("boom")}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task status T1 done"})
 	require.NoError(t, err)
@@ -187,7 +187,7 @@ func TestTaskEdit_Command(t *testing.T) {
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	env.api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	svc := &fakeStatusService{patchResult: &taskmodel.Task{Summary: "new"}}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 summary=New title due=1700000000000"})
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestTaskEdit_ClearDue(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{patchResult: &taskmodel.Task{Summary: "x"}}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 due=0"})
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func TestTaskEdit_DescriptionAlias(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{patchResult: &taskmodel.Task{Summary: "x"}}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 description=hello"})
 	require.NoError(t, err)
@@ -230,7 +230,7 @@ func TestTaskEdit_DescriptionAlias(t *testing.T) {
 func TestTaskEdit_BadDue(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	handler := NewCommandHandler(env.client, &fakeStatusService{})
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 due=notanumber"})
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestTaskEdit_BadDue(t *testing.T) {
 func TestTaskEdit_NoFields(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	handler := NewCommandHandler(env.client, &fakeStatusService{})
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1"})
 	require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestTaskEdit_NotFound(t *testing.T) {
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	env.api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	svc := &fakeStatusService{patchErr: task.ErrNotFound}
-	handler := NewCommandHandler(env.client, svc)
+	handler := NewCommandHandler(env.client, svc, nil)
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 summary=x"})
 	require.NoError(t, err)
@@ -263,4 +263,68 @@ func TestParseEditFields_UnknownKey(t *testing.T) {
 	in, bad := parseEditFields([]string{"foo=bar"})
 	assert.Equal(t, "foo=bar", bad)
 	assert.Empty(t, in.UpdateFields)
+}
+
+// fakeDialogOpener records the last dialog-open request.
+type fakeDialogOpener struct {
+	triggerID string
+	summary   string
+	channelID string
+	err       error
+}
+
+func (f *fakeDialogOpener) OpenNewTaskDialog(triggerID, prefillSummary, channelID string) error {
+	f.triggerID = triggerID
+	f.summary = prefillSummary
+	f.channelID = channelID
+	return f.err
+}
+
+func TestTaskAdd_OpensDialogWithSummary(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	dialogs := &fakeDialogOpener{}
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, dialogs)
+
+	resp, err := handler.Handle(&model.CommandArgs{
+		Command: `/task add "Review PR"`, UserId: "u1", ChannelId: "ch1", TriggerId: "trig1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "", resp.Text, "no ephemeral when dialog opens")
+	assert.Equal(t, "trig1", dialogs.triggerID)
+	assert.Equal(t, "Review PR", dialogs.summary)
+	assert.Equal(t, "ch1", dialogs.channelID)
+}
+
+func TestTaskAdd_NoQuotes(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	dialogs := &fakeDialogOpener{}
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, dialogs)
+
+	_, err := handler.Handle(&model.CommandArgs{Command: "/task add fix the bug", UserId: "u1", TriggerId: "trig"})
+	require.NoError(t, err)
+	assert.Equal(t, "fix the bug", dialogs.summary)
+}
+
+func TestTaskAdd_NoDialogOpener(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, nil)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task add x", UserId: "u1", TriggerId: "t"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "unavailable")
+}
+
+func TestTaskAdd_NoTriggerId(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	dialogs := &fakeDialogOpener{}
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, dialogs)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task add x", UserId: "u1"}) // no TriggerId
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "trigger id")
+	assert.Empty(t, dialogs.triggerID)
 }

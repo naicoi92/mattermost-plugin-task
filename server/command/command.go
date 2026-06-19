@@ -24,11 +24,23 @@ type TaskService interface {
 	Patch(id string, in task.PatchInput) (*taskmodel.Task, error)
 }
 
+// DialogOpener opens a Mattermost Interactive Dialog for the user who invoked
+// the command (identified by triggerID). Supplied by the plugin layer; nil
+// disables dialog-opening subcommands (/task add falls back to an ephemeral
+// message asking to use the REST API).
+type DialogOpener interface {
+	// OpenNewTaskDialog opens the New Task dialog pre-filled with summary, scoped
+	// to channelID (empty for personal). Returns an error when the dialog can't
+	// be opened (e.g. expired trigger id).
+	OpenNewTaskDialog(triggerID, prefillSummary, channelID string) error
+}
+
 // Handler dispatches slash commands. Today it owns the /task command; the
 // legacy /hello command from the starter template is retained for reference.
 type Handler struct {
 	client      *pluginapi.Client
 	taskService TaskService
+	dialogs     DialogOpener
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -40,8 +52,9 @@ type Command interface {
 const helloCommandTrigger = "hello"
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
-// wired to the given task service.
-func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Command {
+// wired to the given task service. dialogs may be nil to disable dialog-opening
+// subcommands (/task add).
+func NewCommandHandler(client *pluginapi.Client, taskService TaskService, dialogs DialogOpener) Command {
 	if err := client.SlashCommand.Register(&model.Command{
 		Trigger:          helloCommandTrigger,
 		AutoComplete:     true,
@@ -53,6 +66,11 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Comman
 	}
 
 	taskCmd := model.NewAutocompleteData(taskCommandTrigger, "[subcommand]", "Manage tasks")
+
+	// /task add "<summary>"
+	addCmd := model.NewAutocompleteData("add", "\"<summary>\"", "Create a new task (opens a dialog)")
+	addCmd.AddTextArgument("task summary (optional, pre-fills the dialog)", "[summary]", "")
+	taskCmd.AddCommand(addCmd)
 
 	// /task status <id> <status>
 	statusCmd := model.NewAutocompleteData("status", "<id> <status>", "Change a task's status")
@@ -98,6 +116,7 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Comman
 	return &Handler{
 		client:      client,
 		taskService: taskService,
+		dialogs:     dialogs,
 	}
 }
 
@@ -126,6 +145,8 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return ephemeral(taskHelp()), nil
 	}
 	switch subFields[0] {
+	case "add":
+		return c.handleAdd(args, subFields[1:])
 	case "status":
 		return c.handleStatus(args, subFields[1:])
 	case "done":
@@ -139,6 +160,34 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 	default:
 		return ephemeral(fmt.Sprintf("Unknown /task subcommand: %s\n\n%s", subFields[0], taskHelp())), nil
 	}
+}
+
+// handleAdd implements /task add ["<summary>"]. It opens the New Task dialog
+// pre-filled with the summary (if any). The dialog collects assignee/due/
+// description/scope; its submit creates the task via the dialog endpoint.
+//
+// Per PLAN.md section 5.2, /task add does NOT parse inline @assignee/due/desc —
+// everything else is entered in the dialog.
+func (c *Handler) handleAdd(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	summary := strings.TrimSpace(strings.Join(rest, " "))
+	// Strip surrounding quotes if the user quoted the summary.
+	summary = strings.Trim(summary, "\"'")
+
+	if c.dialogs == nil {
+		return ephemeral("Task creation dialog is unavailable here. Use POST /api/v1/tasks to create a task."), nil
+	}
+	if args.TriggerId == "" {
+		return ephemeral("I couldn't open the dialog (no trigger id). Please try again in a channel."), nil
+	}
+
+	// Scope defaults: DM with the bot => personal; otherwise the current channel.
+	channelID := args.ChannelId
+	if err := c.dialogs.OpenNewTaskDialog(args.TriggerId, summary, channelID); err != nil {
+		c.client.Log.Error("Failed to open New Task dialog", "error", err)
+		return ephemeral("I couldn't open the New Task dialog. Please try again."), nil
+	}
+	// The dialog is the user's feedback; no extra ephemeral needed.
+	return &model.CommandResponse{}, nil
 }
 
 // handleStatus implements /task status <id> <status>.
@@ -309,6 +358,7 @@ func ephemeral(text string) *model.CommandResponse {
 // taskHelp returns the help text for the /task command.
 func taskHelp() string {
 	return "`/task` commands:\n" +
+		"• `/task add \"<summary>\"` — create a new task (opens a dialog)\n" +
 		"• `/task status <id> <todo|in_progress|done|cancelled>` — change status\n" +
 		"• `/task done <id>` — mark a task done\n" +
 		"• `/task cancel <id>` — cancel a task\n" +

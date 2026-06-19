@@ -7,9 +7,11 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	mmmodel "github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/pkg/errors"
 
+	"github.com/naicoi92/mattermost-plugin-task/server/dialog"
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
@@ -24,6 +26,10 @@ func (p *Plugin) initRouter() *mux.Router {
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
 
 	apiRouter.HandleFunc("/hello", p.HelloWorld).Methods(http.MethodGet)
+
+	// Interactive Dialog submit callbacks (issue #8).
+	dialogs := apiRouter.PathPrefix("/dialogs").Subrouter()
+	dialogs.HandleFunc("/task/create", p.submitTaskCreateDialog).Methods(http.MethodPost)
 
 	// Task CRUD (issue #7).
 	tasks := apiRouter.PathPrefix("/tasks").Subrouter()
@@ -263,4 +269,65 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+}
+
+// submitTaskCreateDialog handles the New Task Interactive Dialog submit callback
+// (POST /api/v1/dialogs/task/create). Mattermost sends a SubmitDialogRequest
+// with the user's filled-in fields. We parse, create the task, and respond with
+// a SubmitDialogResponse (validation errors are surfaced inline in the dialog).
+func (p *Plugin) submitTaskCreateDialog(w http.ResponseWriter, r *http.Request) {
+	var req mmmodel.SubmitDialogRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid dialog submission")
+		return
+	}
+
+	sub, err := dialog.ParseCreateSubmission(req.Submission)
+	if err != nil {
+		// Surface validation errors back into the dialog.
+		writeDialogError(w, err.Error())
+		return
+	}
+
+	// Scope: personal => no channel; otherwise the channel from the dialog state
+	// (the originating channel id).
+	channelID := req.State
+	if sub.Personal {
+		channelID = ""
+	}
+
+	in := task.CreateInput{
+		Summary:     sub.Summary,
+		Description: sub.Description,
+		CreatorID:   req.UserId,
+		ChannelID:   channelID,
+		Due:         sub.Due,
+	}
+	if sub.AssigneeID != nil {
+		in.AssigneeID = *sub.AssigneeID
+	}
+
+	created, err := p.taskService.Create(in)
+	if err != nil {
+		p.API.LogError("Dialog task create failed", "user_id", req.UserId, "error", err)
+		writeDialogError(w, "Failed to create the task. Please try again.")
+		return
+	}
+	p.API.LogDebug("Task created via dialog", "task_id", created.ID, "creator_id", req.UserId)
+
+	// Success: an empty Error closes the dialog. The created task id is not
+	// echoed here (SubmitDialogResponse has no data field); the client can list
+	// tasks to see it.
+	resp := mmmodel.SubmitDialogResponse{}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// writeDialogError responds with a SubmitDialogResponse carrying an inline error
+// so the dialog re-opens showing the message to the user.
+func writeDialogError(w http.ResponseWriter, message string) {
+	resp := mmmodel.SubmitDialogResponse{Error: message}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }

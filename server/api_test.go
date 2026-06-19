@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
@@ -94,9 +96,14 @@ func (f *fakeTaskStore) SetAtomicWithRetries(string, func([]byte) (any, error)) 
 // fresh fake store.
 func newTestPlugin() (*Plugin, *fakeTaskStore) {
 	store := newFakeTaskStore()
+	api := &plugintest.API{}
+	// Permissive Log stubs so handlers that log don't panic in tests.
+	api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	p := &Plugin{
 		taskService: task.NewService(store),
 	}
+	p.SetAPI(api)
 	p.router = p.initRouter()
 	return p, store
 }
@@ -274,4 +281,41 @@ func TestPatchTaskStatus_BadJSON(t *testing.T) {
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch,
 		"/api/v1/tasks/"+created.ID+"/status", `{"status":"done"`, "u1")) // malformed JSON
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSubmitTaskCreateDialog_Success(t *testing.T) {
+	p, _ := newTestPlugin()
+
+	body := `{"user_id":"u1","channel_id":"ch1","state":"ch1","submission":{"summary":"Review PR","scope":"channel"}}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/dialogs/task/create", body, "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Task was created.
+	tasks, _ := p.taskService.List(task.ListQuery{Scope: task.ScopeChannel, ChannelID: "ch1"})
+	require.NotEmpty(t, tasks)
+	assert.Equal(t, "Review PR", tasks[0].Summary)
+	assert.Equal(t, "ch1", tasks[0].ChannelID)
+}
+
+func TestSubmitTaskCreateDialog_PersonalScope(t *testing.T) {
+	p, _ := newTestPlugin()
+
+	body := `{"user_id":"u1","channel_id":"ch1","state":"ch1","submission":{"summary":"Secret","scope":"personal"}}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/dialogs/task/create", body, "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	tasks, _ := p.taskService.List(task.ListQuery{Scope: task.ScopeChannel, ChannelID: "ch1"})
+	assert.Empty(t, tasks, "personal task not in channel index")
+}
+
+func TestSubmitTaskCreateDialog_ValidationReturnsDialogError(t *testing.T) {
+	p, _ := newTestPlugin()
+	// Empty summary -> dialog error (200 with error body).
+	body := `{"user_id":"u1","channel_id":"ch1","submission":{"summary":""}}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/dialogs/task/create", body, "u1"))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "error")
 }
