@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/command"
+	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
@@ -38,6 +39,13 @@ type Plugin struct {
 	// botUserID is the plugin bot's user id, used as the author of DM/card
 	// posts. Ensured in OnActivate via EnsureBot.
 	botUserID string
+
+	// i18n is the server-side translation bundle used by notifications and
+	// ephemeral responses.
+	i18n *I18n
+
+	// notifier sends task-event DMs from the bot in each recipient's locale.
+	notifier *notification.Notifier
 
 	// router is the HTTP router for handling API requests.
 	router *mux.Router
@@ -66,11 +74,18 @@ func (p *Plugin) OnActivate() error {
 	}
 	p.botUserID = botID
 
+	i18nBundle, err := NewI18n()
+	if err != nil {
+		return errors.Wrap(err, "failed to load i18n bundle")
+	}
+	p.i18n = i18nBundle
+	p.notifier = notification.New(notifierAPI{api: p.API}, i18nBundle, p.botUserID)
+
 	p.kvstore = kvstore.NewKVStore(p.client)
 
 	p.taskService = task.NewService(p.kvstore)
 
-	p.commandClient = command.NewCommandHandler(p.client, p.taskService)
+	p.commandClient = command.NewCommandHandler(p.client, p.taskService, commandNotifier{p.notifier})
 
 	p.router = p.initRouter()
 
@@ -143,3 +158,64 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 }
 
 // See https://developers.mattermost.com/extend/plugins/server/reference/
+
+// notifierAPI adapts plugin.API to notification.API. plugin.API returns
+// *model.AppError (which implements error); the notifier works with plain
+// errors, so this thin wrapper keeps the notification package decoupled from
+// the plugin SDK while remaining fully testable.
+type notifierAPI struct {
+	api plugin.API
+}
+
+func (n notifierAPI) GetUser(userID string) (*model.User, error) {
+	user, appErr := n.api.GetUser(userID)
+	if appErr != nil {
+		return nil, appErr
+	}
+	return user, nil
+}
+
+func (n notifierAPI) GetDirectChannel(userID1, userID2 string) (*model.Channel, error) {
+	channel, appErr := n.api.GetDirectChannel(userID1, userID2)
+	if appErr != nil {
+		return nil, appErr
+	}
+	return channel, nil
+}
+
+func (n notifierAPI) CreatePost(post *model.Post) (*model.Post, error) {
+	created, appErr := n.api.CreatePost(post)
+	if appErr != nil {
+		return nil, appErr
+	}
+	return created, nil
+}
+
+func (n notifierAPI) LogError(message string, keyValuePairs ...any) {
+	n.api.LogError(message, keyValuePairs...)
+}
+
+// commandNotifier adapts the notification.Notifier to the command.TaskNotifier
+// interface (TaskRef -> notification.TaskSummary). Kept nil-safe: when the
+// underlying notifier is nil (e.g. activation race) all calls are no-ops.
+type commandNotifier struct {
+	n *notification.Notifier
+}
+
+func (c commandNotifier) NotifyCompleted(ref command.TaskRef, actorID, creatorID, assigneeID string) {
+	if c.n == nil {
+		return
+	}
+	c.n.NotifyCompleted(toSummary(ref), actorID, creatorID, assigneeID)
+}
+
+func (c commandNotifier) NotifyCancelled(ref command.TaskRef, actorID, creatorID, assigneeID string) {
+	if c.n == nil {
+		return
+	}
+	c.n.NotifyCancelled(toSummary(ref), actorID, creatorID, assigneeID)
+}
+
+func toSummary(ref command.TaskRef) notification.TaskSummary {
+	return notification.TaskSummary{ID: ref.ID, Summary: ref.Summary}
+}
