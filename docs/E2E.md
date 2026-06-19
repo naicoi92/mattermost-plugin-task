@@ -98,9 +98,13 @@ so Phase 3 is primarily webapp React work.
 
 `go test ./server/...` includes:
 
-- **Subtask creation & inheritance** — subtask inherits parent `ChannelID` and
-  default assignee; explicit assignee overrides; missing parent rejected
-  (`task` + `command` + REST unit tests; `TestIntegration_Phase2_SubtaskInheritsAndProgress`).
+- **Subtask creation & inheritance** — the new integration test
+  (`TestIntegration_Phase2_SubtaskInheritsAndProgress`) demonstrates inheritance
+  and progress. The related cases — explicit assignee override
+  (`task.TestCreate_SubtaskExplicitAssigneeOverridesInherited`) and missing-parent
+  rejection (`task.TestCreate_SubtaskMissingParentRejected`,
+  `REST TestCreateSubtask_ParentNotFound`) — are covered by the per-issue unit
+  tests cited here.
 - **Parent-done blocking** — parent `done` rejected with a clear message listing
   open subtasks; allowed once all subtasks are terminal
   (`TestIntegration_Phase2_ParentDoneBlockedThenAllowed`).
@@ -115,7 +119,8 @@ so Phase 3 is primarily webapp React work.
 
 ### Manual E2E (Phase 2)
 
-Prerequisites: two users (creator + assignee), a channel, the plugin enabled.
+Prerequisites: three users (creator + assignee + an unauthorized viewer), a
+channel, the plugin enabled.
 
 - [ ] **Create subtask from a parent.** `/task subtask <parentId> <summary>`
       creates a subtask that inherits the parent's channel and (default)
@@ -128,8 +133,9 @@ Prerequisites: two users (creator + assignee), a channel, the plugin enabled.
 - [ ] **Mark subtasks done, then mark parent done.** Once every subtask is
       `done`/`cancelled`, the parent can be marked `done`.
 - [ ] **Cancel parent cascades.** `/task cancel <parentId>` moves open subtasks
-      to `cancelled`; already-terminal subtasks stay as-is. The creator +
-      assignee each get **one** cancellation DM (not one per subtask).
+      to `cancelled`; already-terminal subtasks stay as-is. Each **non-actor**
+      participant gets **one** cancellation DM (not one per subtask) — the user
+      who cancelled is not notified about their own action.
 - [ ] **Add a comment; participants notified.** `/task comment <id> <text>`
       (or `POST /tasks/<id>/comments`) adds a comment; the creator and assignee
       (minus the commenter) are DM'd. The card shows `Comments: N`.

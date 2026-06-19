@@ -158,7 +158,9 @@ func TestIntegration_Phase2_SubtaskInheritsAndProgress(t *testing.T) {
 	assert.Equal(t, 2, total)
 
 	// The card renders the progress.
-	parent2, _ := svc.Get(parent.ID)
+	parent2, gerr := svc.Get(parent.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, parent2)
 	card := buildTaskCard(parent2, 0, done, total, 0)
 	var subtaskField string
 	for _, f := range card.Fields {
@@ -270,11 +272,15 @@ func TestIntegration_Phase2_CommentNotifiesParticipants(t *testing.T) {
 	require.Len(t, api.dms, 1, "only the assignee DM'd (commenter=creator excluded)")
 	assert.Equal(t, "dm:u-doer:bot", api.dms[0].ChannelId)
 
-	// The comment is visible in the list, in creation order.
+	// The comments are visible in the list, in creation order. A second comment
+	// (by the assignee this time) makes the ordering assertion non-vacuous.
+	_, _, err = svc.AddComment(task1.ID, "u-doer", "ship it")
+	require.NoError(t, err)
 	comments, err := svc.ListComments(task1.ID)
 	require.NoError(t, err)
-	require.Len(t, comments, 1)
+	require.Len(t, comments, 2)
 	assert.Equal(t, "looks good", comments[0].Content)
+	assert.Equal(t, "ship it", comments[1].Content)
 }
 
 // remStore is a KVStore fake that actually persists reminders (unlike the
