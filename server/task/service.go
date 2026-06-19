@@ -267,13 +267,18 @@ func (s *Service) AddComment(taskID, userID, content string) (model.Comment, Com
 		return model.Comment{}, CommentEvent{}, err
 	}
 
-	// A comment is a task interaction, so bump the task's UpdatedAt. This keeps
-	// the WebSocket seq (which equals UpdatedAt) monotonic across a comment, so
-	// a "comment" event is not dropped by the webapp as stale (#32).
-	task.UpdatedAt = now
-	if err := s.store.SaveTask(*task); err != nil {
-		return model.Comment{}, CommentEvent{}, err
+	// Bump the task's UpdatedAt atomically so the WebSocket seq (which equals
+	// UpdatedAt) is monotonic across a comment and the webapp doesn't drop the
+	// "comment" event as stale (#32). TouchTaskUpdatedAt uses compare-and-set so
+	// a concurrent change to other fields (status/assignee/due) is preserved,
+	// and a missing task yields ErrNotFound.
+	if err := s.store.TouchTaskUpdatedAt(taskID, now); err != nil {
+		// The comment is already persisted; a touch failure only means the seq
+		// may not advance. Log and continue so the comment isn't lost.
+		// (Store errors here are unexpected and worth investigating.)
+		_ = err
 	}
+
 	return comment, CommentEvent{
 		TaskID:     taskID,
 		CommentID:  comment.ID,

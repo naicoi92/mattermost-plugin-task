@@ -10,6 +10,7 @@ import (
 
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
+	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -301,8 +302,16 @@ func newRemStore() *remStore {
 
 func (s *remStore) GetTask(id string) (*taskmodel.Task, error) { return s.tasks[id], nil }
 func (s *remStore) SaveTask(t taskmodel.Task) error            { s.tasks[t.ID] = &t; return nil }
-func (s *remStore) DeleteTask(id string) error                 { delete(s.tasks, id); return nil }
-func (s *remStore) SaveIndex(key string) error                 { s.indexes[key] = struct{}{}; return nil }
+func (s *remStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
+	t, ok := s.tasks[id]
+	if !ok {
+		return kvstore.ErrTaskNotFound
+	}
+	t.UpdatedAt = updatedAt
+	return nil
+}
+func (s *remStore) DeleteTask(id string) error { delete(s.tasks, id); return nil }
+func (s *remStore) SaveIndex(key string) error { s.indexes[key] = struct{}{}; return nil }
 
 func (s *remStore) DeleteIndex(key string) error              { delete(s.indexes, key); return nil }
 func (s *remStore) SaveSubtask(parentID, taskID string) error { return nil }
