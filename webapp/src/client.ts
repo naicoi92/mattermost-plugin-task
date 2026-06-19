@@ -232,6 +232,37 @@ export function setTaskOrder(id: string, orderKey: string): Promise<Task> {
     });
 }
 
+// ---------------------------------------------------------------------------
+// User lookup (host REST API v4) — used to resolve @username → user id for the
+// New Task dialog assignee field (#96). Not under PLUGIN_API_BASE_URL: this is
+// the host'"'"'s /api/v4 endpoint, authenticated via the same session cookie.
+// ---------------------------------------------------------------------------
+
+// User is the minimal slice of model.User the picker needs.
+export interface User {
+    id: string;
+    username: string;
+}
+
+// getUserByUsername resolves a username (without the leading @) to a user via
+// the host REST API. Throws ClientError (404) when the username is unknown. It
+// hits the host /api/v4 path directly (not the plugin API prefix), so it
+// performs its own fetch rather than reuse doFetch.
+export async function getUserByUsername(username: string): Promise<User> {
+    const url = `/api/v4/users/username/${encodeURIComponent(username)}`;
+    const res = await fetch(url, {credentials: 'same-origin'});
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(res.status, message || res.statusText || 'request failed');
+    }
+    return JSON.parse(await res.text()) as User;
+}
+
 export default {
     createTask,
     getTask,
@@ -248,4 +279,5 @@ export default {
     createComment,
     listComments,
     setTaskOrder,
+    getUserByUsername,
 };

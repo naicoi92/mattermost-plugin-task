@@ -49,7 +49,7 @@ export interface NewTaskDialogProps {
 // emptyForm is the reset state used when the dialog opens and after a submit.
 const emptyForm = {
     summary: '',
-    assigneeID: '',
+    assigneeUsername: '',
     dueLocal: '',
     description: '',
     scope: 'personal' as NewTaskScope,
@@ -112,9 +112,29 @@ export default function NewTaskDialog({
             description: form.description,
             channel_id: form.scope === 'channel' ? channelID : undefined,
         };
-        if (form.assigneeID.trim()) {
-            input.assignee_id = form.assigneeID.trim();
+
+        // Resolve the assignee @username to a user id before submit (#96). The
+        // field accepts a username (with or without the leading @); an unknown
+        // username surfaces as an inline error rather than failing the create.
+        const rawAssignee = form.assigneeUsername.trim();
+        if (rawAssignee) {
+            const username = normalizeAssigneeUsername(rawAssignee);
+            setSubmitting(true);
+            try {
+                const user = await client.getUserByUsername(username);
+                input.assignee_id = user.id;
+            } catch (err) {
+                // A 404 means the username doesn't resolve to a user — show the
+                // localized, actionable message rather than the raw server text.
+                // (messageFor always returns a non-empty string, so the previous
+                // `messageFor(err) || t(...)` form never reached the fallback.)
+                // Other errors (network, 5xx) surface their raw message.
+                setError(assigneeLookupError(err, () => t('webapp.task.assignee.not_found')));
+                setSubmitting(false);
+                return;
+            }
         }
+
         const dueMs = parseDueLocal(form.dueLocal);
         if (dueMs !== null) {
             input.due = dueMs;
@@ -168,9 +188,12 @@ export default function NewTaskDialog({
                     <span className='task-new-dialog__label'>{t('webapp.task.assignee')}</span>
                     <input
                         className='task-new-dialog__input'
-                        value={form.assigneeID}
-                        onChange={(e) => update({assigneeID: e.target.value})}
-                        placeholder={'@user_id'}
+                        value={form.assigneeUsername}
+                        onChange={(e) => update({assigneeUsername: e.target.value})}
+                        placeholder={'@username'}
+                        autoCapitalize='none'
+                        autoCorrect='off'
+                        spellCheck={false}
                     />
                 </label>
 
@@ -250,6 +273,28 @@ export function parseDueLocal(value: string): number | null {
     }
     const ms = Date.parse(value);
     return Number.isNaN(ms) ? null : ms;
+}
+
+// normalizeAssigneeUsername strips a single leading "@" from the assignee field
+// value so the lookup hits the host /api/v4/users/username/<name> endpoint
+// correctly. Trims surrounding whitespace. Exported for unit testing (#96).
+export function normalizeAssigneeUsername(value: string): string {
+    return value.trim().replace(/^@/, '');
+}
+
+// assigneeLookupError maps a thrown assignee-lookup error to the user-facing
+// message. A 404 (unknown username) returns the localized not-found text via
+// the notFoundText callback so the message is actionable and translated; any
+// other error surfaces its raw message via messageFor. Extracted so the UX
+// contract is unit-testable without an i18n/Redux harness (#96).
+//
+// notFoundText is a callback (not a string) so it's only evaluated on the 404
+// path, keeping the non-404 path free of any i18n dependency.
+export function assigneeLookupError(err: unknown, notFoundText: () => string): string {
+    if (err instanceof ClientError && err.status === 404) {
+        return notFoundText();
+    }
+    return messageFor(err);
 }
 
 // messageFor extracts a user-facing message from a thrown error, preferring the

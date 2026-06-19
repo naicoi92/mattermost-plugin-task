@@ -67,6 +67,7 @@
   "webapp.task.summary": "Summary",
   "webapp.task.summary.placeholder": "Task summary",
   "webapp.task.assignee": "Assignee",
+  "webapp.task.assignee.not_found": "User not found. Enter a valid @username.",
   "webapp.task.due": "Due date",
   "webapp.task.description": "Description",
   "webapp.task.scope": "Scope",
