@@ -172,6 +172,20 @@ func TestTaskDone_Shortcut(t *testing.T) {
 	assert.Equal(t, taskmodel.StatusDone, svc.lastStatus)
 }
 
+// Issue #22: /task done on a parent with open subtasks shows the clear,
+// actionable blocking message (lists the open subtask).
+func TestTaskDone_BlockedByOpenSubtask(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{err: task.ErrOpenSubtasks{Open: []string{"still open"}}}
+	handler := NewCommandHandler(env.client, svc, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task done P1"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "still open")
+	assert.Contains(t, resp.Text, "cannot mark task done")
+}
+
 func TestTaskCancel_Shortcut(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()

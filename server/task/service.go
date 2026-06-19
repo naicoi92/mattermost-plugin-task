@@ -78,6 +78,13 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		if parent == nil {
 			return nil, ErrParentNotFound
 		}
+		// Loop guard (issue #22): a task must not be its own ancestor. The new
+		// task has a fresh ULID so it can't already be in the parent chain, but
+		// we walk the parent chain (bounded) to reject a malformed ParentTaskID
+		// that would create a cycle and to cap nesting depth.
+		if err := s.assertNoCycle(in.ParentTaskID, maxSubtaskDepth); err != nil {
+			return nil, err
+		}
 		channelID = parent.ChannelID
 		if assigneeID == "" {
 			assigneeID = parent.AssigneeID
@@ -389,6 +396,19 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 		return task, nil
 	}
 
+	// Parent-done guard (issue #22): a parent can only reach `done` once all of
+	// its direct subtasks are themselves terminal (done/cancelled). We check
+	// before applying so the task isn't left in a half-transitioned state. The
+	// open subtask summaries are attached to the error so callers can surface a
+	// clear, actionable message.
+	if newStatus == model.StatusDone {
+		if open, err := s.openSubtasks(task.ID); err != nil {
+			return nil, err
+		} else if len(open) > 0 {
+			return nil, ErrOpenSubtasks{Open: open}
+		}
+	}
+
 	taskutil.ApplyStatus(task, newStatus, nowFunc())
 	if err := s.store.SaveTask(*task); err != nil {
 		return nil, err
@@ -424,6 +444,81 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 
 	return task, nil
 }
+
+// maxSubtaskDepth caps how deep a subtask chain may nest. It bounds the
+// ancestor walk used by the cycle guard and prevents pathologically deep
+// hierarchies.
+const maxSubtaskDepth = 16
+
+// ErrOpenSubtasks is returned when a parent task is marked done while it still
+// has non-terminal (todo/in_progress) subtasks. Open holds the summaries of the
+// unfinished subtasks so the caller can list them in the error message.
+type ErrOpenSubtasks struct {
+	Open []string // summaries (or ids) of the blocking subtasks
+}
+
+// Error renders the blocking subtask summaries in a clear, actionable message.
+func (e ErrOpenSubtasks) Error() string {
+	if len(e.Open) == 0 {
+		return "task has open subtasks"
+	}
+	quoted := make([]string, len(e.Open))
+	for i, s := range e.Open {
+		quoted[i] = "“" + s + "”"
+	}
+	return "cannot mark task done while subtasks are open: " + strings.Join(quoted, ", ")
+}
+
+// openSubtasks returns the summaries of parentID's direct subtasks that are not
+// yet terminal (done/cancelled). Used by the parent-done guard. A subtask with
+// no summary falls back to its id so the count/list stays meaningful.
+func (s *Service) openSubtasks(parentID string) ([]string, error) {
+	subs, err := s.ListSubtasks(parentID)
+	if err != nil {
+		return nil, err
+	}
+	var open []string
+	for _, sub := range subs {
+		if sub.Status == model.StatusDone || sub.Status == model.StatusCancelled {
+			continue
+		}
+		label := sub.Summary
+		if label == "" {
+			label = sub.ID
+		}
+		open = append(open, label)
+	}
+	return open, nil
+}
+
+// assertNoCycle walks the parent chain from startID up to maxSubtaskDepth
+// ancestors. It returns ErrSubtaskCycle if the chain repeats a node (a cycle,
+// which would mean the proposed parent is already a descendant), or if the
+// chain exceeds the depth cap. A nil error means attaching a child under
+// startID cannot form a loop within the bound.
+func (s *Service) assertNoCycle(startID string, maxDepth int) error {
+	seen := map[string]struct{}{startID: {}}
+	cur := startID
+	for range maxDepth {
+		t, err := s.store.GetTask(cur)
+		if err != nil {
+			return err
+		}
+		if t == nil || t.ParentTaskID == "" {
+			return nil
+		}
+		if _, loop := seen[t.ParentTaskID]; loop {
+			return ErrSubtaskCycle
+		}
+		seen[t.ParentTaskID] = struct{}{}
+		cur = t.ParentTaskID
+	}
+	return ErrSubtaskCycle
+}
+
+// ErrSubtaskCycle is returned when creating a subtask would form a cycle or
+// exceed the nesting depth cap (maxSubtaskDepth).
+var ErrSubtaskCycle = errors.New("subtask would form a cycle or exceed the nesting limit")
 
 // cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
 // cancelled. Already-terminal subtasks are left untouched.
