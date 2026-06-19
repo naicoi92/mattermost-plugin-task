@@ -52,9 +52,10 @@ func (p *Plugin) runReminderJob() {
 	}
 }
 
-// fireReminderDM sends the reminder notification DM to the assignee. It prefers
-// the localized notifier (notification.NotifyReminder) and falls back to a
-// plain DM if the notifier is not initialized (e.g. during activation races).
+// fireReminderDM sends the reminder notification DM to the assignee and returns
+// an error when delivery failed (so the caller does NOT mark the reminder fired
+// and retries on the next tick). Prefers the localized notifier; falls back to a
+// plain DM when the notifier isn't initialized (e.g. activation races).
 func (p *Plugin) fireReminderDM(r task.DueReminder) error {
 	if p.notifier != nil {
 		t, _ := p.taskService.Get(r.TaskID)
@@ -62,10 +63,11 @@ func (p *Plugin) fireReminderDM(r task.DueReminder) error {
 		if t != nil {
 			summary.Summary = t.Summary
 		}
-		p.notifier.NotifyReminder(r.AssigneeID, summary)
-		return nil
+		// Propagate the delivery error so the caller can retry instead of
+		// marking the reminder fired (which would silently lose it).
+		return p.notifier.NotifyReminder(r.AssigneeID, summary)
 	}
-	// Fallback: plain DM (best-effort) when the notifier isn't ready.
+	// Fallback: plain DM when the notifier isn't ready.
 	channel, err := p.API.GetDirectChannel(r.AssigneeID, p.botUserID)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open DM with %s", r.AssigneeID)

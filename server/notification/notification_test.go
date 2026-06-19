@@ -195,14 +195,14 @@ func TestNotifyReminder_DMAssignee(t *testing.T) {
 	api := &fakeAPI{users: map[string]*model.User{"assignee": userWithLocale("assignee", "vi")}}
 	n := newTestNotifier(api)
 
-	n.NotifyReminder("assignee", TaskSummary{Summary: "Due soon"})
+	require.NoError(t, n.NotifyReminder("assignee", TaskSummary{Summary: "Due soon"}))
 	require.Len(t, api.posts, 1)
 	assert.Equal(t, "vi:notification.reminder:Due soon", api.posts[0].message)
 }
 
 func TestNotifyReminder_EmptyAssigneeNoop(t *testing.T) {
 	n := newTestNotifier(&fakeAPI{})
-	n.NotifyReminder("", TaskSummary{})
+	require.NoError(t, n.NotifyReminder("", TaskSummary{}))
 }
 
 func TestLocaleFor_DefaultsWhenUserMissing(t *testing.T) {
@@ -210,18 +210,19 @@ func TestLocaleFor_DefaultsWhenUserMissing(t *testing.T) {
 	assert.Equal(t, defaultLocale, n.localeFor("ghost"))
 }
 
-func TestDM_FailureIsLoggedNotReturned(t *testing.T) {
+func TestNotifyReminder_DeliveryFailureReturnsError(t *testing.T) {
+	// Unlike the synchronous event DMs (assign/done/comment), the reminder DM
+	// reports its delivery error so the scheduler can retry instead of marking
+	// the reminder fired and losing it.
 	api := &fakeAPI{
 		users:  map[string]*model.User{"u1": userWithLocale("u1", "en")},
 		dmFail: map[string]bool{"u1": true},
 	}
 	n := newTestNotifier(api)
 
-	// Should not panic and should log the failure; no post created.
-	n.NotifyReminder("u1", TaskSummary{Summary: "x"})
+	err := n.NotifyReminder("u1", TaskSummary{Summary: "x"})
+	require.Error(t, err, "delivery failure must be reported")
 	assert.Empty(t, api.posts)
-	require.Len(t, api.logged, 1)
-	assert.Contains(t, api.logged[0], "DM")
 }
 
 func TestUniqueRecipients(t *testing.T) {

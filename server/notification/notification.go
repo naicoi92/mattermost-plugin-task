@@ -134,12 +134,30 @@ func (n *Notifier) NotifyCommented(task TaskSummary, actorID, creatorID, assigne
 	}
 }
 
-// NotifyReminder DMs the assignee that a task is due soon.
-func (n *Notifier) NotifyReminder(assigneeID string, task TaskSummary) {
-	if assigneeID == "" {
-		return
+// NotifyReminder DMs the assignee that a task is due soon. Unlike the
+// event notifications (assign/done/comment) this one is invoked by the
+// background scheduler, which retries on failure — so it returns an error when
+// the DM could not be delivered, letting the caller decide whether to mark the
+// reminder fired. An empty assignee is a no-op (no error).
+func (n *Notifier) NotifyReminder(assigneeID string, task TaskSummary) error {
+	if assigneeID == "" || n.botUserID == "" {
+		return nil
 	}
-	n.dm(assigneeID, "notification.reminder", task.Summary)
+	channel, err := n.api.GetDirectChannel(assigneeID, n.botUserID)
+	if err != nil {
+		return err
+	}
+	text := n.translator.T(n.localeFor(assigneeID), "notification.reminder", task.Summary)
+	post := &model.Post{
+		UserId:    n.botUserID,
+		ChannelId: channel.Id,
+		Message:   text,
+		Type:      model.PostTypeDefault,
+	}
+	if _, err := n.api.CreatePost(post); err != nil {
+		return err
+	}
+	return nil
 }
 
 // displayName returns a human-friendly name for userID (username fallback to
