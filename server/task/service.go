@@ -97,6 +97,12 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		return nil, err
 	}
 
+	// Seed the reminder index when the task is created with both a due and an
+	// offset (deferred for the common edit/assign paths via rebuildReminderIndex).
+	if err := s.rebuildReminderIndex(&task); err != nil {
+		return nil, err
+	}
+
 	return &task, nil
 }
 
@@ -210,6 +216,16 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 		// terminal so a leftover reminder edge is harmless (the scheduler skips
 		// reminders for done/cancelled tasks), matching Delete's handling.
 		_ = s.store.DeleteReminder(task.ID)
+	case model.StatusTodo, model.StatusInProgress:
+		// Reopening allows a reminder to fire again: reset the fired flag and
+		// rebuild the index if a due+offset are still set.
+		task.ReminderFired = false
+		if err := s.store.SaveTask(*task); err != nil {
+			return nil, err
+		}
+		if err := s.rebuildReminderIndex(task); err != nil {
+			return nil, err
+		}
 	}
 
 	// Cascade-cancel open subtasks when the parent is cancelled.
@@ -247,6 +263,166 @@ func (s *Service) cascadeCancelSubtasks(parentID string) error {
 	return nil
 }
 
+// SetReminder sets the reminder offset (ms before due) on the task and rebuilds
+// the reminder index. The task must have a due date; offset must be > 0. It
+// resets ReminderFired so the new reminder can fire.
+func (s *Service) SetReminder(id string, offsetMS int64) (*model.Task, error) {
+	if offsetMS <= 0 {
+		return nil, errors.New("reminder offset must be positive")
+	}
+	task, err := s.store.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, ErrNotFound
+	}
+	if task.Due == nil {
+		return nil, ErrReminderNeedsDue
+	}
+
+	task.ReminderOffset = &offsetMS
+	task.ReminderFired = false
+	task.UpdatedAt = nowFunc()
+	if err := s.store.SaveTask(*task); err != nil {
+		return nil, err
+	}
+	if err := s.rebuildReminderIndex(task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// ClearReminder removes the reminder offset and drops the reminder index edge.
+func (s *Service) ClearReminder(id string) (*model.Task, error) {
+	task, err := s.store.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, ErrNotFound
+	}
+	task.ReminderOffset = nil
+	task.ReminderFired = false
+	task.UpdatedAt = nowFunc()
+	if err := s.store.SaveTask(*task); err != nil {
+		return nil, err
+	}
+	if err := s.store.DeleteReminder(task.ID); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// ErrReminderNeedsDue is returned when a reminder is requested on a task with
+// no due date.
+var ErrReminderNeedsDue = errors.New("reminder requires a due date")
+
+// rebuildReminderIndex synchronizes the idx:reminder:{id} edge with the task's
+// current reminder-eligibility. It writes the edge when:
+//
+//	due != nil AND status ∈ {todo, in_progress} AND ReminderOffset != nil AND !ReminderFired
+//
+// and deletes it otherwise. Call this on every update path that can affect
+// reminders: create, due change, offset change, status change, assignee change
+// (the stored ReminderMetadata.AssigneeID tracks the current assignee).
+func (s *Service) rebuildReminderIndex(task *model.Task) error {
+	if task == nil {
+		return nil
+	}
+	eligible := task.Due != nil &&
+		task.ReminderOffset != nil &&
+		(task.Status == model.StatusTodo || task.Status == model.StatusInProgress) &&
+		!task.ReminderFired
+
+	if !eligible {
+		return s.store.DeleteReminder(task.ID)
+	}
+
+	meta := model.ReminderMetadata{
+		DueMS:      *task.Due,
+		OffsetMS:   *task.ReminderOffset,
+		AssigneeID: task.AssigneeID,
+	}
+	return s.store.SaveReminder(task.ID, meta)
+}
+
+// DueReminder is a reminder whose fire time has arrived. The scheduler returns
+// these so the notification layer can DM the assignee.
+type DueReminder struct {
+	TaskID     string
+	AssigneeID string
+	DueMS      int64
+}
+
+// FireReadyReminders scans the idx:reminder: index and returns every reminder
+// whose fire window is open: now >= due-offset AND now <= due+grace. Tasks whose
+// fire window has already closed past the grace period are dropped (fired once,
+// missed) and marked fired. The caller DMs each returned DueReminder and then
+// calls MarkReminderFired to drop the edge and stamp ReminderFired=true.
+//
+// now and grace are parameters so the function is deterministic in tests.
+func (s *Service) FireReadyReminders(nowMs int64, grace time.Duration) ([]DueReminder, error) {
+	keys, err := s.store.ListReminderKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	var due []DueReminder
+	for _, key := range keys {
+		taskID := kvstore.TaskIDFromReminderKey(key)
+		if taskID == "" {
+			continue
+		}
+		meta, err := s.store.GetReminder(taskID)
+		if err != nil {
+			return nil, err
+		}
+		if meta == nil {
+			continue
+		}
+		fireAt := meta.FireMS()
+		graceMS := grace.Milliseconds()
+		if nowMs < fireAt {
+			continue // not yet
+		}
+		if nowMs > meta.DueMS+graceMS {
+			// Window closed without firing (scheduler was down): mark fired and
+			// drop the edge so it never fires late.
+			if err := s.MarkReminderFired(taskID); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if meta.AssigneeID == "" {
+			continue // nothing to send without an assignee
+		}
+		due = append(due, DueReminder{
+			TaskID:     taskID,
+			AssigneeID: meta.AssigneeID,
+			DueMS:      meta.DueMS,
+		})
+	}
+	return due, nil
+}
+
+// MarkReminderFired drops the reminder index edge and sets ReminderFired=true on
+// the task so it will not fire again until reset (due change / reopen).
+func (s *Service) MarkReminderFired(taskID string) error {
+	if err := s.store.DeleteReminder(taskID); err != nil {
+		return err
+	}
+	task, err := s.store.GetTask(taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return nil
+	}
+	task.ReminderFired = true
+	return s.store.SaveTask(*task)
+}
+
 // PatchInput is the partial-update payload. Only fields listed in UpdateFields
 // are modified; a field present in UpdateFields with the corresponding pointer
 // nil clears that field.
@@ -270,6 +446,7 @@ func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
 	}
 
 	changed := false
+	dueChanged := false
 	for _, field := range in.UpdateFields {
 		switch field {
 		case "summary":
@@ -283,6 +460,7 @@ func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
 		case "due":
 			task.Due = in.Due
 			changed = true
+			dueChanged = true
 		case "is_all_day":
 			task.IsAllDay = derefBool(in.IsAllDay)
 			changed = true
@@ -295,9 +473,21 @@ func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
 		return task, nil
 	}
 
+	// A due change resets the fired flag so the reminder can fire again under
+	// the new deadline, and rebuilds the index to match the new schedule.
+	if dueChanged {
+		task.ReminderFired = false
+	}
+
 	task.UpdatedAt = nowFunc()
 	if err := s.store.SaveTask(*task); err != nil {
 		return nil, err
+	}
+
+	if dueChanged {
+		if err := s.rebuildReminderIndex(task); err != nil {
+			return nil, err
+		}
 	}
 	return task, nil
 }

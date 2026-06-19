@@ -55,8 +55,12 @@ type KVStore interface {
 	// GetCommentIDs returns the IDs of comments attached to taskID.
 	GetCommentIDs(taskID string) ([]string, error)
 
-	// SaveReminder stores the reminder value for taskID under idx:reminder:{taskID}.
-	SaveReminder(taskID string, value int64) error
+	// SaveReminder stores the reminder metadata for taskID under
+	// idx:reminder:{taskID}.
+	SaveReminder(taskID string, value model.ReminderMetadata) error
+	// GetReminder returns the reminder metadata for taskID, or nil if no
+	// reminder is set.
+	GetReminder(taskID string) (*model.ReminderMetadata, error)
 	// DeleteReminder removes the reminder edge for taskID.
 	DeleteReminder(taskID string) error
 	// ListReminderKeys returns all keys prefixed with idx:reminder:.

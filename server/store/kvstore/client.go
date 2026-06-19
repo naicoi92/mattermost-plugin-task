@@ -89,6 +89,12 @@ func ReminderKey(taskID string) string {
 	return keyReminderPrefix + taskID
 }
 
+// TaskIDFromReminderKey extracts the task id from an idx:reminder:{taskID} key.
+// It returns "" when the key is not a reminder key.
+func TaskIDFromReminderKey(key string) string {
+	return strings.TrimPrefix(key, keyReminderPrefix)
+}
+
 // GetTask returns the task with the given ID, or nil if it does not exist.
 func (c Client) GetTask(id string) (*model.Task, error) {
 	var task model.Task
@@ -249,8 +255,8 @@ func (c Client) GetCommentIDs(taskID string) ([]string, error) {
 	return result, nil
 }
 
-// SaveReminder stores the reminder value for taskID under idx:reminder:{taskID}.
-func (c Client) SaveReminder(taskID string, value int64) error {
+// SaveReminder stores the reminder metadata for taskID under idx:reminder:{taskID}.
+func (c Client) SaveReminder(taskID string, value model.ReminderMetadata) error {
 	if taskID == "" {
 		return errors.New("task ID is required")
 	}
@@ -259,6 +265,22 @@ func (c Client) SaveReminder(taskID string, value int64) error {
 		return errors.Wrapf(err, "failed to save reminder for task %s", taskID)
 	}
 	return nil
+}
+
+// GetReminder returns the reminder metadata for taskID, or nil if no reminder
+// index key exists.
+func (c Client) GetReminder(taskID string) (*model.ReminderMetadata, error) {
+	if taskID == "" {
+		return nil, errors.New("task ID is required")
+	}
+	var meta model.ReminderMetadata
+	if err := c.client.KV.Get(ReminderKey(taskID), &meta); err != nil {
+		return nil, errors.Wrapf(err, "failed to get reminder for task %s", taskID)
+	}
+	if meta.AssigneeID == "" && meta.DueMS == 0 && meta.OffsetMS == 0 {
+		return nil, nil
+	}
+	return &meta, nil
 }
 
 // DeleteReminder removes the reminder edge for taskID.

@@ -3,6 +3,7 @@ package task
 import (
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ type fakeStore struct {
 	comments  map[string][]model.Comment // taskID -> comments
 	subtasks  map[string]map[string]struct{}
 	indexes   map[string]struct{}
-	reminders map[string]int64
+	reminders map[string]model.ReminderMetadata
 }
 
 func newFakeStore() *fakeStore {
@@ -28,7 +29,7 @@ func newFakeStore() *fakeStore {
 		comments:  map[string][]model.Comment{},
 		subtasks:  map[string]map[string]struct{}{},
 		indexes:   map[string]struct{}{},
-		reminders: map[string]int64{},
+		reminders: map[string]model.ReminderMetadata{},
 	}
 }
 
@@ -129,9 +130,17 @@ func (f *fakeStore) GetCommentIDs(taskID string) ([]string, error) {
 	return ids, nil
 }
 
-func (f *fakeStore) SaveReminder(taskID string, value int64) error {
+func (f *fakeStore) SaveReminder(taskID string, value model.ReminderMetadata) error {
 	f.reminders[taskID] = value
 	return nil
+}
+
+func (f *fakeStore) GetReminder(taskID string) (*model.ReminderMetadata, error) {
+	r, ok := f.reminders[taskID]
+	if !ok {
+		return nil, nil
+	}
+	return &r, nil
 }
 
 func (f *fakeStore) DeleteReminder(taskID string) error {
@@ -487,14 +496,14 @@ func TestSetStatus_TerminalStopsReminder(t *testing.T) {
 
 	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
 	require.NoError(t, err)
-	require.NoError(t, store.SaveReminder(created.ID, 60_000))
+	require.NoError(t, store.SaveReminder(created.ID, model.ReminderMetadata{DueMS: 1_000_000, OffsetMS: 60_000, AssigneeID: "u1"}))
 	require.Contains(t, store.reminders, created.ID)
 
 	_, err = svc.SetStatus(created.ID, model.StatusDone)
 	require.NoError(t, err)
 	assert.NotContains(t, store.reminders, created.ID, "done removes reminder edge")
 
-	require.NoError(t, store.SaveReminder(created.ID, 60_000))
+	require.NoError(t, store.SaveReminder(created.ID, model.ReminderMetadata{DueMS: 1_000_000, OffsetMS: 60_000, AssigneeID: "u1"}))
 	_, err = svc.SetStatus(created.ID, model.StatusCancelled)
 	require.NoError(t, err)
 	assert.NotContains(t, store.reminders, created.ID, "cancelled removes reminder edge")
@@ -538,3 +547,180 @@ func TestSetStatus_NoOpWhenUnchanged(t *testing.T) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// --- Reminder subsystem ---
+
+func TestCreate_SeedsReminderIndexWhenDueAndOffset(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	origNow := nowFunc
+	nowFunc = fixedNow(1_000)
+	defer func() { nowFunc = origNow }()
+
+	due := int64(100_000)
+	offset := int64(60_000)
+	created, err := svc.Create(CreateInput{
+		Summary: "x", CreatorID: "u1", AssigneeID: "u2",
+		Due: &due, ReminderOffset: &offset,
+	})
+	require.NoError(t, err)
+
+	meta, err := store.GetReminder(created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	assert.Equal(t, due, meta.DueMS)
+	assert.Equal(t, offset, meta.OffsetMS)
+	assert.Equal(t, "u2", meta.AssigneeID)
+}
+
+func TestCreate_NoReminderWhenNoDue(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	offset := int64(60_000)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", ReminderOffset: &offset})
+	require.NoError(t, err)
+
+	meta, err := store.GetReminder(created.ID)
+	require.NoError(t, err)
+	assert.Nil(t, meta, "no reminder without a due date")
+}
+
+func TestSetReminder_BuildsIndex(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	due := int64(100_000)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2", Due: &due})
+	require.NoError(t, err)
+
+	updated, err := svc.SetReminder(created.ID, 30_000)
+	require.NoError(t, err)
+	require.NotNil(t, updated.ReminderOffset)
+	assert.Equal(t, int64(30_000), *updated.ReminderOffset)
+
+	meta, err := store.GetReminder(created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	assert.Equal(t, int64(30_000), meta.OffsetMS)
+}
+
+func TestSetReminder_RequiresDue(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	_, err = svc.SetReminder(created.ID, 30_000)
+	assert.ErrorIs(t, err, ErrReminderNeedsDue)
+}
+
+func TestSetReminder_InvalidOffset(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	due := int64(100_000)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", Due: &due})
+	require.NoError(t, err)
+
+	_, err = svc.SetReminder(created.ID, 0)
+	assert.Error(t, err)
+}
+
+func TestClearReminder_RemovesIndex(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	due := int64(100_000)
+	offset := int64(60_000)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", Due: &due, ReminderOffset: &offset})
+	require.NoError(t, err)
+	require.NoError(t, store.SaveReminder(created.ID, model.ReminderMetadata{DueMS: due, OffsetMS: offset, AssigneeID: "u2"}))
+
+	updated, err := svc.ClearReminder(created.ID)
+	require.NoError(t, err)
+	assert.Nil(t, updated.ReminderOffset)
+
+	meta, err := store.GetReminder(created.ID)
+	require.NoError(t, err)
+	assert.Nil(t, meta)
+}
+
+func TestSetStatus_DoneDropsReminder_TodoRebuilds(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	due := int64(100_000)
+	offset := int64(60_000)
+	created, err := svc.Create(CreateInput{Summary: "x", CreatorID: "u1", Due: &due, ReminderOffset: &offset})
+	require.NoError(t, err)
+
+	// done -> reminder dropped.
+	_, err = svc.SetStatus(created.ID, model.StatusDone)
+	require.NoError(t, err)
+	meta, _ := store.GetReminder(created.ID)
+	assert.Nil(t, meta)
+
+	// Reopen -> reminder rebuilt (still has due+offset, not fired).
+	_, err = svc.SetStatus(created.ID, model.StatusTodo)
+	require.NoError(t, err)
+	meta, _ = store.GetReminder(created.ID)
+	require.NotNil(t, meta)
+}
+
+func TestFireReadyReminders_WithinWindow(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+
+	// due=100000, offset=60000 -> fires at 40000.
+	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
+		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
+	}))
+
+	due, err := svc.FireReadyReminders(50_000, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.Equal(t, "T1", due[0].TaskID)
+	assert.Equal(t, "u1", due[0].AssigneeID)
+}
+
+func TestFireReadyReminders_NotYetDue(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
+		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
+	}))
+
+	due, err := svc.FireReadyReminders(10_000, time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}
+
+func TestFireReadyReminders_PastGraceDroppedAndMarkedFired(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	// Seed a task entity so MarkReminderFired can stamp it.
+	require.NoError(t, store.SaveTask(model.Task{ID: "T1", Status: model.StatusTodo}))
+
+	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
+		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "u1",
+	}))
+
+	// now well beyond due+grace (100000 + 60000ms).
+	due, err := svc.FireReadyReminders(200_000, time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, due, "missed reminder dropped, not fired")
+
+	meta, _ := store.GetReminder("T1")
+	assert.Nil(t, meta, "edge dropped")
+	task, _ := store.GetTask("T1")
+	require.NotNil(t, task)
+	assert.True(t, task.ReminderFired)
+}
+
+func TestFireReadyReminders_NoAssigneeSkipped(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	require.NoError(t, store.SaveReminder("T1", model.ReminderMetadata{
+		DueMS: 100_000, OffsetMS: 60_000, AssigneeID: "",
+	}))
+
+	due, err := svc.FireReadyReminders(50_000, time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}
