@@ -278,6 +278,27 @@ func (p *Plugin) openTaskDetailDialogFor(triggerID, taskID string) error {
 	return p.openDialog(triggerID, dialog)
 }
 
+// openQuickListDialogFor builds and opens the Quick List Interactive Dialog for
+// the user, scoped/filtered per the command arguments (#97). It runs the same
+// ListQuery the text fallback uses, then renders the top-N tasks as a select
+// so the user can pick one to open in the Task Detail dialog. Returns an error
+// when the dialog can't be opened (caller falls back to the text list).
+func (p *Plugin) openQuickListDialogFor(triggerID, userID, scope, channelID, status, due string) error {
+	tasks, err := p.taskService.List(task.ListQuery{
+		Scope:     task.Scope(scope),
+		UserID:    userID,
+		ChannelID: channelID,
+		Status:    status,
+		Due:       due,
+		Limit:     topNTasksDefault,
+	})
+	if err != nil {
+		return err
+	}
+	dialog := buildQuickListDialog(userID, tasks)
+	return p.openDialog(triggerID, dialog)
+}
+
 // detailCommentsLimit is the maximum number of recent comments shown in the Task
 // Detail dialog introduction (kept short for the mobile/fallback view).
 const detailCommentsLimit = 3

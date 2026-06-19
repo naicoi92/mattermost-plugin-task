@@ -89,6 +89,44 @@ func argsWithTrigger(userID, command, triggerID string) *mmmodel.CommandArgs {
 	return a
 }
 
+// fakeQuickListOpener records the last OpenQuickList call (#97).
+type fakeQuickListOpener struct {
+	triggerID string
+	userID    string
+	scope     string
+	channelID string
+	status    string
+	due       string
+	called    bool
+	opened    bool
+}
+
+func (f *fakeQuickListOpener) OpenQuickList(triggerID, userID, scope, channelID, status, due string) bool {
+	f.called = true
+	f.triggerID = triggerID
+	f.userID = userID
+	f.scope = scope
+	f.channelID = channelID
+	f.status = status
+	f.due = due
+	return f.opened
+}
+
+// fakeTaskDetailOpener records the last OpenTaskDetail call (#97).
+type fakeTaskDetailOpener struct {
+	triggerID string
+	taskID    string
+	called    bool
+	opened    bool
+}
+
+func (f *fakeTaskDetailOpener) OpenTaskDetail(triggerID, taskID string) bool {
+	f.called = true
+	f.triggerID = triggerID
+	f.taskID = taskID
+	return f.opened
+}
+
 // When a trigger id and an opener that succeeds are present, /task add opens
 // the New Task dialog prefilled with the summary instead of creating the task
 // immediately (#95).
@@ -165,6 +203,69 @@ func TestHandleList_ParsesScopeAndStatusFilters(t *testing.T) {
 	assert.Equal(t, taskmodel.StatusDone, svc.listQuery.Status)
 }
 
+// When a trigger id and a Quick List opener that succeeds are present,
+// /task list opens the Interactive Dialog instead of returning the text list
+// (#97). Scope/status/due filters pass through to the opener.
+func TestHandleList_OpensDialogWhenTriggerAndOpener(t *testing.T) {
+	svc := &fakeStatusService{listResult: []taskmodel.Task{
+		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
+	}}
+	h := newTestHandler(svc)
+	opener := &fakeQuickListOpener{opened: true}
+	h.quickListOpener = opener
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task list mine done overdue", "trig-1"))
+	require.NoError(t, err)
+
+	assert.True(t, opener.called, "opener invoked when a trigger id is present")
+	assert.Equal(t, "trig-1", opener.triggerID)
+	assert.Equal(t, "u1", opener.userID)
+	assert.Equal(t, "mine", opener.scope, "scope parsed and passed")
+	assert.Equal(t, "done", opener.status, "status filter passed")
+	assert.Equal(t, "overdue", opener.due, "due filter passed")
+	assert.Empty(t, resp.Text, "no ephemeral text — the dialog is the feedback")
+	assert.Equal(t, task.Scope(""), svc.listQuery.Scope, "List NOT called when the dialog opens")
+}
+
+// /task list channel passes the context channel id through to the opener.
+func TestHandleList_ChannelScopePassesChannelID(t *testing.T) {
+	svc := &fakeStatusService{}
+	h := newTestHandler(svc)
+	opener := &fakeQuickListOpener{opened: true}
+	h.quickListOpener = opener
+
+	_, err := h.Handle(argsWithTrigger("u1", "/task list channel", "trig-1"))
+	require.NoError(t, err)
+	assert.Equal(t, "channel", opener.scope)
+	assert.Equal(t, "ch1", opener.channelID, "context channel id passed for channel scope")
+}
+
+// When the opener reports failure, /task list falls back to the text list.
+func TestHandleList_FallsBackToTextWhenOpenerFails(t *testing.T) {
+	svc := &fakeStatusService{listResult: []taskmodel.Task{
+		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
+	}}
+	h := newTestHandler(svc)
+	h.quickListOpener = &fakeQuickListOpener{opened: false} // opener fails
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task list mine", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "first", "fallback returns the text list")
+}
+
+// Without an opener wired, /task list always returns the text list even with a
+// trigger id.
+func TestHandleList_ReturnsTextWithoutOpener(t *testing.T) {
+	svc := &fakeStatusService{listResult: []taskmodel.Task{
+		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
+	}}
+	h := newTestHandler(svc) // quickListOpener is nil
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task list mine", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "first")
+}
+
 func TestHandleShow_RequiresID(t *testing.T) {
 	h := newTestHandler(&fakeStatusService{})
 	resp, err := h.Handle(args("u1", "/task show"))
@@ -193,6 +294,46 @@ func TestHandleShow_RendersDetail(t *testing.T) {
 	assert.Contains(t, resp.Text, "in_progress")
 	assert.Contains(t, resp.Text, "needs review")
 	assert.Contains(t, resp.Text, "u2")
+}
+
+// When a trigger id and a Task Detail opener that succeeds are present,
+// /task show opens the Interactive Dialog instead of returning the text card
+// (#97). The task id passes through to the opener.
+func TestHandleShow_OpensDialogWhenTriggerAndOpener(t *testing.T) {
+	svc := &fakeStatusService{getResult: &taskmodel.Task{ID: "t1", Summary: "Review"}}
+	h := newTestHandler(svc)
+	opener := &fakeTaskDetailOpener{opened: true}
+	h.taskDetailOpener = opener
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task show t1", "trig-1"))
+	require.NoError(t, err)
+
+	assert.True(t, opener.called, "opener invoked when a trigger id is present")
+	assert.Equal(t, "trig-1", opener.triggerID)
+	assert.Equal(t, "t1", opener.taskID, "task id passed to the opener")
+	assert.Empty(t, resp.Text, "no ephemeral text — the dialog is the feedback")
+}
+
+// When the opener reports failure, /task show falls back to the text card.
+func TestHandleShow_FallsBackToTextWhenOpenerFails(t *testing.T) {
+	svc := &fakeStatusService{getResult: &taskmodel.Task{ID: "t1", Summary: "Review"}}
+	h := newTestHandler(svc)
+	h.taskDetailOpener = &fakeTaskDetailOpener{opened: false} // opener fails
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task show t1", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Review", "fallback returns the text card")
+}
+
+// Without an opener wired, /task show always returns the text card even with a
+// trigger id.
+func TestHandleShow_ReturnsTextWithoutOpener(t *testing.T) {
+	svc := &fakeStatusService{getResult: &taskmodel.Task{ID: "t1", Summary: "Review"}}
+	h := newTestHandler(svc) // taskDetailOpener is nil
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task show t1", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Review")
 }
 
 func TestHandleSearch_RequiresKeyword(t *testing.T) {

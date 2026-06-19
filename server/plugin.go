@@ -94,6 +94,8 @@ func (p *Plugin) OnActivate() error {
 		CommentNotifier:   commandCommentNotifier{p.notifier},
 		CommentAuthorizer: commandCommentAuthorizer{channels: channelMembershipChecker{api: p.API}},
 		NewTaskOpener:     newTaskDialogOpener{p: p},
+		QuickListOpener:   quickListDialogOpener{p: p},
+		TaskDetailOpener:  taskDetailDialogOpener{p: p},
 		Users:             userResolver{p.API},
 		BotUserID:         p.botUserID,
 	})
@@ -330,6 +332,44 @@ func (o newTaskDialogOpener) OpenNewTask(triggerID, prefillSummary, channelID st
 	}
 	if err := o.p.openNewTaskDialogFor(triggerID, prefillSummary, channelID); err != nil {
 		o.p.API.LogError("Failed to open New Task dialog", "error", err)
+		return false
+	}
+	return true
+}
+
+// quickListDialogOpener adapts the plugin layer to
+// command.QuickListDialogOpener (#97). It opens the Quick List Interactive
+// Dialog scoped/filtered for the user so `/task list` on mobile renders an
+// interactive picker instead of a flat text dump. Returns true on success.
+type quickListDialogOpener struct {
+	p *Plugin
+}
+
+func (o quickListDialogOpener) OpenQuickList(triggerID, userID, scope, channelID, status, due string) bool {
+	if o.p == nil || triggerID == "" {
+		return false
+	}
+	if err := o.p.openQuickListDialogFor(triggerID, userID, scope, channelID, status, due); err != nil {
+		o.p.API.LogError("Failed to open Quick List dialog", "error", err)
+		return false
+	}
+	return true
+}
+
+// taskDetailDialogOpener adapts the plugin layer to
+// command.TaskDetailDialogOpener (#97). It opens the Task Detail Interactive
+// Dialog for a task so `/task show <id>` on mobile renders an editable view
+// instead of a read-only text card. Returns true on success.
+type taskDetailDialogOpener struct {
+	p *Plugin
+}
+
+func (o taskDetailDialogOpener) OpenTaskDetail(triggerID, taskID string) bool {
+	if o.p == nil || triggerID == "" {
+		return false
+	}
+	if err := o.p.openTaskDetailDialogFor(triggerID, taskID); err != nil {
+		o.p.API.LogError("Failed to open Task Detail dialog", "task_id", taskID, "error", err)
 		return false
 	}
 	return true
