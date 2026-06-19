@@ -172,6 +172,56 @@ func (s *Service) Get(id string) (*model.Task, error) {
 	return s.store.GetTask(id)
 }
 
+// SubtaskProgress returns (done, total) where done counts subtasks in a
+// terminal status (done/cancelled) and total is the number of subtasks. Used
+// to render the "x/y" progress on task cards. Missing subtask entities are
+// skipped defensively.
+func (s *Service) SubtaskProgress(parentID string) (done, total int, err error) {
+	ids, err := s.store.GetSubtaskIDs(parentID)
+	if err != nil {
+		return 0, 0, errors.Wrap(err, "failed to list subtasks")
+	}
+	for _, id := range ids {
+		sub, err := s.store.GetTask(id)
+		if err != nil {
+			return 0, 0, err
+		}
+		if sub == nil {
+			continue
+		}
+		total++
+		if sub.Status == model.StatusDone || sub.Status == model.StatusCancelled {
+			done++
+		}
+	}
+	return done, total, nil
+}
+
+// SetPostIDs records the channel/DM post ids of the task's interactive card so
+// the card can be updated when the task changes (PLAN.md section 4.2). Either
+// value may be empty to leave it unchanged. Used by the REST/dialog handlers
+// after posting a card.
+func (s *Service) SetPostIDs(id, channelPostID, dmPostID string) (*model.Task, error) {
+	t, err := s.store.GetTask(id)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, ErrNotFound
+	}
+	if channelPostID != "" {
+		t.ChannelPostID = channelPostID
+	}
+	if dmPostID != "" {
+		t.DMPostID = dmPostID
+	}
+	t.UpdatedAt = nowFunc()
+	if err := s.store.SaveTask(*t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // SetStatus transitions the task to newStatus using the canonical state machine
 // (taskutil.ApplyStatus), refreshing UpdatedAt and clearing/stamping the
 // CompletedAt/CancelledAt fields as appropriate:
