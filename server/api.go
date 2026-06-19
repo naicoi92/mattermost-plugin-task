@@ -32,6 +32,7 @@ func (p *Plugin) initRouter() *mux.Router {
 	tasks.HandleFunc("/{id:[^/]+}", p.getTask).Methods(http.MethodGet)
 	tasks.HandleFunc("/{id:[^/]+}", p.patchTask).Methods(http.MethodPatch)
 	tasks.HandleFunc("/{id:[^/]+}", p.deleteTask).Methods(http.MethodDelete)
+	tasks.HandleFunc("/{id:[^/]+}/status", p.patchTaskStatus).Methods(http.MethodPatch)
 
 	return router
 }
@@ -227,4 +228,39 @@ func (p *Plugin) deleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// patchTaskStatusRequest is the JSON body for PATCH /tasks/:id/status.
+type patchTaskStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// patchTaskStatus handles PATCH /tasks/:id/status. Sets the status via the
+// canonical state machine; done/cancelled stop reminders and cancel cascades to
+// open subtasks.
+func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	var req patchTaskStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if !taskmodel.IsValidStatus(req.Status) {
+		p.writeError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	updated, err := p.taskService.SetStatus(id, req.Status)
+	if err != nil {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
+			p.writeError(w, http.StatusNotFound, "task not found")
+		case errors.Is(err, task.ErrInvalidStatus):
+			p.writeError(w, http.StatusBadRequest, "invalid status")
+		default:
+			p.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	p.writeJSON(w, updated)
 }

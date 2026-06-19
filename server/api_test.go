@@ -229,3 +229,38 @@ func TestHelloWorld_StillWorks(t *testing.T) {
 	body, _ := io.ReadAll(w.Result().Body)
 	assert.Equal(t, "Hello, world!", string(body))
 }
+
+func TestPatchTaskStatus_Endpoint(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch,
+		"/api/v1/tasks/"+created.ID+"/status", `{"status":"done"}`, "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, model.StatusDone, got.Status)
+	require.NotNil(t, got.CompletedAt)
+}
+
+func TestPatchTaskStatus_Invalid(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch,
+		"/api/v1/tasks/"+created.ID+"/status", `{"status":"bogus"}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestPatchTaskStatus_NotFound(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch,
+		"/api/v1/tasks/missing/status", `{"status":"done"}`, "u1"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}

@@ -56,7 +56,7 @@ func (p *Plugin) OnActivate() error {
 
 	p.taskService = task.NewService(p.kvstore)
 
-	p.commandClient = command.NewCommandHandler(p.client)
+	p.commandClient = command.NewCommandHandler(p.client, p.taskService)
 
 	p.router = p.initRouter()
 
