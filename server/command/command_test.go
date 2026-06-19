@@ -45,6 +45,15 @@ type fakeStatusService struct {
 	lastPatch   task.PatchInput
 	patchResult *taskmodel.Task
 	patchErr    error
+
+	getResult    *taskmodel.Task
+	getErr       error
+	listQuery    task.ListQuery
+	listResult   []taskmodel.Task
+	listErr      error
+	searchKey    string
+	searchResult []taskmodel.Task
+	searchErr    error
 }
 
 func (f *fakeStatusService) SetStatus(id, status string) (*taskmodel.Task, error) {
@@ -57,6 +66,20 @@ func (f *fakeStatusService) Patch(id string, in task.PatchInput) (*taskmodel.Tas
 	f.lastPatchID = id
 	f.lastPatch = in
 	return f.patchResult, f.patchErr
+}
+
+func (f *fakeStatusService) Get(id string) (*taskmodel.Task, error) {
+	return f.getResult, f.getErr
+}
+
+func (f *fakeStatusService) List(q task.ListQuery) ([]taskmodel.Task, error) {
+	f.listQuery = q
+	return f.listResult, f.listErr
+}
+
+func (f *fakeStatusService) Search(keyword string, limit int) ([]taskmodel.Task, error) {
+	f.searchKey = keyword
+	return f.searchResult, f.searchErr
 }
 
 func TestHelloCommand(t *testing.T) {
@@ -263,4 +286,124 @@ func TestParseEditFields_UnknownKey(t *testing.T) {
 	in, bad := parseEditFields([]string{"foo=bar"})
 	assert.Equal(t, "foo=bar", bad)
 	assert.Empty(t, in.UpdateFields)
+}
+
+func TestTaskList_Command(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{listResult: []taskmodel.Task{
+		{ID: "T1", Summary: "First", Status: taskmodel.StatusTodo},
+		{ID: "T2", Summary: "Second", Status: taskmodel.StatusDone},
+	}}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task list mine done", UserId: "u1"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "First")
+	assert.Contains(t, resp.Text, "Second")
+	assert.Equal(t, task.ScopeMine, svc.listQuery.Scope)
+	assert.Equal(t, "done", svc.listQuery.Status)
+	assert.Equal(t, "u1", svc.listQuery.UserID)
+}
+
+func TestTaskList_DefaultScopeMine(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{}
+	handler := NewCommandHandler(env.client, svc)
+
+	_, err := handler.Handle(&model.CommandArgs{Command: "/task list", UserId: "u1"})
+	require.NoError(t, err)
+	assert.Equal(t, task.ScopeMine, svc.listQuery.Scope)
+}
+
+func TestTaskList_Empty(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{listResult: nil}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task list"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "No tasks")
+}
+
+func TestTaskList_BadFilter(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task list bogus"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Unknown filter")
+}
+
+func TestTaskShow_Command(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{getResult: &taskmodel.Task{
+		ID: "T1", Summary: "Review PR", Description: "desc", Status: taskmodel.StatusTodo,
+	}}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task show T1"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Review PR")
+	assert.Contains(t, resp.Text, "T1")
+	assert.Contains(t, resp.Text, "desc")
+}
+
+func TestTaskShow_NotFound(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{getResult: nil})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task show T1"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "not found")
+}
+
+func TestTaskShow_Usage(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task show"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Usage")
+}
+
+func TestTaskSearch_Command(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{searchResult: []taskmodel.Task{
+		{ID: "T1", Summary: "login bug"},
+	}}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task search login bug"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "login bug")
+	assert.Equal(t, "login bug", svc.searchKey)
+}
+
+func TestTaskSearch_Empty(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{searchResult: nil}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task search xyz"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "No tasks")
+}
+
+func TestTaskSearch_Usage(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task search"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Usage")
 }

@@ -22,6 +22,9 @@ const taskCommandTrigger = "task"
 type TaskService interface {
 	SetStatus(id, status string) (*taskmodel.Task, error)
 	Patch(id string, in task.PatchInput) (*taskmodel.Task, error)
+	Get(id string) (*taskmodel.Task, error)
+	List(q task.ListQuery) ([]taskmodel.Task, error)
+	Search(keyword string, limit int) ([]taskmodel.Task, error)
 }
 
 // Handler dispatches slash commands. Today it owns the /task command; the
@@ -81,6 +84,25 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService) Comman
 	editCmd.AddTextArgument("summary=..., due=<ms>, desc=...", "key=value pairs to update", "")
 	taskCmd.AddCommand(editCmd)
 
+	// /task list [mine|channel|all] [status ...] [due ...]
+	listCmd := model.NewAutocompleteData("list", "[mine|channel|all] [status ...] [due ...]", "List and filter tasks")
+	listCmd.AddStaticListArgument("scope", false, []model.AutocompleteListItem{
+		{Item: "mine", HelpText: "Tasks assigned to me"},
+		{Item: "channel", HelpText: "Tasks in this channel"},
+		{Item: "all", HelpText: "All tasks"},
+	})
+	taskCmd.AddCommand(listCmd)
+
+	// /task show <id>
+	showCmd := model.NewAutocompleteData("show", "<id>", "View task details")
+	showCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
+	taskCmd.AddCommand(showCmd)
+
+	// /task search <keyword>
+	searchCmd := model.NewAutocompleteData("search", "<keyword>", "Search tasks")
+	searchCmd.AddTextArgument("keyword", "text to search for", "")
+	taskCmd.AddCommand(searchCmd)
+
 	// /task help
 	helpCmd := model.NewAutocompleteData("help", "", "Show task command help")
 	taskCmd.AddCommand(helpCmd)
@@ -134,6 +156,12 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return c.handleShortcut(args, subFields[1:], taskmodel.StatusCancelled, "cancelled")
 	case "edit":
 		return c.handleEdit(args, subFields[1:])
+	case "list":
+		return c.handleList(args, subFields[1:])
+	case "show":
+		return c.handleShow(args, subFields[1:])
+	case "search":
+		return c.handleSearch(args, subFields[1:])
 	case "help":
 		return ephemeral(taskHelp()), nil
 	default:
@@ -159,6 +187,118 @@ func (c *Handler) handleShortcut(args *model.CommandArgs, rest []string, status 
 		return ephemeral(fmt.Sprintf("Usage: /task %s <id>", label)), nil
 	}
 	return c.setStatus(args, rest[0], status)
+}
+
+// handleList implements /task list [mine|channel|all] [status ...] [due ...].
+//
+// Scope defaults to "mine". For scope=channel the task's own channel is used
+// (args.ChannelId). status must be a valid status; due ∈ {overdue,today,week}.
+// Results render as an ephemeral list, one line per task.
+func (c *Handler) handleList(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	q := task.ListQuery{
+		Scope:     task.ScopeMine,
+		UserID:    args.UserId,
+		ChannelID: args.ChannelId,
+		Limit:     task.DefaultLimit,
+	}
+	for _, tok := range rest {
+		switch {
+		case tok == "mine" || tok == "channel" || tok == "all":
+			q.Scope = task.Scope(tok)
+		case taskmodel.IsValidStatus(tok):
+			q.Status = tok
+		case tok == "overdue" || tok == "today" || tok == "week":
+			q.Due = tok
+		default:
+			return ephemeral(fmt.Sprintf("Unknown filter %q. Use mine|channel|all, a status, or overdue|today|week.", tok)), nil
+		}
+	}
+	if q.Scope == task.ScopeChannel && q.ChannelID == "" {
+		return ephemeral("scope=channel needs a channel context; try /task list mine."), nil
+	}
+
+	tasks, err := c.taskService.List(q)
+	if err != nil {
+		c.client.Log.Error("Failed to list tasks", "error", err)
+		return ephemeral("Failed to list tasks. Please try again."), nil
+	}
+	if len(tasks) == 0 {
+		return ephemeral("No tasks match your filters."), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**%d task(s):**\n", len(tasks))
+	for i, t := range tasks {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, formatTaskLine(t))
+	}
+	return ephemeral(b.String()), nil
+}
+
+// handleShow implements /task show <id>. Renders a single task's detail as an
+// ephemeral message.
+func (c *Handler) handleShow(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 1 {
+		return ephemeral("Usage: /task show <id>"), nil
+	}
+	id := rest[0]
+	t, err := c.taskService.Get(id)
+	if err != nil {
+		c.client.Log.Error("Failed to get task", "task_id", id, "error", err)
+		return ephemeral("Failed to load the task. Please try again."), nil
+	}
+	if t == nil {
+		return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
+	}
+	return ephemeral(formatTaskDetail(*t)), nil
+}
+
+// handleSearch implements /task search <keyword>. Searches summary/description
+// and renders matches as an ephemeral list.
+func (c *Handler) handleSearch(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 1 {
+		return ephemeral("Usage: /task search <keyword>"), nil
+	}
+	keyword := strings.Join(rest, " ")
+	results, err := c.taskService.Search(keyword, task.DefaultLimit)
+	if err != nil {
+		c.client.Log.Error("Failed to search tasks", "keyword", keyword, "error", err)
+		return ephemeral("Failed to search tasks. Please try again."), nil
+	}
+	if len(results) == 0 {
+		return ephemeral(fmt.Sprintf("No tasks match %q.", keyword)), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**%d result(s) for %q:**\n", len(results), keyword)
+	for i, t := range results {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, formatTaskLine(t))
+	}
+	return ephemeral(b.String()), nil
+}
+
+// formatTaskLine renders one task as a single list line: "summary (id) — status".
+func formatTaskLine(t taskmodel.Task) string {
+	return fmt.Sprintf("**%s** (`%s`) — %s", t.Summary, t.ID, t.Status)
+}
+
+// formatTaskDetail renders a single task for /task show.
+func formatTaskDetail(t taskmodel.Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s\n", t.Summary)
+	fmt.Fprintf(&b, "**ID:** `%s`  ·  **Status:** %s\n", t.ID, t.Status)
+	if t.Description != "" {
+		fmt.Fprintf(&b, "\n%s\n", t.Description)
+	}
+	if t.Due != nil {
+		fmt.Fprintf(&b, "\n**Due:** %d (ms)\n", *t.Due)
+	}
+	if t.AssigneeID != "" {
+		fmt.Fprintf(&b, "**Assignee:** %s\n", t.AssigneeID)
+	}
+	if t.ParentTaskID != "" {
+		fmt.Fprintf(&b, "**Subtask of:** `%s`\n", t.ParentTaskID)
+	}
+	return b.String()
 }
 
 // setStatus calls the service and formats the result for the user.
@@ -313,5 +453,8 @@ func taskHelp() string {
 		"• `/task done <id>` — mark a task done\n" +
 		"• `/task cancel <id>` — cancel a task\n" +
 		"• `/task edit <id> [summary=...] [due=<ms>] [desc=...]` — partial update\n" +
+		"• `/task list [mine|channel|all] [status ...] [due ...]` — list and filter\n" +
+		"• `/task show <id>` — view task details\n" +
+		"• `/task search <keyword>` — search tasks\n" +
 		"• `/task help` — show this help"
 }
