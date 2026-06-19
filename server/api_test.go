@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 
 	mmmodel "github.com/mattermost/mattermost/server/public/model"
@@ -57,8 +58,16 @@ func (f *fakeTaskStore) SaveSubtask(parentID, taskID string) error {
 	f.subs[parentID][taskID] = struct{}{}
 	return nil
 }
-func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) { return nil, nil }
-func (f *fakeTaskStore) SaveComment(string, model.Comment) error         { return nil }
+
+func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) {
+	var ids []string
+	for id := range f.subs[parentID] {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+func (f *fakeTaskStore) SaveComment(string, model.Comment) error { return nil }
 func (f *fakeTaskStore) GetComment(string, string) (*model.Comment, error) {
 	return nil, nil
 }
@@ -163,6 +172,88 @@ func TestCreateTask_MissingParentIsBadRequest(t *testing.T) {
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
 		`{"summary":"child","parent_task_id":"ghost"}`, "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Subtasks (issue #21) ---
+
+func TestCreateSubtask_InheritsAndPersists(t *testing.T) {
+	p, _ := newTestPlugin()
+	// Parent created by u1, assigned to u2, in ch1.
+	parent, err := p.taskService.Create(task.CreateInput{
+		Summary: "parent", CreatorID: "u1", AssigneeID: "u2", ChannelID: "ch1",
+	})
+	require.NoError(t, err)
+
+	// u1 (creator) adds a subtask.
+	body := `{"summary":"child task"}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+parent.ID+"/subtasks", body, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "child task", got.Summary)
+	assert.Equal(t, parent.ID, got.ParentTaskID)
+	assert.Equal(t, "ch1", got.ChannelID, "inherits parent channel")
+	assert.Equal(t, "u2", got.AssigneeID, "inherits parent assignee as default")
+}
+
+func TestCreateSubtask_ForbiddenForNonModifier(t *testing.T) {
+	p, _ := newTestPlugin()
+	parent, err := p.taskService.Create(task.CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+parent.ID+"/subtasks", `{"summary":"x"}`, "u-stranger"))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestCreateSubtask_ParentNotFound(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/ghost/subtasks", `{"summary":"x"}`, "u1"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestCreateSubtask_ExplicitAssigneeOverridesInherited(t *testing.T) {
+	p, _ := newTestPlugin()
+	parent, err := p.taskService.Create(task.CreateInput{
+		Summary: "parent", CreatorID: "u1", AssigneeID: "u2", ChannelID: "ch1",
+	})
+	require.NoError(t, err)
+
+	body := `{"summary":"child","assignee_id":"u9"}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+parent.ID+"/subtasks", body, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "u9", got.AssigneeID, "explicit assignee overrides inherited default")
+}
+
+func TestListSubtasks_ReturnsDirectSubtasksInOrder(t *testing.T) {
+	p, _ := newTestPlugin()
+	parent, err := p.taskService.Create(task.CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	c1, err := p.taskService.CreateSubtask(parent.ID, "u1", "first", "", nil)
+	require.NoError(t, err)
+	c2, err := p.taskService.CreateSubtask(parent.ID, "u1", "second", "", nil)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet,
+		"/api/v1/tasks/"+parent.ID+"/subtasks", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got, 2)
+	assert.Equal(t, c1.ID, got[0].ID)
+	assert.Equal(t, c2.ID, got[1].ID)
 }
 
 func TestAuthorization_Required(t *testing.T) {

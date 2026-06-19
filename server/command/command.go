@@ -27,6 +27,12 @@ type TaskService interface {
 	// Assign changes a task's single assignee; newAssigneeID == "" clears it.
 	// It returns the updated task plus an AssignEvent describing the change.
 	Assign(id, newAssigneeID string) (*taskmodel.Task, task.AssignEvent, error)
+	// Get returns the task with the given id, or nil if it does not exist.
+	Get(id string) (*taskmodel.Task, error)
+	// CreateSubtask creates a new task under parentID. The subtask inherits the
+	// parent's ChannelID and (as default) the parent's assignee; an explicit
+	// assigneeID overrides the default. Returns the created subtask.
+	CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*taskmodel.Task, error)
 }
 
 // AssignNotifier fires the assignee-change DM. It is the subset of the
@@ -154,6 +160,12 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 	unassignCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
 	taskCmd.AddCommand(unassignCmd)
 
+	// /task subtask <parentId> <summary>
+	subtaskCmd := model.NewAutocompleteData("subtask", "<parentId> <summary>", "Add a subtask to a task")
+	subtaskCmd.AddStaticListArgument("parent task id", true, []model.AutocompleteListItem{})
+	subtaskCmd.AddTextArgument("subtask summary", "<summary>", "")
+	taskCmd.AddCommand(subtaskCmd)
+
 	// /task help
 	helpCmd := model.NewAutocompleteData("help", "", "Show task command help")
 	taskCmd.AddCommand(helpCmd)
@@ -216,6 +228,8 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return c.handleAssign(args, subFields[1:])
 	case "unassign":
 		return c.handleUnassign(args, subFields[1:])
+	case "subtask":
+		return c.handleSubtask(args, subFields[1:])
 	case "help":
 		return ephemeral(taskHelp()), nil
 	default:
@@ -362,6 +376,43 @@ func formatAssignError(c *Handler, id string, err error) (*model.CommandResponse
 	}
 	c.client.Log.Error("Failed to change assignee", "task_id", id, "error", err)
 	return ephemeral(fmt.Sprintf("Failed to update task %s: %s", id, err.Error())), nil
+}
+
+// handleSubtask implements /task subtask <parentId> <summary>. Only the creator
+// or current assignee of the parent may add subtasks. The summary runs to the
+// end of the line (may contain spaces).
+func (c *Handler) handleSubtask(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 2 {
+		return ephemeral("Usage: /task subtask <parentId> <summary>"), nil
+	}
+	parentID := rest[0]
+	summary := strings.TrimSpace(strings.Join(rest[1:], " "))
+	if summary == "" {
+		return ephemeral("Usage: /task subtask <parentId> <summary>"), nil
+	}
+
+	// Permission: only the creator or current assignee may add subtasks.
+	parent, err := c.taskService.Get(parentID)
+	if err != nil {
+		c.client.Log.Error("Failed to load parent for subtask", "task_id", parentID, "error", err)
+		return ephemeral(fmt.Sprintf("Failed to add subtask to %s. Please try again.", parentID)), nil
+	}
+	if parent == nil {
+		return ephemeral(fmt.Sprintf("Task %s not found.", parentID)), nil
+	}
+	if args.UserId != parent.CreatorID && args.UserId != parent.AssigneeID {
+		return ephemeral("You do not have permission to add subtasks to this task."), nil
+	}
+
+	created, err := c.taskService.CreateSubtask(parentID, args.UserId, summary, "", nil)
+	if err != nil {
+		if errors.Is(err, task.ErrParentNotFound) {
+			return ephemeral(fmt.Sprintf("Task %s not found.", parentID)), nil
+		}
+		c.client.Log.Error("Failed to create subtask", "parent_id", parentID, "error", err)
+		return ephemeral(fmt.Sprintf("Failed to add subtask to %s: %s", parentID, err.Error())), nil
+	}
+	return ephemeral(fmt.Sprintf("➕ Subtask **%s** added to **%s**.", created.Summary, parent.Summary)), nil
 }
 
 // setStatus calls the service and formats the result for the user.
@@ -530,6 +581,7 @@ func taskHelp() string {
 		"• `/task edit <id> [summary=...] [due=<ms>] [desc=...]` — partial update\n" +
 		"• `/task assign <id> @user` — assign a task to a user\n" +
 		"• `/task unassign <id>` — remove the assignee\n" +
+		"• `/task subtask <parentId> <summary>` — add a subtask\n" +
 		"• `/task remind <id> <15m|1h|1d|off>` — set or turn off a reminder\n" +
 		"• `/task help` — show this help"
 }
