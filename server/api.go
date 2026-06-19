@@ -33,6 +33,8 @@ func (p *Plugin) initRouter() *mux.Router {
 	tasks.HandleFunc("/{id:[^/]+}", p.patchTask).Methods(http.MethodPatch)
 	tasks.HandleFunc("/{id:[^/]+}", p.deleteTask).Methods(http.MethodDelete)
 	tasks.HandleFunc("/{id:[^/]+}/status", p.patchTaskStatus).Methods(http.MethodPatch)
+	tasks.HandleFunc("/{id:[^/]+}/reminder", p.setReminder).Methods(http.MethodPost)
+	tasks.HandleFunc("/{id:[^/]+}/reminder", p.deleteReminder).Methods(http.MethodDelete)
 
 	return router
 }
@@ -260,6 +262,55 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 		default:
 			p.writeError(w, http.StatusInternalServerError, err.Error())
 		}
+		return
+	}
+	p.writeJSON(w, updated)
+}
+
+// setReminderRequest is the JSON body for POST /tasks/:id/reminder.
+type setReminderRequest struct {
+	OffsetMS int64 `json:"offset_ms"`
+}
+
+// setReminder handles POST /tasks/:id/reminder.
+func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	var req setReminderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	updated, err := p.taskService.SetReminder(id, req.OffsetMS)
+	if err != nil {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
+			p.writeError(w, http.StatusNotFound, "task not found")
+		case errors.Is(err, task.ErrReminderNeedsDue):
+			p.writeError(w, http.StatusBadRequest, "task has no due date")
+		case req.OffsetMS <= 0:
+			// Invalid offset is a client error.
+			p.writeError(w, http.StatusBadRequest, "offset_ms must be positive")
+		default:
+			// Unexpected service/store failures are server errors; don't echo the
+			// raw error text to the client.
+			p.writeError(w, http.StatusInternalServerError, "failed to set reminder")
+		}
+		return
+	}
+	p.writeJSON(w, updated)
+}
+
+// deleteReminder handles DELETE /tasks/:id/reminder (turn reminders off).
+func (p *Plugin) deleteReminder(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	updated, err := p.taskService.ClearReminder(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	p.writeJSON(w, updated)

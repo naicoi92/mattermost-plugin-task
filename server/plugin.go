@@ -35,10 +35,18 @@ type Plugin struct {
 	// commands.
 	taskService *task.Service
 
+	// botUserID is the plugin bot's user id, used as the author of DM/card
+	// posts. Ensured in OnActivate via EnsureBot.
+	botUserID string
+
 	// router is the HTTP router for handling API requests.
 	router *mux.Router
 
 	backgroundJob *cluster.Job
+
+	// reminderJob is the cluster-scheduled job that fires due task reminders
+	// once per minute on a single node.
+	reminderJob *cluster.Job
 
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
@@ -51,6 +59,12 @@ type Plugin struct {
 // OnActivate is invoked when the plugin is activated. If an error is returned, the plugin will be deactivated.
 func (p *Plugin) OnActivate() error {
 	p.client = pluginapi.NewClient(p.API, p.Driver)
+
+	botID, err := p.ensureBot()
+	if err != nil {
+		return errors.Wrap(err, "failed to ensure bot")
+	}
+	p.botUserID = botID
 
 	p.kvstore = kvstore.NewKVStore(p.client)
 
@@ -69,17 +83,51 @@ func (p *Plugin) OnActivate() error {
 	if err != nil {
 		return errors.Wrap(err, "failed to schedule background job")
 	}
-
 	p.backgroundJob = job
+
+	reminderJob, err := cluster.Schedule(
+		p.API,
+		"TaskReminderJob",
+		cluster.MakeWaitForRoundedInterval(1*time.Minute),
+		p.runReminderJob,
+	)
+	if err != nil {
+		// OnActivate failed: OnDeactivate won't run, so clean up the already-
+		// scheduled backgroundJob to avoid an orphaned job.
+		if closeErr := p.backgroundJob.Close(); closeErr != nil {
+			p.API.LogError("Failed to close background job during cleanup", "err", closeErr)
+		}
+		return errors.Wrap(err, "failed to schedule reminder job")
+	}
+	p.reminderJob = reminderJob
 
 	return nil
 }
 
+// ensureBot creates or updates the plugin bot and returns its user id. The bot
+// authors all DM/card posts so user notifications come from a single Task bot
+// identity (see PLAN.md section 2.3 — EnsureBot in OnActivate, no manifest
+// declaration).
+func (p *Plugin) ensureBot() (string, error) {
+	bot := &model.Bot{
+		Username:    "task-bot",
+		DisplayName: "Task",
+		Description: "Bot created by the Task plugin for task notifications and DMs.",
+	}
+	ensured, err := p.client.Bot.EnsureBot(bot, pluginapi.ProfileImagePath(""))
+	if err != nil {
+		return "", err
+	}
+	return ensured, nil
+}
+
 // OnDeactivate is invoked when the plugin is deactivated.
 func (p *Plugin) OnDeactivate() error {
-	if p.backgroundJob != nil {
-		if err := p.backgroundJob.Close(); err != nil {
-			p.API.LogError("Failed to close background job", "err", err)
+	for _, job := range []*cluster.Job{p.backgroundJob, p.reminderJob} {
+		if job != nil {
+			if err := job.Close(); err != nil {
+				p.API.LogError("Failed to close job", "err", err)
+			}
 		}
 	}
 	return nil
