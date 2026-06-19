@@ -568,6 +568,101 @@ func TestSetStatus_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// Issue #22: a parent cannot be marked done while it has open subtasks.
+func TestSetStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	openSub, err := svc.Create(CreateInput{Summary: "still open", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	_ = openSub
+
+	_, err = svc.SetStatus(parent.ID, model.StatusDone)
+	require.Error(t, err)
+	var blocked ErrOpenSubtasks
+	require.ErrorAs(t, err, &blocked)
+	require.Len(t, blocked.Open, 1)
+	assert.Equal(t, "still open", blocked.Open[0])
+	assert.Contains(t, err.Error(), "still open", "error lists the open subtask")
+
+	// Parent status unchanged after the rejection.
+	got, gerr := svc.Get(parent.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, got)
+	assert.Equal(t, model.StatusTodo, got.Status)
+}
+
+// Issue #22: once all subtasks are terminal, the parent can be marked done.
+func TestSetStatus_ParentDoneAllowedWhenSubtasksTerminal(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	doneSub, err := svc.Create(CreateInput{Summary: "done", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	cancelledSub, err := svc.Create(CreateInput{Summary: "cancelled", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+	_, err = svc.SetStatus(doneSub.ID, model.StatusDone)
+	require.NoError(t, err)
+	_, err = svc.SetStatus(cancelledSub.ID, model.StatusCancelled)
+	require.NoError(t, err)
+
+	updated, err := svc.SetStatus(parent.ID, model.StatusDone)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusDone, updated.Status)
+}
+
+// Issue #22: cancelling a parent cascade-cancels open subtasks (covered by an
+// existing test); this one asserts the notification contract is the caller's
+// job — the service sends no per-subtask notification by itself.
+func TestSetStatus_CancelCascadeIsSilentInService(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	open, err := svc.Create(CreateInput{Summary: "open", CreatorID: "u1", ParentTaskID: parent.ID})
+	require.NoError(t, err)
+
+	updated, err := svc.SetStatus(parent.ID, model.StatusCancelled)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusCancelled, updated.Status)
+	// The open subtask is cascade-cancelled.
+	got, gerr := svc.Get(open.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, got)
+	assert.Equal(t, model.StatusCancelled, got.Status)
+}
+
+// Issue #22: nesting beyond maxSubtaskDepth is rejected (cycle/depth guard).
+func TestCreate_SubtaskDepthCapRejected(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	// Build a chain at the depth cap: root <- c1 <- ... <- cN.
+	root, err := svc.Create(CreateInput{Summary: "root", CreatorID: "u1"})
+	require.NoError(t, err)
+	cur := root
+	for i := range maxSubtaskDepth {
+		child, cerr := svc.Create(CreateInput{Summary: "child", CreatorID: "u1", ParentTaskID: cur.ID})
+		require.NoErrorf(t, cerr, "nest level %d should be allowed", i+1)
+		cur = child
+	}
+	// One more level exceeds the cap → rejected as a cycle/depth error.
+	_, err = svc.Create(CreateInput{Summary: "too deep", CreatorID: "u1", ParentTaskID: cur.ID})
+	assert.ErrorIs(t, err, ErrSubtaskCycle)
+}
+
+// Issue #22: an explicit cycle in the stored chain is detected by assertNoCycle.
+func TestAssertNoCycle_DetectsLoop(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	// Manually craft a cycle A -> B -> A at the store level.
+	store.tasks["A"] = model.Task{ID: "A", ParentTaskID: "B"}
+	store.tasks["B"] = model.Task{ID: "B", ParentTaskID: "A"}
+	err := svc.assertNoCycle("A", maxSubtaskDepth)
+	assert.ErrorIs(t, err, ErrSubtaskCycle)
+}
+
 func TestSetStatus_DoneStampsCompletedAtClearsCancelled(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)

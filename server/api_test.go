@@ -490,6 +490,22 @@ func TestPatchTaskStatus_BadJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// Issue #22: marking a parent done while it has open subtasks returns 409 with
+// a clear message naming the open subtask.
+func TestPatchTaskStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
+	p, _ := newTestPlugin()
+	parent, err := p.taskService.Create(task.CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	_, err = p.taskService.CreateSubtask(parent.ID, "u1", "still open", "", nil)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch,
+		"/api/v1/tasks/"+parent.ID+"/status", `{"status":"done"}`, "u1"))
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "still open")
+}
+
 func TestSetReminder_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin()
 	due := int64(100_000)

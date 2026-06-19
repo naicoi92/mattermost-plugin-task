@@ -513,6 +513,9 @@ func (c *Handler) setStatus(args *model.CommandArgs, id, status string) (*model.
 			return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
 		case errors.Is(err, task.ErrInvalidStatus):
 			return ephemeral(fmt.Sprintf("Invalid status %q.", status)), nil
+		case errors.As(err, &task.ErrOpenSubtasks{}):
+			// Parent-done guard: show the actionable message (lists open subtasks).
+			return ephemeral("⚠️ " + err.Error()), nil
 		default:
 			c.client.Log.Error("Failed to set task status", "task_id", id, "status", status, "error", err)
 			return ephemeral(fmt.Sprintf("Failed to update task %s. Please try again.", id)), nil
