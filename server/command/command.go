@@ -201,22 +201,31 @@ func (c *Handler) handleList(args *model.CommandArgs, rest []string) (*model.Com
 		ChannelID: args.ChannelId,
 		Limit:     task.DefaultLimit,
 	}
-	for _, tok := range rest {
+	for i := 0; i < len(rest); i++ {
+		tok := rest[i]
 		switch {
 		case tok == "mine" || tok == "channel" || tok == "all":
 			q.Scope = task.Scope(tok)
 		case taskmodel.IsValidStatus(tok):
 			q.Status = tok
-		case tok == "overdue" || tok == "today" || tok == "week":
+		case tok == "due":
+			// Accept the documented form "due <overdue|today|week>". The value
+			// may be the next token; the bare form ("week") is also accepted.
+			if i+1 < len(rest) && isDueValue(rest[i+1]) {
+				q.Due = rest[i+1]
+				i++
+			} else {
+				return ephemeral("Usage: /task list [mine|channel|all] [status] [due overdue|today|week]"), nil
+			}
+		case isDueValue(tok):
 			q.Due = tok
 		default:
-			return ephemeral(fmt.Sprintf("Unknown filter %q. Use mine|channel|all, a status, or overdue|today|week.", tok)), nil
+			return ephemeral(fmt.Sprintf("Unknown filter %q. Use mine|channel|all, a status, or due overdue|today|week.", tok)), nil
 		}
 	}
 	if q.Scope == task.ScopeChannel && q.ChannelID == "" {
 		return ephemeral("scope=channel needs a channel context; try /task list mine."), nil
 	}
-
 	tasks, err := c.taskService.List(q)
 	if err != nil {
 		c.client.Log.Error("Failed to list tasks", "error", err)
@@ -274,6 +283,11 @@ func (c *Handler) handleSearch(args *model.CommandArgs, rest []string) (*model.C
 		fmt.Fprintf(&b, "%d. %s\n", i+1, formatTaskLine(t))
 	}
 	return ephemeral(b.String()), nil
+}
+
+// isDueValue reports whether tok is a recognized /task list due-bucket value.
+func isDueValue(tok string) bool {
+	return tok == "overdue" || tok == "today" || tok == "week"
 }
 
 // formatTaskLine renders one task as a single list line: "summary (id) — status".

@@ -342,6 +342,41 @@ func TestTaskList_BadFilter(t *testing.T) {
 	assert.Contains(t, resp.Text, "Unknown filter")
 }
 
+func TestTaskList_DueKeywordForm(t *testing.T) {
+	// Documented syntax "due <overdue|today|week>" should be accepted.
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{listResult: []taskmodel.Task{{ID: "T1", Summary: "x"}}}
+	handler := NewCommandHandler(env.client, svc)
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task list mine due week"})
+	require.NoError(t, err)
+	assert.NotContains(t, resp.Text, "Unknown filter")
+	assert.Equal(t, "week", svc.listQuery.Due)
+}
+
+func TestTaskList_DueBareValue(t *testing.T) {
+	// Bare due value ("week" without the "due" keyword) also accepted.
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{}
+	handler := NewCommandHandler(env.client, svc)
+
+	_, err := handler.Handle(&model.CommandArgs{Command: "/task list today"})
+	require.NoError(t, err)
+	assert.Equal(t, "today", svc.listQuery.Due)
+}
+
+func TestTaskList_DueWithoutValue(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task list due"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Usage")
+}
+
 func TestTaskShow_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
