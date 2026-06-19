@@ -52,6 +52,8 @@ type fakeStatusService struct {
 	listResult   []taskmodel.Task
 	listErr      error
 	searchKey    string
+	searchLimit  int
+	getID        string
 	searchResult []taskmodel.Task
 	searchErr    error
 }
@@ -69,6 +71,7 @@ func (f *fakeStatusService) Patch(id string, in task.PatchInput) (*taskmodel.Tas
 }
 
 func (f *fakeStatusService) Get(id string) (*taskmodel.Task, error) {
+	f.getID = id
 	return f.getResult, f.getErr
 }
 
@@ -79,6 +82,7 @@ func (f *fakeStatusService) List(q task.ListQuery) ([]taskmodel.Task, error) {
 
 func (f *fakeStatusService) Search(keyword string, limit int) ([]taskmodel.Task, error) {
 	f.searchKey = keyword
+	f.searchLimit = limit
 	return f.searchResult, f.searchErr
 }
 
@@ -351,6 +355,7 @@ func TestTaskShow_Command(t *testing.T) {
 	assert.Contains(t, resp.Text, "Review PR")
 	assert.Contains(t, resp.Text, "T1")
 	assert.Contains(t, resp.Text, "desc")
+	assert.Equal(t, "T1", svc.getID)
 }
 
 func TestTaskShow_NotFound(t *testing.T) {
@@ -385,6 +390,7 @@ func TestTaskSearch_Command(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "login bug")
 	assert.Equal(t, "login bug", svc.searchKey)
+	assert.Equal(t, task.DefaultLimit, svc.searchLimit)
 }
 
 func TestTaskSearch_Empty(t *testing.T) {
