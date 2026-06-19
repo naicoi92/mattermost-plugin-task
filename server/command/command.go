@@ -329,7 +329,7 @@ func (c *Handler) handleAdd(args *model.CommandArgs, rest []string) (*model.Comm
 
 	channelID := args.ChannelId
 	// A DM with the bot defaults to a Personal task (no channel scope).
-	if c.isBotDM(args.ChannelId) {
+	if c.isBotDM(args.UserId, args.ChannelId) {
 		channelID = ""
 	}
 
@@ -430,16 +430,18 @@ func (c *Handler) handleSearch(args *model.CommandArgs, rest []string) (*model.C
 	return ephemeral(b.String()), nil
 }
 
-// isBotDM reports whether channelID is a DM with the plugin bot. Used by
-// handleAdd to default to a Personal task there. Best-effort: if the DM lookup
-// fails (permissions, transient), it returns false so the task defaults to the
-// channel scope rather than blocking creation.
-func (c *Handler) isBotDM(channelID string) bool {
-	if c.botUserID == "" || channelID == "" {
+// isBotDM reports whether channelID is the DM channel between the invoking user
+// and the plugin bot. Used by handleAdd to default to a Personal task there.
+// GetDirect takes two user ids and returns their DM channel (creating it if
+// absent), so we resolve the bot↔user DM and check it matches channelID.
+// Best-effort: on lookup failure it returns false so creation defaults to the
+// channel scope rather than blocking.
+func (c *Handler) isBotDM(userID, channelID string) bool {
+	if c.botUserID == "" || userID == "" || channelID == "" {
 		return false
 	}
-	dm, err := c.client.Channel.GetDirect(c.botUserID, channelID)
-	return err == nil && dm.Id == channelID
+	dm, err := c.client.Channel.GetDirect(c.botUserID, userID)
+	return err == nil && dm != nil && dm.Id == channelID
 }
 
 // statusGlyph returns a compact status indicator for list/search output.
