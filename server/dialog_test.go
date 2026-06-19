@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -33,13 +34,13 @@ func TestBuildQuickListDialog_Structure(t *testing.T) {
 }
 
 func TestBuildQuickListDialog_TruncatesLongSummary(t *testing.T) {
-	long := string(make([]byte, 100))
-	for i := range long {
-		long = long[:i] + "x" + long[i+1:]
-	}
+	long := strings.Repeat("x", 120)
 	dialog := buildQuickListDialog("u1", []taskmodel.Task{{ID: "T1", Summary: long, Status: taskmodel.StatusTodo}})
 	opt := dialog.Elements[3].Options[0].Text
-	assert.Less(t, len(opt), len(long)+30, "option label is truncated")
+	// Label is "<summary · status>"; the summary half is the first 59 chars + "…".
+	assert.True(t, strings.HasSuffix(strings.SplitN(opt, " · ", 2)[0], "…"),
+		"truncated summary ends with ellipsis: %q", opt)
+	assert.Contains(t, opt, "To Do", "status half preserved")
 }
 
 func TestBuildTaskDetailDialog_EditableFields(t *testing.T) {
@@ -105,6 +106,7 @@ func TestParseTaskDetailSubmission_AllChanged(t *testing.T) {
 	assert.Equal(t, "new", *update.Patch.Summary)
 	assert.Equal(t, taskmodel.StatusInProgress, update.NewStatus)
 	assert.Equal(t, "u-new", update.NewAssignee)
+	assert.True(t, update.AssigneeSet)
 	require.NotNil(t, update.Patch.Due)
 	assert.Equal(t, int64(1_700_000_000_000), *update.Patch.Due)
 }
@@ -140,6 +142,18 @@ func TestParseTaskDetailSubmission_NoChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, update.Patch.UpdateFields)
 	assert.Empty(t, update.NewStatus)
+	assert.False(t, update.AssigneeSet, "no assignee change")
+}
+
+func TestParseTaskDetailSubmission_ClearsAssignee(t *testing.T) {
+	// Clearing the assignee (empty string) must be distinguishable from
+	// "unchanged" via AssigneeSet, so the dialog can unassign.
+	current := &taskmodel.Task{ID: "T1", Summary: "x", Status: taskmodel.StatusTodo, AssigneeID: "u-old"}
+	update, err := parseTaskDetailSubmission(map[string]any{
+		dialogFieldAssignee: "",
+	}, current)
+	require.NoError(t, err)
+	assert.True(t, update.AssigneeSet, "clearing the assignee sets the flag")
 	assert.Empty(t, update.NewAssignee)
 }
 

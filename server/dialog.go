@@ -190,11 +190,14 @@ func buildTaskDetailDialog(t *taskmodel.Task, subtaskDone, subtaskTotal int, rec
 // parseTaskDetailSubmission extracts a PATCH-shaped update from a Task Detail
 // dialog submission. status is validated; due is parsed when present (empty
 // clears it). Returns the PatchInput, an optional new status ("" when
-// unchanged), the new assignee id ("" when unchanged), and an error.
+// unchanged), and the assignee change. NewAssignee/AssigneeSet together
+// express the change: AssigneeSet=true means the field changed (including a
+// clear to ""), so the dialog can unassign; false means unchanged.
 type taskDetailUpdate struct {
 	Patch       task.PatchInput
 	NewStatus   string // "" => unchanged
-	NewAssignee string // "" => unchanged
+	NewAssignee string
+	AssigneeSet bool
 }
 
 func parseTaskDetailSubmission(sub map[string]any, current *taskmodel.Task) (taskDetailUpdate, error) {
@@ -241,9 +244,14 @@ func parseTaskDetailSubmission(sub map[string]any, current *taskmodel.Task) (tas
 		}
 	}
 
-	// Assignee (handled via Assign, not Patch).
-	if a, ok := sub[dialogFieldAssignee].(string); ok && a != current.AssigneeID {
-		out.NewAssignee = a
+	// Assignee (handled via Assign, not Patch). A distinct AssigneeSet flag
+	// distinguishes "user cleared the assignee" (empty string, set) from
+	// "unchanged" (no submission), so the dialog can unassign.
+	if a, ok := sub[dialogFieldAssignee].(string); ok {
+		if a != current.AssigneeID {
+			out.NewAssignee = a
+			out.AssigneeSet = true
+		}
 	}
 
 	return out, nil
@@ -342,8 +350,9 @@ func (p *Plugin) submitTaskDetailDialog(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	// Assignee change.
-	if update.NewAssignee != "" {
+	// Assignee change (including a clear to ""). AssigneeSet distinguishes
+	// "cleared" from "unchanged".
+	if update.AssigneeSet {
 		if _, _, err := p.taskService.Assign(taskID, update.NewAssignee); err != nil {
 			writeDialogResponse(w, "Failed to change the assignee. Please try again.")
 			return
