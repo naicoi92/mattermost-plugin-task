@@ -75,17 +75,21 @@ export default class Plugin {
 
         // Real-time updates: the server publishes "task_updated" on every
         // create/update/delete/status/assignee/due/comment/reminder change (#32).
-        // The handler upserts the task into the Redux cache so every view
-        // reflects it; the full stale-event (seq/updated_at) drop logic lands in #32.
+        // The handler forwards the server's seq so the reducer can drop stale
+        // out-of-order events; a delete carries task_id without a task body.
         registry.registerWebSocketEventHandler('task_updated', (msg: WebSocketMessage) => {
-            const data = (msg.data ?? {}) as {task_id?: string; task?: Record<string, unknown>};
+            const data = (msg.data ?? {}) as {
+                task_id?: string;
+                task?: Record<string, unknown>;
+                seq?: number;
+            };
+            const seq = typeof data.seq === 'number' ? data.seq : undefined;
             if (data.task_id && !data.task) {
-                // A delete carries task_id without a task body.
-                store.dispatch({type: ACTION_TYPES.DELETE_TASK, taskID: data.task_id});
+                store.dispatch({type: ACTION_TYPES.DELETE_TASK, taskID: data.task_id, seq});
                 return;
             }
             if (data.task) {
-                store.dispatch({type: ACTION_TYPES.UPSERT_TASK, task: data.task});
+                store.dispatch({type: ACTION_TYPES.UPSERT_TASK, task: data.task, seq});
             }
         });
 

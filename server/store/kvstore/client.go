@@ -1,6 +1,7 @@
 package kvstore
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -9,6 +10,10 @@ import (
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
 )
+
+// ErrTaskNotFound is returned by TouchTaskUpdatedAt when the target task no
+// longer exists at CAS-read time.
+var ErrTaskNotFound = errors.New("task not found")
 
 // Key prefix constants. These are used by both the store implementation and
 // callers that need to build index keys manually.
@@ -120,6 +125,35 @@ func (c Client) SaveTask(task model.Task) error {
 	_, err := c.client.KV.Set(TaskKey(task.ID), task)
 	if err != nil {
 		return errors.Wrapf(err, "failed to save task %s", task.ID)
+	}
+	return nil
+}
+
+// TouchTaskUpdatedAt atomically updates only the UpdatedAt field of the task
+// with the given id, using compare-and-set so a concurrent change to other
+// fields (status/assignee/due) is never clobbered. A missing task yields
+// ErrTaskNotFound; the CAS retries on conflict (see SetAtomicWithRetries).
+func (c Client) TouchTaskUpdatedAt(id string, updatedAt int64) error {
+	if id == "" {
+		return errors.New("task ID is required")
+	}
+	err := c.SetAtomicWithRetries(TaskKey(id), func(old []byte) (any, error) {
+		if len(old) == 0 {
+			return nil, ErrTaskNotFound
+		}
+		var task model.Task
+		if err := json.Unmarshal(old, &task); err != nil {
+			return nil, errors.Wrapf(err, "failed to decode task %s for touch", id)
+		}
+		task.UpdatedAt = updatedAt
+		return task, nil
+	})
+	if err != nil {
+		// Unwrap so callers see ErrTaskNotFound directly on a missing task.
+		if errors.Is(err, ErrTaskNotFound) {
+			return err
+		}
+		return errors.Wrapf(err, "failed to touch UpdatedAt for task %s", id)
 	}
 	return nil
 }

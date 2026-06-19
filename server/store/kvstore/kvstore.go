@@ -25,6 +25,10 @@ type KVStore interface {
 	GetTask(id string) (*model.Task, error)
 	// SaveTask persists the given task under t:{task.ID}.
 	SaveTask(task model.Task) error
+	// TouchTaskUpdatedAt atomically updates only the UpdatedAt field of task id,
+	// using compare-and-set so it can't clobber a concurrent change to other
+	// fields (status/assignee/due). Returns ErrTaskNotFound if the task is gone.
+	TouchTaskUpdatedAt(id string, updatedAt int64) error
 	// DeleteTask removes the task entity t:{id}.
 	DeleteTask(id string) error
 

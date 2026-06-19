@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
+	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -46,8 +47,17 @@ func (f *fakeTaskStore) GetTask(id string) (*model.Task, error) {
 	return &t, nil
 }
 func (f *fakeTaskStore) SaveTask(t model.Task) error { f.tasks[t.ID] = t; return nil }
-func (f *fakeTaskStore) DeleteTask(id string) error  { delete(f.tasks, id); return nil }
-func (f *fakeTaskStore) SaveIndex(key string) error  { f.indexes[key] = struct{}{}; return nil }
+func (f *fakeTaskStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
+	t, ok := f.tasks[id]
+	if !ok {
+		return kvstore.ErrTaskNotFound
+	}
+	t.UpdatedAt = updatedAt
+	f.tasks[id] = t
+	return nil
+}
+func (f *fakeTaskStore) DeleteTask(id string) error { delete(f.tasks, id); return nil }
+func (f *fakeTaskStore) SaveIndex(key string) error { f.indexes[key] = struct{}{}; return nil }
 func (f *fakeTaskStore) DeleteIndex(key string) error {
 	delete(f.indexes, key)
 	return nil
@@ -142,6 +152,9 @@ func newTestPlugin() (*Plugin, *fakeTaskStore) {
 	api.On("UpdatePost", mock.Anything).Return(&mmmodel.Post{}, nil).Maybe()
 	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
 	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&mmmodel.Channel{Id: "dm-channel"}, nil).Maybe()
+	// PublishWebSocketEvent is invoked by the real-time broadcast helpers
+	// (server/websocket.go); a permissive mock keeps mutation tests panic-free.
+	api.On("PublishWebSocketEvent", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	p := &Plugin{
 		taskService: task.NewService(store),
 		botUserID:   "bot",

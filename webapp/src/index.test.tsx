@@ -169,11 +169,29 @@ describe('WebSocket task_updated handler', () => {
         await plugin.initialize(registry as never, store);
 
         const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: {task_id?: string; task?: Record<string, unknown>}},
+            msg: {data: {task_id?: string; task?: Record<string, unknown>; seq?: number}},
         ) => void;
-        handler({data: {task_id: '1'}});
+        handler({data: {task_id: '1', seq: 7}});
 
-        expect(actions).toContainEqual({type: ACTION_TYPES.DELETE_TASK, taskID: '1'});
+        expect(actions).toContainEqual({type: ACTION_TYPES.DELETE_TASK, taskID: '1', seq: 7});
+    });
+
+    test('forwards seq on an upsert so the reducer can drop stale events', async () => {
+        const {store, actions} = fakeStore();
+        const registry = fakeRegistry();
+        const plugin = new Plugin();
+        await plugin.initialize(registry as never, store);
+
+        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
+            msg: {data: {task_id?: string; task?: Record<string, unknown>; seq?: number}},
+        ) => void;
+        handler({data: {task_id: '1', task: {id: '1', summary: 'hi'}, seq: 42}});
+
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.UPSERT_TASK,
+            task: {id: '1', summary: 'hi'},
+            seq: 42,
+        });
     });
 
     test('ignores an empty payload', async () => {
@@ -183,7 +201,7 @@ describe('WebSocket task_updated handler', () => {
         await plugin.initialize(registry as never, store);
 
         const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: {task_id?: string; task?: Record<string, unknown>}},
+            msg: {data: {task_id?: string; task?: Record<string, unknown>; seq?: number}},
         ) => void;
         handler({data: {}});
 

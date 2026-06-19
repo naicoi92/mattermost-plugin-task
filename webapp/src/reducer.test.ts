@@ -135,3 +135,56 @@ describe('reducer returns prior state for unknown actions', () => {
         expect(state).toBe(before);
     });
 });
+
+describe('stale-event drop (seq/updated_at, #32)', () => {
+    test('UPSERT_TASK with an older seq is dropped', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'new'}), seq: 100});
+        const state = reducer(s1, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'stale'}), seq: 50});
+
+        // The older seq must not overwrite the newer state.
+        expect(summaryOf(state.tasks['1'])).toBe('new');
+        expect(state.lastSeq['1']).toBe(100);
+    });
+
+    test('UPSERT_TASK with an equal seq is dropped (only strictly newer applies)', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'a'}), seq: 10});
+        const state = reducer(s1, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'b'}), seq: 10});
+        expect(summaryOf(state.tasks['1'])).toBe('a');
+    });
+
+    test('UPSERT_TASK with a newer seq is applied', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'old'}), seq: 10});
+        const state = reducer(s1, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'fresh'}), seq: 20});
+        expect(summaryOf(state.tasks['1'])).toBe('fresh');
+        expect(state.lastSeq['1']).toBe(20);
+    });
+
+    test('UPSERT_TASK without seq always applies (local optimistic mutation)', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'a'}), seq: 10});
+        const state = reducer(s1, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'local'})});
+        expect(summaryOf(state.tasks['1'])).toBe('local');
+    });
+
+    test('DELETE_TASK with an older seq does not evict a newer task', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'alive'}), seq: 100});
+        const state = reducer(s1, {type: ACTION_TYPES.DELETE_TASK, taskID: '1', seq: 50});
+        expect(state.tasks['1']).toBeDefined();
+        expect(summaryOf(state.tasks['1'])).toBe('alive');
+    });
+
+    test('DELETE_TASK with a newer-or-equal seq evicts', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1'), seq: 10});
+        const state = reducer(s1, {type: ACTION_TYPES.DELETE_TASK, taskID: '1', seq: 10});
+        expect(state.tasks['1']).toBeUndefined();
+        expect(state.lastSeq['1']).toBeUndefined();
+    });
+
+    test('seq is tracked per task independently', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1'), seq: 5});
+        const s2 = reducer(s1, {type: ACTION_TYPES.UPSERT_TASK, task: task('2'), seq: 100});
+
+        // task 2's high seq must not gate task 1.
+        const state = reducer(s2, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'upd'}), seq: 6});
+        expect(summaryOf(state.tasks['1'])).toBe('upd');
+    });
+});
