@@ -23,7 +23,7 @@ import type {WebSocketMessage} from '@mattermost/client';
 import type {GlobalState} from '@mattermost/types/store';
 
 import KanbanModal from 'components/kanban_modal/kanban_modal';
-import NewTaskDialog from 'components/new_task_dialog/new_task_dialog';
+import NewTaskDialog from 'components/new_task_dialog/connected_new_task_dialog';
 import TaskSidebar from 'components/task_sidebar/task_sidebar';
 
 import type {PluginRegistry} from 'types/mattermost-webapp';
@@ -101,28 +101,59 @@ export default class Plugin {
         registry.registerTranslations(getTranslationsForLocale);
 
         // Post dropdown action: "Tạo task" creates a task from a message (#16).
-        // The full handler (prefilling summary from the message, opening the
-        // dialog) lands with #16; this wires the menu item so the integration is
-        // registered and the desktop dropdown shows it. The registry passes the
-        // source post to the action at runtime; the filter always shows the item.
+        // At runtime the registry passes the source Post to the action; we split
+        // its message into summary (first line) and description (rest), then open
+        // the New Task dialog pre-filled. The dialog submits through POST /tasks
+        // like the normal New Task flow.
         registry.registerPostDropdownMenuAction(
             'Tạo task',
-            () => openNewTaskFromMessage(store),
+            (post?: {message?: string; channel_id?: string}) => {
+                openNewTaskFromMessage(store, post);
+            },
             () => true,
         );
     }
 }
 
-// openNewTaskFromMessage is the post-dropdown handler shared with the server-side
-// post action from #16. For now it opens the RHS so the user can use the New Task
-// button; #16 will replace this with a proper dialog open + summary prefill from
-// the source message. Declared module-level so it can be referenced by name in
-// the registration and unit-tested independently.
-export function openNewTaskFromMessage(store: Store<GlobalState>): void {
-    // Placeholder until #16 lands the real dialog flow: open the RHS so the task
-    // list is visible while the create-from-message flow is built out.
-    store.dispatch({type: ACTION_TYPES.OPEN_RHS});
+// openNewTaskFromMessage is the post-dropdown handler (#16). It splits the
+// source message into a summary (first non-empty line, truncated) and a
+// description (the remaining lines), then dispatches OPEN_NEW_TASK_DIALOG so the
+// NewTaskDialog root component opens pre-filled. Declared module-level so it can
+// be referenced by name in the registration and unit-tested independently.
+export function openNewTaskFromMessage(
+    store: Store<GlobalState>,
+    post?: {message?: string; channel_id?: string},
+): void {
+    const message = post?.message ?? '';
+    const {summary, description} = splitMessageForTask(message);
+    store.dispatch({
+        type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+        prefillSummary: summary,
+        prefillDescription: description,
+        channelID: post?.channel_id,
+    });
 }
+
+// splitMessageForTask derives a task summary and description from a message body.
+// The first non-empty line becomes the summary (truncated to summaryLimit chars
+// with an ellipsis); any remaining lines form the description. An empty message
+// yields empty fields so the dialog opens blank.
+export function splitMessageForTask(message: string): {summary: string; description: string} {
+    const trimmed = message.trim();
+    if (trimmed === '') {
+        return {summary: '', description: ''};
+    }
+    const lines = trimmed.split('\n');
+    const firstLine = lines[0].trim();
+    const summary = firstLine.length > summaryLimit ?
+        firstLine.slice(0, summaryLimit - 1) + '…' :
+        firstLine;
+    const description = lines.slice(1).join('\n').trim();
+    return {summary, description};
+}
+
+// summaryLimit keeps the prefilled summary a reasonable single-line length.
+const summaryLimit = 120;
 
 declare global {
     interface Window {

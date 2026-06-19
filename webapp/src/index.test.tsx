@@ -7,7 +7,7 @@
 // reducer, translations, and the post dropdown action. Uses a fake registry +
 // store so no host app is needed.
 
-import Plugin, {openNewTaskFromMessage} from 'index';
+import Plugin, {openNewTaskFromMessage, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
@@ -108,10 +108,70 @@ describe('Plugin.initialize registrations (#27)', () => {
 });
 
 describe('openNewTaskFromMessage', () => {
-    test('opens the RHS', () => {
+    test('opens the New Task dialog with prefilled summary/description from the message', () => {
+        const {store, actions} = fakeStore();
+        openNewTaskFromMessage(store, {message: 'Fix the bug\nDetails here\nMore detail', channel_id: 'ch1'});
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: 'Fix the bug',
+            prefillDescription: 'Details here\nMore detail',
+            channelID: 'ch1',
+        });
+    });
+
+    test('an empty message opens the dialog with blank fields', () => {
+        const {store, actions} = fakeStore();
+        openNewTaskFromMessage(store, {message: ''});
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: '',
+            prefillDescription: '',
+            channelID: undefined,
+        });
+    });
+
+    test('a missing post opens the dialog blank', () => {
         const {store, actions} = fakeStore();
         openNewTaskFromMessage(store);
-        expect(actions).toContainEqual({type: ACTION_TYPES.OPEN_RHS});
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            prefillSummary: '',
+            prefillDescription: '',
+            channelID: undefined,
+        });
+    });
+});
+
+describe('splitMessageForTask', () => {
+    test('first line is the summary, rest is the description', () => {
+        const out = splitMessageForTask('Buy milk\n2% organic\nAt the store');
+        expect(out.summary).toBe('Buy milk');
+        expect(out.description).toBe('2% organic\nAt the store');
+    });
+
+    test('a single line yields an empty description', () => {
+        const out = splitMessageForTask('Just a summary');
+        expect(out.summary).toBe('Just a summary');
+        expect(out.description).toBe('');
+    });
+
+    test('an empty message yields empty fields', () => {
+        const out = splitMessageForTask('   ');
+        expect(out.summary).toBe('');
+        expect(out.description).toBe('');
+    });
+
+    test('a long first line is truncated with an ellipsis', () => {
+        const long = 'x'.repeat(200);
+        const out = splitMessageForTask(long);
+        expect(out.summary.length).toBe(120);
+        expect(out.summary.endsWith('…')).toBe(true);
+    });
+
+    test('leading/trailing whitespace is trimmed', () => {
+        const out = splitMessageForTask('\n  Summary  \n  Desc  \n');
+        expect(out.summary).toBe('Summary');
+        expect(out.description).toBe('Desc');
     });
 });
 
