@@ -15,9 +15,10 @@ export const TaskStatus = {
 
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 
-// Task mirrors server/model/task.Task. Pointer-typed fields use `number | null`
-// so the webapp can represent an absent value distinct from zero, matching the
-// server's `omitempty` + `*int64` semantics.
+// Task mirrors server/model/task.Task. Optional fields (`?:`) are absent when
+// the server omits them (matching Go's `omitempty` on a `*int64`), which in
+// TypeScript is `number | undefined`. This is distinct from PatchTaskInput
+// below, which uses explicit `| null` to signal "clear this field" on a PATCH.
 export interface Task {
     id: string;
     summary: string;
