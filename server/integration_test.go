@@ -97,6 +97,7 @@ func TestIntegration_CreateAssignStatusNotifies(t *testing.T) {
 	})
 	require.Len(t, api.dms, 1, "assignee DM'd on assign")
 	assert.Contains(t, api.dms[0].Message, "notification.assigned")
+	assert.Equal(t, "dm:u-assignee:bot", api.dms[0].ChannelId, "DM targets the assignee")
 
 	// Mark done: card should render terminal + creator+assignee DM'd (minus actor).
 	done, err := svc.SetStatus(created.ID, taskmodel.StatusDone)
@@ -112,6 +113,7 @@ func TestIntegration_CreateAssignStatusNotifies(t *testing.T) {
 	// Only the assignee is DM'd (actor=creator excluded).
 	require.Len(t, api.dms, 1)
 	assert.Contains(t, api.dms[0].Message, "notification.completed")
+	assert.Equal(t, "dm:u-assignee:bot", api.dms[0].ChannelId, "DM targets the assignee")
 }
 
 // remStore is a KVStore fake that actually persists reminders (unlike the
@@ -190,7 +192,8 @@ func TestIntegration_ReminderFiresOnceAndSkipsTerminal(t *testing.T) {
 	due2 := int64(100_000)
 	doneTask, err := svc.Create(task.CreateInput{Summary: "done", CreatorID: "u1", AssigneeID: "u2", Due: &due2})
 	require.NoError(t, err)
-	_, _ = svc.SetReminder(doneTask.ID, 60_000)
+	_, err = svc.SetReminder(doneTask.ID, 60_000)
+	require.NoError(t, err)
 	_, err = svc.SetStatus(doneTask.ID, taskmodel.StatusDone)
 	require.NoError(t, err)
 
