@@ -66,6 +66,7 @@
   "webapp.task.assignee": "Người làm",
   "webapp.task.due": "Hạn chót",
   "webapp.task.description": "Mô tả",
+  "webapp.task.scope": "Phạm vi",
   "webapp.task.scope.personal": "Cá nhân",
   "webapp.task.scope.channel": "Kênh",
   "webapp.task.create": "Tạo",

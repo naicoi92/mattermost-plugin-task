@@ -66,6 +66,7 @@
   "webapp.task.assignee": "Assignee",
   "webapp.task.due": "Due date",
   "webapp.task.description": "Description",
+  "webapp.task.scope": "Scope",
   "webapp.task.scope.personal": "Personal",
   "webapp.task.scope.channel": "Channel",
   "webapp.task.create": "Create",
