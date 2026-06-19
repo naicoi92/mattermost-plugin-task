@@ -9,6 +9,13 @@
 import reducer, {ACTION_TYPES} from 'reducer';
 import type {TaskPartial} from 'reducer';
 
+// summaryOf reads the summary field off a TaskPartial (or null) for assertions,
+// avoiding a direct cast that the index signature makes type-unsafe. The cast
+// through `unknown` is intentional: tests only ever read fields they set.
+function summaryOf(t: TaskPartial | null): unknown {
+    return (t as unknown as {summary?: unknown})?.summary;
+}
+
 function task(id: string, extra: Partial<TaskPartial> = {}): TaskPartial {
     return {id, summary: 't', ...extra};
 }
@@ -66,19 +73,19 @@ describe('task cache upsert', () => {
     test('UPSERT_TASK replaces an existing task', () => {
         const s1 = reducer(undefined, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'a'})});
         const s2 = reducer(s1, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'b'})});
-        expect((s2.tasks['1'] as {summary: string}).summary).toBe('b');
+        expect(summaryOf(s2.tasks['1'])).toBe('b');
     });
 
     test('UPSERT_TASK refreshes the selected task when it is the one updated', () => {
         const selected = reducer(undefined, {type: ACTION_TYPES.SELECT_TASK, taskID: '1', task: task('1', {summary: 'old'})});
         const state = reducer(selected, {type: ACTION_TYPES.UPSERT_TASK, task: task('1', {summary: 'new'})});
-        expect((state.selectedTask as {summary: string}).summary).toBe('new');
+        expect(summaryOf(state.selectedTask)).toBe('new');
     });
 
     test('UPSERT_TASK does not touch the selected task when updating another', () => {
         const selected = reducer(undefined, {type: ACTION_TYPES.SELECT_TASK, taskID: '1', task: task('1', {summary: 'mine'})});
         const state = reducer(selected, {type: ACTION_TYPES.UPSERT_TASK, task: task('2', {summary: 'other'})});
-        expect((state.selectedTask as {summary: string}).summary).toBe('mine');
+        expect(summaryOf(state.selectedTask)).toBe('mine');
     });
 
     test('UPSERT_TASK without a task is a no-op', () => {

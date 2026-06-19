@@ -57,13 +57,13 @@ describe('Plugin.initialize registrations (#27)', () => {
 
         // RHS component with a title.
         expect(registry.registerRightHandSidebarComponent).toHaveBeenCalledTimes(1);
-        const rhsArgs = registry.registerRightHandSidebarComponent.mock.calls[0];
+        const rhsArgs = registry.registerRightHandSidebarComponent.mock.calls[0] as unknown[];
         expect(typeof rhsArgs[0]).toBe('function'); // TaskSidebar component
         expect(rhsArgs[1]).toBe('Tasks');
 
         // Channel header button: icon, action, dropdown text, tooltip.
         expect(registry.registerChannelHeaderButtonAction).toHaveBeenCalledTimes(1);
-        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0];
+        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
         expect(headerArgs[2]).toBe('Tasks');
         expect(headerArgs[3]).toBe('Mở danh sách task');
 
@@ -86,7 +86,7 @@ describe('Plugin.initialize registrations (#27)', () => {
 
         // Post dropdown action "Tạo task".
         expect(registry.registerPostDropdownMenuAction).toHaveBeenCalledTimes(1);
-        const dropArgs = registry.registerPostDropdownMenuAction.mock.calls[0];
+        const dropArgs = registry.registerPostDropdownMenuAction.mock.calls[0] as unknown[];
         expect(dropArgs[0]).toBe('Tạo task');
         expect(typeof dropArgs[1]).toBe('function'); // action
         expect(typeof dropArgs[2]).toBe('function'); // filter
@@ -98,7 +98,7 @@ describe('Plugin.initialize registrations (#27)', () => {
         const plugin = new Plugin();
         await plugin.initialize(registry as never, store);
 
-        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0];
+        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
         const buttonAction = headerArgs[1] as () => void;
         buttonAction();
 
