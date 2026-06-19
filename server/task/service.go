@@ -266,6 +266,14 @@ func (s *Service) AddComment(taskID, userID, content string) (model.Comment, Com
 	if err := s.store.SaveComment(taskID, comment); err != nil {
 		return model.Comment{}, CommentEvent{}, err
 	}
+
+	// A comment is a task interaction, so bump the task's UpdatedAt. This keeps
+	// the WebSocket seq (which equals UpdatedAt) monotonic across a comment, so
+	// a "comment" event is not dropped by the webapp as stale (#32).
+	task.UpdatedAt = now
+	if err := s.store.SaveTask(*task); err != nil {
+		return model.Comment{}, CommentEvent{}, err
+	}
 	return comment, CommentEvent{
 		TaskID:     taskID,
 		CommentID:  comment.ID,

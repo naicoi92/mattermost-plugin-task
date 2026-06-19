@@ -871,6 +871,13 @@ func TestListComments_EmptyWhenNone(t *testing.T) {
 
 // Issue #24: AddComment persists a comment and returns a notification event.
 func TestAddComment_PersistsAndReturnsEvent(t *testing.T) {
+	// Stamp times deterministically so the UpdatedAt-bump assertion below is
+	// exact rather than racy on real-clock millisecond resolution.
+	origNow := nowFunc
+	defer func() { nowFunc = origNow }()
+	t0 := int64(1000)
+	nowFunc = func() int64 { t0++; return t0 }
+
 	store := newFakeStore()
 	svc := NewService(store)
 	parent, err := svc.Create(CreateInput{Summary: "task", CreatorID: "u1", AssigneeID: "u2"})
@@ -890,6 +897,12 @@ func TestAddComment_PersistsAndReturnsEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, comments, 1)
 	assert.Equal(t, comment.ID, comments[0].ID)
+
+	// A comment bumps the task's UpdatedAt so the WebSocket seq (which equals
+	// UpdatedAt) is monotonic and a "comment" event isn't dropped as stale (#32).
+	reloaded, err := svc.Get(parent.ID)
+	require.NoError(t, err)
+	assert.Greater(t, reloaded.UpdatedAt, parent.UpdatedAt, "AddComment must refresh task UpdatedAt")
 }
 
 func TestAddComment_EmptyContentRejected(t *testing.T) {

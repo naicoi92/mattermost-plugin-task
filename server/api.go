@@ -641,7 +641,13 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	p.writeJSON(w, comment)
 
 	// Real-time: a new comment arrived — Task Detail comment list refreshes (#32).
-	p.broadcastTaskUpdated(t, []string{"comment"})
+	// Reload the task: AddComment bumped UpdatedAt, so the pre-comment snapshot `t`
+	// has a stale seq that the webapp would drop as out-of-order.
+	fresh, _ := p.taskService.Get(taskID)
+	if fresh == nil {
+		fresh = t
+	}
+	p.broadcastTaskUpdated(fresh, []string{"comment"})
 }
 
 // listComments handles GET /tasks/:id/comments, returning comments sorted by
