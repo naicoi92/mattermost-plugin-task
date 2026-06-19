@@ -85,7 +85,11 @@ func (p *Plugin) OnActivate() error {
 
 	p.taskService = task.NewService(p.kvstore)
 
-	p.commandClient = command.NewCommandHandler(p.client, p.taskService, commandNotifier{p.notifier})
+	p.commandClient = command.NewCommandHandler(p.client, p.taskService, command.Options{
+		Notifier:       commandNotifier{p.notifier},
+		AssignNotifier: commandAssignNotifier{p.notifier},
+		Users:          userResolver{p.API},
+	})
 
 	p.router = p.initRouter()
 
@@ -218,4 +222,31 @@ func (c commandNotifier) NotifyCancelled(ref command.TaskRef, actorID, creatorID
 
 func toSummary(ref command.TaskRef) notification.TaskSummary {
 	return notification.TaskSummary{ID: ref.ID, Summary: ref.Summary}
+}
+
+// commandAssignNotifier adapts notification.Notifier.NotifyAssigned to the
+// command.AssignNotifier interface. Nil-safe (no-op when notifier unset).
+type commandAssignNotifier struct {
+	n *notification.Notifier
+}
+
+func (c commandAssignNotifier) NotifyAssigned(assigneeID, creatorID string, ref command.AssignRef) {
+	if c.n == nil {
+		return
+	}
+	c.n.NotifyAssigned(assigneeID, creatorID, notification.TaskSummary{ID: ref.ID, Summary: ref.Summary})
+}
+
+// userResolver adapts plugin.API.GetUserByUsername to command.UserResolver,
+// returning the user id ("" when not found / on error).
+type userResolver struct {
+	api plugin.API
+}
+
+func (u userResolver) UserIDByUsername(username string) string {
+	user, appErr := u.api.GetUserByUsername(username)
+	if appErr != nil || user == nil {
+		return ""
+	}
+	return user.Id
 }

@@ -405,3 +405,52 @@ type errInternalFakeType struct{}
 func (errInternalFakeType) Error() string { return "boom-internal" }
 
 var errInternalFake errInternalFakeType
+
+func TestSetAssignee_Endpoint(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+created.ID+"/assignee", `{"user_id":"u-new"}`, "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "u-new", got.AssigneeID)
+}
+
+func TestSetAssignee_RequiresUserID(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/"+created.ID+"/assignee", `{"user_id":""}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSetAssignee_NotFound(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost,
+		"/api/v1/tasks/missing/assignee", `{"user_id":"u-new"}`, "u1"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestDeleteAssignee_Endpoint(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete,
+		"/api/v1/tasks/"+created.ID+"/assignee", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Empty(t, got.AssigneeID)
+}

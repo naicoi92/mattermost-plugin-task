@@ -24,6 +24,21 @@ type TaskService interface {
 	Patch(id string, in task.PatchInput) (*taskmodel.Task, error)
 	SetReminder(id string, offsetMS int64) (*taskmodel.Task, error)
 	ClearReminder(id string) (*taskmodel.Task, error)
+	// Assign changes a task's single assignee; newAssigneeID == "" clears it.
+	// It returns the updated task plus an AssignEvent describing the change.
+	Assign(id, newAssigneeID string) (*taskmodel.Task, task.AssignEvent, error)
+}
+
+// AssignNotifier fires the assignee-change DM. It is the subset of the
+// notification package the command handler invokes after an assign; may be nil.
+type AssignNotifier interface {
+	NotifyAssigned(assigneeID, creatorID string, task AssignRef)
+}
+
+// AssignRef is the minimal task view the assign notifier needs.
+type AssignRef struct {
+	ID      string
+	Summary string
 }
 
 // TaskNotifier fires task-event DMs. It is the subset of the notification
@@ -32,6 +47,14 @@ type TaskService interface {
 type TaskNotifier interface {
 	NotifyCompleted(task TaskRef, actorID, creatorID, assigneeID string)
 	NotifyCancelled(task TaskRef, actorID, creatorID, assigneeID string)
+}
+
+// UserResolver resolves an @username mention to a Mattermost user id. Supplied
+// by the plugin layer (which has API access); nil disables assign parsing.
+type UserResolver interface {
+	// UserIDByUsername returns the user id for username (without the leading @),
+	// or "" when not found.
+	UserIDByUsername(username string) string
 }
 
 // TaskRef is the minimal task view the notifier needs (mirrors
@@ -44,9 +67,11 @@ type TaskRef struct {
 // Handler dispatches slash commands. Today it owns the /task command; the
 // legacy /hello command from the starter template is retained for reference.
 type Handler struct {
-	client      *pluginapi.Client
-	taskService TaskService
-	notifier    TaskNotifier
+	client         *pluginapi.Client
+	taskService    TaskService
+	notifier       TaskNotifier
+	assignNotifier AssignNotifier
+	users          UserResolver
 }
 
 // Command is the dispatch contract implemented by Handler.
@@ -57,10 +82,17 @@ type Command interface {
 
 const helloCommandTrigger = "hello"
 
+// Options configure optional collaborators on the command handler. Fields may
+// be nil to disable the corresponding behavior (notifications / @user lookup).
+type Options struct {
+	Notifier       TaskNotifier   // done/cancelled DMs
+	AssignNotifier AssignNotifier // assignee DM
+	Users          UserResolver   // @username -> user id for /task assign
+}
+
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
-// wired to the given task service. notifier may be nil to disable task-event
-// DMs from the command path.
-func NewCommandHandler(client *pluginapi.Client, taskService TaskService, notifier TaskNotifier) Command {
+// wired to the given task service and options.
+func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts Options) Command {
 	if err := client.SlashCommand.Register(&model.Command{
 		Trigger:          helloCommandTrigger,
 		AutoComplete:     true,
@@ -111,6 +143,17 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, notifi
 	})
 	taskCmd.AddCommand(remindCmd)
 
+	// /task assign <id> @user
+	assignCmd := model.NewAutocompleteData("assign", "<id> @user", "Assign a task to a user")
+	assignCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
+	assignCmd.AddTextArgument("@username of the new assignee", "@user", "")
+	taskCmd.AddCommand(assignCmd)
+
+	// /task unassign <id>
+	unassignCmd := model.NewAutocompleteData("unassign", "<id>", "Remove the assignee")
+	unassignCmd.AddStaticListArgument("task id", true, []model.AutocompleteListItem{})
+	taskCmd.AddCommand(unassignCmd)
+
 	// /task help
 	helpCmd := model.NewAutocompleteData("help", "", "Show task command help")
 	taskCmd.AddCommand(helpCmd)
@@ -126,9 +169,11 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, notifi
 	}
 
 	return &Handler{
-		client:      client,
-		taskService: taskService,
-		notifier:    notifier,
+		client:         client,
+		taskService:    taskService,
+		notifier:       opts.Notifier,
+		assignNotifier: opts.AssignNotifier,
+		users:          opts.Users,
 	}
 }
 
@@ -167,6 +212,10 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 		return c.handleEdit(args, subFields[1:])
 	case "remind":
 		return c.handleRemind(args, subFields[1:])
+	case "assign":
+		return c.handleAssign(args, subFields[1:])
+	case "unassign":
+		return c.handleUnassign(args, subFields[1:])
 	case "help":
 		return ephemeral(taskHelp()), nil
 	default:
@@ -257,6 +306,62 @@ func parseReminderOffset(token string) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// handleAssign implements /task assign <id> @user.
+func (c *Handler) handleAssign(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 2 {
+		return ephemeral("Usage: /task assign <id> @user"), nil
+	}
+	id, mention := rest[0], rest[1]
+
+	username := strings.TrimPrefix(mention, "@")
+	if username == "" || username == mention {
+		// Not a mention.
+		return ephemeral("Please specify the assignee as @username."), nil
+	}
+
+	if c.users == nil {
+		return ephemeral("User lookup is not available; use the REST API to assign."), nil
+	}
+	userID := c.users.UserIDByUsername(username)
+	if userID == "" {
+		return ephemeral(fmt.Sprintf("User @%s not found.", username)), nil
+	}
+
+	t, ev, err := c.taskService.Assign(id, userID)
+	if err != nil {
+		return formatAssignError(c, id, err)
+	}
+
+	// DM the newly assigned user (skipped when assignee == creator).
+	if c.assignNotifier != nil {
+		c.assignNotifier.NotifyAssigned(ev.NewAssigneeID, ev.CreatorID, AssignRef{ID: t.ID, Summary: t.Summary})
+	}
+	return ephemeral(fmt.Sprintf("👤 Task **%s** assigned to @%s.", t.Summary, username)), nil
+}
+
+// handleUnassign implements /task unassign <id>. No DM is sent on unassign.
+func (c *Handler) handleUnassign(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	if len(rest) < 1 {
+		return ephemeral("Usage: /task unassign <id>"), nil
+	}
+	id := rest[0]
+
+	t, _, err := c.taskService.Assign(id, "")
+	if err != nil {
+		return formatAssignError(c, id, err)
+	}
+	return ephemeral(fmt.Sprintf("👤 Assignee removed from **%s**.", t.Summary)), nil
+}
+
+// formatAssignError maps assignee service errors to ephemeral text.
+func formatAssignError(c *Handler, id string, err error) (*model.CommandResponse, error) {
+	if errors.Is(err, task.ErrNotFound) {
+		return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
+	}
+	c.client.Log.Error("Failed to change assignee", "task_id", id, "error", err)
+	return ephemeral(fmt.Sprintf("Failed to update task %s: %s", id, err.Error())), nil
 }
 
 // setStatus calls the service and formats the result for the user.
@@ -423,6 +528,8 @@ func taskHelp() string {
 		"• `/task done <id>` — mark a task done\n" +
 		"• `/task cancel <id>` — cancel a task\n" +
 		"• `/task edit <id> [summary=...] [due=<ms>] [desc=...]` — partial update\n" +
+		"• `/task assign <id> @user` — assign a task to a user\n" +
+		"• `/task unassign <id>` — remove the assignee\n" +
 		"• `/task remind <id> <15m|1h|1d|off>` — set or turn off a reminder\n" +
 		"• `/task help` — show this help"
 }
