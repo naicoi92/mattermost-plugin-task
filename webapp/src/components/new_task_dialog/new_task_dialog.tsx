@@ -175,7 +175,7 @@ export default function NewTaskDialog({visible, channelID, onClose, onCreated}: 
                 </label>
 
                 <fieldset className='task-new-dialog__field task-new-dialog__scope'>
-                    <legend className='task-new-dialog__label'>{t('webapp.task.scope.personal')}</legend>
+                    <legend className='task-new-dialog__label'>{t('webapp.task.scope')}</legend>
                     <label>
                         <input
                             type='radio'
@@ -235,7 +235,8 @@ export function parseDueLocal(value: string): number | null {
 
 // messageFor extracts a user-facing message from a thrown error, preferring the
 // server's text body (ClientError) and falling back to a generic string.
-function messageFor(err: unknown): string {
+// Exported so tests verify the production logic rather than a hand-copied twin.
+export function messageFor(err: unknown): string {
     if (err instanceof ClientError) {
         return err.message || tFallback();
     }

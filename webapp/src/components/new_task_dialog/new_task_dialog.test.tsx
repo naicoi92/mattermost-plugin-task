@@ -7,7 +7,7 @@
 
 import {ClientError} from 'client';
 
-import {parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
+import {messageFor, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
 
 describe('parseDueLocal', () => {
     test('returns null for an empty string', () => {
@@ -38,14 +38,7 @@ describe('parseDueLocal', () => {
 });
 
 describe('ClientError handling in the dialog path', () => {
-    // Mirrors the messageFor logic in the component.
-    function messageFor(err: unknown): string {
-        if (err instanceof ClientError) {
-            return err.message || 'request failed';
-        }
-        return err instanceof Error ? err.message : 'request failed';
-    }
-
+    // Tests the production messageFor directly (exported) rather than a copy.
     test('a ClientError surfaces its server message', () => {
         expect(messageFor(new ClientError(400, 'summary required'))).toBe('summary required');
     });
