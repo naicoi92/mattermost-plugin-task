@@ -245,6 +245,44 @@ func (s *Service) SubtaskProgress(parentID string) (done, total int, err error) 
 	return done, total, nil
 }
 
+// ListSubtasks returns the direct subtasks of parentID as full task entities,
+// sorted by ULID (creation order). Missing subtask entities are skipped
+// defensively. A missing/non-existent parent yields an empty list — callers
+// that need to distinguish a missing parent should resolve it via Get first.
+func (s *Service) ListSubtasks(parentID string) ([]model.Task, error) {
+	ids, err := s.store.GetSubtaskIDs(parentID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list subtasks")
+	}
+	subs := make([]model.Task, 0, len(ids))
+	for _, id := range ids {
+		sub, err := s.store.GetTask(id)
+		if err != nil {
+			return nil, err
+		}
+		if sub == nil {
+			continue
+		}
+		subs = append(subs, *sub)
+	}
+	return subs, nil
+}
+
+// CreateSubtask creates a new task under parentID. The subtask inherits the
+// parent's ChannelID and (as default) the parent's assignee; an explicit
+// assigneeID overrides the inherited default. A non-existent parent is rejected
+// with ErrParentNotFound. It is a thin wrapper over Create that also re-validates
+// the parent for callers that resolved it separately.
+func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*model.Task, error) {
+	return s.Create(CreateInput{
+		Summary:      summary,
+		CreatorID:    creatorID,
+		AssigneeID:   assigneeID,
+		Due:          due,
+		ParentTaskID: parentID,
+	})
+}
+
 // SetPostIDs records the channel/DM post ids of the task's interactive card so
 // the card can be updated when the task changes (PLAN.md section 4.2). Either
 // value may be empty to leave it unchanged. Used by the REST/dialog handlers

@@ -350,6 +350,51 @@ func TestCreate_SubtaskMissingParentRejected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrParentNotFound)
 }
 
+// Issue #21: CreateSubtask is a thin wrapper over Create with inheritance.
+func TestCreateSubtask_InheritsFromParent(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{
+		Summary: "parent", CreatorID: "u1", AssigneeID: "u2", ChannelID: "ch1",
+	})
+	require.NoError(t, err)
+
+	child, err := svc.CreateSubtask(parent.ID, "u3", "child", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, parent.ID, child.ParentTaskID)
+	assert.Equal(t, "ch1", child.ChannelID)
+	assert.Equal(t, "u2", child.AssigneeID, "inherits parent assignee")
+}
+
+func TestCreateSubtask_MissingParentRejected(t *testing.T) {
+	svc := NewService(newFakeStore())
+	_, err := svc.CreateSubtask("ghost", "u1", "child", "", nil)
+	assert.ErrorIs(t, err, ErrParentNotFound)
+}
+
+// Issue #21: ListSubtasks returns direct subtasks in creation order.
+func TestListSubtasks_ReturnsDirectSubtasksInOrder(t *testing.T) {
+	store := newFakeStore()
+	svc := NewService(store)
+	parent, err := svc.Create(CreateInput{Summary: "parent", CreatorID: "u1"})
+	require.NoError(t, err)
+	c1, err := svc.CreateSubtask(parent.ID, "u1", "first", "", nil)
+	require.NoError(t, err)
+	c2, err := svc.CreateSubtask(parent.ID, "u1", "second", "", nil)
+	require.NoError(t, err)
+
+	subs, err := svc.ListSubtasks(parent.ID)
+	require.NoError(t, err)
+	require.Len(t, subs, 2)
+	assert.Equal(t, c1.ID, subs[0].ID)
+	assert.Equal(t, c2.ID, subs[1].ID)
+
+	// A task with no subtasks returns an empty list.
+	empty, err := svc.ListSubtasks(c1.ID)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
 func TestPatch_PartialUpdate(t *testing.T) {
 	store := newFakeStore()
 	svc := NewService(store)

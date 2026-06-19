@@ -14,6 +14,7 @@ import (
 
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
+	"github.com/naicoi92/mattermost-plugin-task/server/permission"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -49,6 +50,10 @@ func (p *Plugin) initRouter() *mux.Router {
 	tasks.HandleFunc("/{id:[^/]+}/reminder", p.deleteReminder).Methods(http.MethodDelete)
 	tasks.HandleFunc("/{id:[^/]+}/assignee", p.setAssignee).Methods(http.MethodPost)
 	tasks.HandleFunc("/{id:[^/]+}/assignee", p.deleteAssignee).Methods(http.MethodDelete)
+
+	// Subtasks (issue #21).
+	tasks.HandleFunc("/{id:[^/]+}/subtasks", p.createSubtask).Methods(http.MethodPost)
+	tasks.HandleFunc("/{id:[^/]+}/subtasks", p.listSubtasks).Methods(http.MethodGet)
 
 	return router
 }
@@ -437,6 +442,100 @@ func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+}
+
+// createSubtaskRequest is the JSON body for POST /tasks/:id/subtasks.
+type createSubtaskRequest struct {
+	Summary    string `json:"summary"`
+	AssigneeID string `json:"assignee_id"`
+	Due        *int64 `json:"due"`
+}
+
+// createSubtask handles POST /tasks/:id/subtasks. The subtask inherits the
+// parent's ChannelID and (as default) the parent's assignee; an explicit
+// assignee_id or due overrides the inherited defaults. Requires modify
+// permission on the parent (creator or current assignee). After creation the
+// parent's interactive card is refreshed to reflect the new subtask count.
+func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
+	parentID := mux.Vars(r)["id"]
+	actorID := currentUserID(r)
+
+	parent, err := p.taskService.Get(parentID)
+	if err != nil {
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if parent == nil {
+		p.writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !permission.CanUserModifyTask(actorID, parent) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to add subtasks to this task")
+		return
+	}
+
+	var req createSubtaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	created, err := p.taskService.Create(task.CreateInput{
+		Summary:      strings.TrimSpace(req.Summary),
+		CreatorID:    actorID,
+		AssigneeID:   req.AssigneeID,
+		Due:          req.Due,
+		ParentTaskID: parentID,
+	})
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "required"):
+			p.writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, task.ErrParentNotFound):
+			p.writeError(w, http.StatusNotFound, "parent task not found")
+		default:
+			p.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	// Post the subtask's own card in the inherited channel and DM the assignee
+	// when distinct from the creator. The subtask card is independent so its own
+	// status changes can update it later.
+	var channelPostID, dmPostID string
+	if created.ChannelID != "" {
+		channelPostID = p.postCard(created.ChannelID, created)
+	}
+	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
+		dmPostID = p.postCardDM(created.AssigneeID, created)
+	}
+	if channelPostID != "" || dmPostID != "" {
+		if updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID); err != nil {
+			p.API.LogError("Failed to persist subtask card post IDs",
+				"task_id", created.ID, "error", err)
+		} else if updated != nil {
+			created = updated
+		}
+	}
+
+	// Refresh the parent's card so its subtask progress reflects the new child.
+	p.updateCard(parent.ChannelPostID, parent)
+	p.updateCard(parent.DMPostID, parent)
+
+	w.WriteHeader(http.StatusCreated)
+	p.writeJSON(w, created)
+}
+
+// listSubtasks handles GET /tasks/:id/subtasks, returning the parent's direct
+// subtasks sorted by creation order.
+func (p *Plugin) listSubtasks(w http.ResponseWriter, r *http.Request) {
+	parentID := mux.Vars(r)["id"]
+	subs, err := p.taskService.ListSubtasks(parentID)
+	if err != nil {
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	p.writeJSON(w, subs)
 }
 
 // handleCardAction handles the interactive task-card button callback

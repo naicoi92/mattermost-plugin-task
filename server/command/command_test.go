@@ -57,6 +57,15 @@ type fakeStatusService struct {
 	assignResult *taskmodel.Task
 	assignEvent  task.AssignEvent
 	assignErr    error
+
+	getResult *taskmodel.Task
+	getErr    error
+
+	subtaskParentID string
+	subtaskCreator  string
+	subtaskSummary  string
+	subtaskResult   *taskmodel.Task
+	subtaskErr      error
 }
 
 func (f *fakeStatusService) SetStatus(id, status string) (*taskmodel.Task, error) {
@@ -88,6 +97,17 @@ func (f *fakeStatusService) Assign(id, newAssigneeID string) (*taskmodel.Task, t
 	f.assignID = id
 	f.assignUserID = newAssigneeID
 	return f.assignResult, f.assignEvent, f.assignErr
+}
+
+func (f *fakeStatusService) Get(id string) (*taskmodel.Task, error) {
+	return f.getResult, f.getErr
+}
+
+func (f *fakeStatusService) CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*taskmodel.Task, error) {
+	f.subtaskParentID = parentID
+	f.subtaskCreator = creatorID
+	f.subtaskSummary = summary
+	return f.subtaskResult, f.subtaskErr
 }
 
 func TestHelloCommand(t *testing.T) {
@@ -198,6 +218,59 @@ func TestTaskHelp(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "/task status")
 	assert.Contains(t, resp.Text, "/task done")
+}
+
+// /task subtask adds a subtask; summary may contain spaces.
+func TestTaskSubtask_Command(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{
+		getResult:     &taskmodel.Task{ID: "P1", Summary: "parent", CreatorID: "u-me"},
+		subtaskResult: &taskmodel.Task{ID: "C1", Summary: "fix tests", ParentTaskID: "P1"},
+	}
+	handler := NewCommandHandler(env.client, svc, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task subtask P1 fix the tests", UserId: "u-me"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Subtask")
+	assert.Equal(t, "P1", svc.subtaskParentID)
+	assert.Equal(t, "u-me", svc.subtaskCreator)
+	assert.Equal(t, "fix the tests", svc.subtaskSummary)
+}
+
+func TestTaskSubtask_RequiresModifyPermission(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	// Parent owned by u-other; actor u-stranger has no permission.
+	svc := &fakeStatusService{
+		getResult: &taskmodel.Task{ID: "P1", Summary: "parent", CreatorID: "u-other"},
+	}
+	handler := NewCommandHandler(env.client, svc, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task subtask P1 child", UserId: "u-stranger"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "permission")
+}
+
+func TestTaskSubtask_ParentNotFound(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	svc := &fakeStatusService{getResult: nil}
+	handler := NewCommandHandler(env.client, svc, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task subtask ghost child", UserId: "u-me"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "not found")
+}
+
+func TestTaskSubtask_Usage(t *testing.T) {
+	env := setupTest()
+	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	handler := NewCommandHandler(env.client, &fakeStatusService{}, Options{})
+
+	resp, err := handler.Handle(&model.CommandArgs{Command: "/task subtask P1", UserId: "u-me"})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Usage")
 }
 
 func TestTaskStatus_InternalError(t *testing.T) {
