@@ -361,6 +361,28 @@ func TestDeleteReminder_Endpoint(t *testing.T) {
 	assert.Nil(t, got.ReminderOffset)
 }
 
+func TestDeleteReminder_InternalErrorDoesNotLeak(t *testing.T) {
+	// ClearReminder fails via a store whose DeleteReminder errors. The handler
+	// must respond 500 and must NOT echo the raw error text.
+	due := int64(100_000)
+	offset := int64(60_000)
+	store := &failingReminderStore{fakeTaskStore: newFakeTaskStore()}
+	store.tasks["T1"] = model.Task{ID: "T1", CreatorID: "u1", Due: &due, ReminderOffset: &offset, Status: model.StatusTodo}
+	api := &plugintest.API{}
+	api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	p := &Plugin{
+		taskService: task.NewService(store),
+	}
+	p.SetAPI(api)
+	p.router = p.initRouter()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete,
+		"/api/v1/tasks/T1/reminder", "", "u1"))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.NotContains(t, w.Body.String(), "boom-internal", "raw error must not leak")
+}
+
 // failingReminderStore wraps a fakeTaskStore (seeded with a task that has a due
 // date so SetReminder reaches SaveReminder) but fails SaveReminder, to exercise
 // the setReminder handler's internal-error path.
@@ -369,6 +391,12 @@ type failingReminderStore struct {
 }
 
 func (f *failingReminderStore) SaveReminder(string, model.ReminderMetadata) error {
+	return errInternalFake
+}
+
+// DeleteReminder also fails, to exercise the deleteReminder handler's
+// internal-error path.
+func (f *failingReminderStore) DeleteReminder(string) error {
 	return errInternalFake
 }
 

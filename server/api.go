@@ -331,7 +331,8 @@ func (p *Plugin) deleteReminder(w http.ResponseWriter, r *http.Request) {
 			p.writeError(w, http.StatusNotFound, "task not found")
 			return
 		}
-		p.writeError(w, http.StatusInternalServerError, err.Error())
+		// Don't leak internal error text; match the set-reminder handler.
+		p.writeError(w, http.StatusInternalServerError, "failed to clear reminder")
 		return
 	}
 	p.writeJSON(w, updated)
