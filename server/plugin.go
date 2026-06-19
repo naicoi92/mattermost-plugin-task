@@ -93,6 +93,7 @@ func (p *Plugin) OnActivate() error {
 		AssignNotifier:    commandAssignNotifier{p.notifier},
 		CommentNotifier:   commandCommentNotifier{p.notifier},
 		CommentAuthorizer: commandCommentAuthorizer{channels: channelMembershipChecker{api: p.API}},
+		NewTaskOpener:     newTaskDialogOpener{p: p},
 		Users:             userResolver{p.API},
 		BotUserID:         p.botUserID,
 	})
@@ -313,4 +314,23 @@ func (c channelMembershipChecker) IsChannelAdmin(userID, channelID string) bool 
 	}
 	// Channel admins carry the "channel_admin" role in the member's role list.
 	return slices.Contains(member.GetRoles(), "channel_admin")
+}
+
+// newTaskDialogOpener adapts the plugin layer to command.NewTaskDialogOpener
+// (#95). It opens the New Task Interactive Dialog prefilled with a summary so
+// `/task add "<summary>"` lets the user fill assignee/due/description before
+// the task is created. Returns true when the dialog was opened successfully.
+type newTaskDialogOpener struct {
+	p *Plugin
+}
+
+func (o newTaskDialogOpener) OpenNewTask(triggerID, prefillSummary, channelID string) bool {
+	if o.p == nil || triggerID == "" {
+		return false
+	}
+	if err := o.p.openNewTaskDialogFor(triggerID, prefillSummary, channelID); err != nil {
+		o.p.API.LogError("Failed to open New Task dialog", "error", err)
+		return false
+	}
+	return true
 }

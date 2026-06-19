@@ -63,6 +63,78 @@ func TestHandleAdd_DefaultsToChannelScope(t *testing.T) {
 	assert.Equal(t, "ch1", svc.createInput.ChannelID, "defaults to the current channel scope")
 }
 
+// fakeNewTaskOpener records the last OpenNewTask call and reports whether the
+// dialog was "opened". Returns the configured opened flag so a test can force
+// the opener to fail (exercising the immediate-create fallback).
+type fakeNewTaskOpener struct {
+	triggerID      string
+	prefillSummary string
+	channelID      string
+	called         bool
+	opened         bool
+}
+
+func (f *fakeNewTaskOpener) OpenNewTask(triggerID, prefillSummary, channelID string) bool {
+	f.called = true
+	f.triggerID = triggerID
+	f.prefillSummary = prefillSummary
+	f.channelID = channelID
+	return f.opened
+}
+
+// argsWithTrigger is args() plus a TriggerId so the dialog path is reachable.
+func argsWithTrigger(userID, command, triggerID string) *mmmodel.CommandArgs {
+	a := args(userID, command)
+	a.TriggerId = triggerID
+	return a
+}
+
+// When a trigger id and an opener that succeeds are present, /task add opens
+// the New Task dialog prefilled with the summary instead of creating the task
+// immediately (#95).
+func TestHandleAdd_OpensDialogWhenTriggerAndOpener(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc)
+	opener := &fakeNewTaskOpener{opened: true}
+	h.newTaskOpener = opener
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task add \"buy milk\"", "trig-1"))
+	require.NoError(t, err)
+
+	assert.True(t, opener.called, "opener should be invoked when a trigger id is present")
+	assert.Equal(t, "trig-1", opener.triggerID)
+	assert.Equal(t, "buy milk", opener.prefillSummary, "dialog is prefilled with the summary")
+	assert.Equal(t, "ch1", opener.channelID, "channel scope passed through")
+	assert.Empty(t, svc.createInput.Summary, "task is NOT created until the dialog submits")
+	assert.Empty(t, resp.Text, "no ephemeral text needed — the dialog is the feedback")
+}
+
+// When the opener reports failure (e.g. OpenInteractiveDialog errored), the
+// command falls back to creating the task immediately so the flow never
+// dead-ends (#95).
+func TestHandleAdd_FallsBackToCreateWhenOpenerFails(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1", Summary: "buy milk"}}
+	h := newTestHandler(svc)
+	h.newTaskOpener = &fakeNewTaskOpener{opened: false} // opener fails
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task add \"buy milk\"", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Task created")
+	assert.Equal(t, "buy milk", svc.createInput.Summary, "fallback created the task")
+}
+
+// Without an opener wired (bare handler, e.g. unit tests), /task add always
+// creates immediately even when a trigger id is present.
+func TestHandleAdd_CreatesImmediatelyWithoutOpener(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1", Summary: "buy milk"}}
+	h := newTestHandler(svc) // newTaskOpener is nil
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task add \"buy milk\"", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "Task created")
+	assert.Equal(t, "buy milk", svc.createInput.Summary)
+}
+
 func TestHandleList_EmptyReturnsNoTasks(t *testing.T) {
 	h := newTestHandler(&fakeStatusService{})
 	resp, err := h.Handle(args("u1", "/task list mine"))

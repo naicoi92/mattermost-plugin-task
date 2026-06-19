@@ -160,3 +160,44 @@ func TestParseTaskDetailSubmission_ClearsAssignee(t *testing.T) {
 func TestTopNTasksDefault_Is20(t *testing.T) {
 	assert.Equal(t, 20, topNTasksDefault, "issue #17: default top-N is 20")
 }
+
+// --- New Task dialog (#95) -------------------------------------------------
+
+func TestBuildNewTaskDialog_PrefilledSummaryAndFields(t *testing.T) {
+	dialog := buildNewTaskDialog("buy milk", "ch1", false)
+
+	assert.Equal(t, dialogCallbackNewTask, dialog.CallbackId)
+	assert.Equal(t, "New Task", dialog.Title)
+	assert.Equal(t, "Create", dialog.SubmitLabel)
+	assert.Equal(t, "ch1", dialog.State, "state carries the channel id for the submit handler")
+
+	require.Len(t, dialog.Elements, 5, "summary, assignee, due, description, scope")
+	assert.Equal(t, dialogFieldSummary, dialog.Elements[0].Name)
+	assert.Equal(t, "buy milk", dialog.Elements[0].Default, "summary is prefilled")
+
+	// Assignee uses the users data source (single user picker, optional).
+	assert.Equal(t, dialogFieldAssignee, dialog.Elements[1].Name)
+	assert.Equal(t, "users", dialog.Elements[1].DataSource)
+	assert.True(t, dialog.Elements[1].Optional)
+
+	// Description and due are optional.
+	assert.Equal(t, dialogFieldTaskDue, dialog.Elements[2].Name)
+	assert.True(t, dialog.Elements[2].Optional)
+	assert.Equal(t, dialogFieldDescription, dialog.Elements[3].Name)
+	assert.True(t, dialog.Elements[3].Optional)
+
+	// Scope defaults to channel when a channel context exists.
+	assert.Equal(t, dialogFieldNewScope, dialog.Elements[4].Name)
+	assert.Equal(t, "channel", dialog.Elements[4].Default)
+	require.Len(t, dialog.Elements[4].Options, 2, "personal + channel options when a channel context exists")
+}
+
+func TestBuildNewTaskDialog_PersonalScopeWhenNoChannel(t *testing.T) {
+	// A DM with the bot (no channel id) forces personal scope: only the personal
+	// option is offered (PLAN §5.1.A).
+	dialog := buildNewTaskDialog("", "", true)
+	scope := dialog.Elements[4]
+	assert.Equal(t, "personal", scope.Default)
+	require.Len(t, scope.Options, 1, "channel option hidden when there is no channel context")
+	assert.Equal(t, "personal", scope.Options[0].Value)
+}

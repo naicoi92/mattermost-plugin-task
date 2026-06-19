@@ -91,6 +91,19 @@ type UserResolver interface {
 	UserIDByUsername(username string) string
 }
 
+// NewTaskDialogOpener opens the New Task Interactive Dialog prefilled with a
+// summary (#95). Supplied by the plugin layer (which owns
+// OpenInteractiveDialog); nil keeps /task add on the immediate-create fallback.
+// The opener returns true when the dialog was opened, so handleAdd can decide
+// whether to also create the task immediately.
+type NewTaskDialogOpener interface {
+	// OpenNewTask opens the New Task dialog for the user identified by triggerID,
+	// prefilled with prefillSummary. channelID is the originating channel (empty
+	// for a DM with the bot → personal scope). Returns true when the dialog was
+	// opened successfully.
+	OpenNewTask(triggerID, prefillSummary, channelID string) bool
+}
+
 // TaskRef is the minimal task view the notifier needs (mirrors
 // notification.TaskSummary without importing that package).
 type TaskRef struct {
@@ -107,6 +120,7 @@ type Handler struct {
 	assignNotifier    AssignNotifier
 	commentNotifier   CommentNotifier
 	commentAuthorizer CommentAuthorizer
+	newTaskOpener     NewTaskDialogOpener
 	users             UserResolver
 	botUserID         string
 }
@@ -122,12 +136,13 @@ const helloCommandTrigger = "hello"
 // Options configure optional collaborators on the command handler. Fields may
 // be nil to disable the corresponding behavior (notifications / @user lookup).
 type Options struct {
-	Notifier          TaskNotifier      // done/cancelled DMs
-	AssignNotifier    AssignNotifier    // assignee DM
-	CommentNotifier   CommentNotifier   // comment DM
-	CommentAuthorizer CommentAuthorizer // view/comment permission (channel-aware)
-	Users             UserResolver      // @username -> user id for /task assign
-	BotUserID         string            // plugin bot id, used to detect bot DMs for /task add scope
+	Notifier          TaskNotifier        // done/cancelled DMs
+	AssignNotifier    AssignNotifier      // assignee DM
+	CommentNotifier   CommentNotifier     // comment DM
+	CommentAuthorizer CommentAuthorizer   // view/comment permission (channel-aware)
+	NewTaskOpener     NewTaskDialogOpener // open New Task dialog from /task add (#95)
+	Users             UserResolver        // @username -> user id for /task assign
+	BotUserID         string              // plugin bot id, used to detect bot DMs for /task add scope
 }
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
@@ -251,6 +266,7 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 		assignNotifier:    opts.AssignNotifier,
 		commentNotifier:   opts.CommentNotifier,
 		commentAuthorizer: opts.CommentAuthorizer,
+		newTaskOpener:     opts.NewTaskOpener,
 		users:             opts.Users,
 		botUserID:         opts.BotUserID,
 	}
@@ -314,11 +330,17 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 	}
 }
 
-// handleAdd implements /task add ["<summary>"] (issue #8). It accepts an
-// optional quoted summary and creates a task immediately with sensible defaults
-// (scope = current channel, unless in a DM with the bot where it's Personal).
-// The full New Task dialog prefill is a desktop/webapp concern; on the command
-// path we create directly so mobile users aren't blocked.
+// handleAdd implements /task add ["<summary>"] (issue #8, #95).
+//
+// Per PLAN.md §5.2 / review #9, `/task add "<summary>"` opens a New Task
+// Interactive Dialog pre-filled with the summary so the user can fill
+// assignee / due / description / scope before the task is created. When a
+// trigger id is available (slash commands carry one) and the plugin wired a
+// NewTaskDialogOpener, the dialog opens and the task is created on submit.
+//
+// Fallback: when there is no trigger id or no opener (e.g. a bare handler in
+// unit tests), the task is created immediately with just the summary so the
+// flow never dead-ends.
 func (c *Handler) handleAdd(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
 	summary := strings.TrimSpace(strings.Join(rest, " "))
 	// Strip surrounding quotes if the user quoted the summary.
@@ -327,10 +349,23 @@ func (c *Handler) handleAdd(args *model.CommandArgs, rest []string) (*model.Comm
 		return ephemeral("Usage: /task add \"<summary>\" — a summary is required."), nil
 	}
 
+	// A DM with the bot defaults to a Personal task (no channel scope). The
+	// dialog builder uses an empty channelID to force the personal scope, so
+	// pass "" here; otherwise the originating channel is the default scope.
 	channelID := args.ChannelId
-	// A DM with the bot defaults to a Personal task (no channel scope).
 	if c.isBotDM(args.UserId, args.ChannelId) {
 		channelID = ""
+	}
+
+	// Open the New Task dialog when possible; fall back to immediate create.
+	if c.newTaskOpener != nil && args.TriggerId != "" {
+		if c.newTaskOpener.OpenNewTask(args.TriggerId, summary, channelID) {
+			// The dialog is now open; the task is created when the user submits.
+			// An ephemeral hint isn't needed — the dialog itself is the feedback.
+			return ephemeral(""), nil
+		}
+		// Opener reported failure (e.g. OpenInteractiveDialog error). Fall
+		// through to immediate-create so the user isn't left with nothing.
 	}
 
 	created, err := c.taskService.Create(task.CreateInput{

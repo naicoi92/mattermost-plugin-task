@@ -12,12 +12,14 @@ import (
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
-// Dialog callback ids and field names for the Quick List and Task Detail
-// Interactive Dialogs (issue #17). These dialogs are the mobile/fallback path
-// for browsing and editing tasks (PLAN.md section 6.4).
+// Dialog callback ids and field names for the Quick List, Task Detail and New
+// Task Interactive Dialogs (issue #17; New Task added by #95). These dialogs
+// are the mobile/fallback path for browsing, editing and creating tasks
+// (PLAN.md section 6.4).
 const (
 	dialogCallbackQuickList  = "task_quick_list"
 	dialogCallbackTaskDetail = "task_detail"
+	dialogCallbackNewTask    = "task_new"
 
 	dialogFieldScope    = "scope"
 	dialogFieldStatus   = "status"
@@ -285,6 +287,8 @@ func (p *Plugin) openDialog(triggerID string, dialog model.Dialog) error {
 		callbackURL = "/api/v1/dialogs/quicklist"
 	case dialogCallbackTaskDetail:
 		callbackURL = "/api/v1/dialogs/taskdetail"
+	case dialogCallbackNewTask:
+		callbackURL = "/api/v1/dialogs/newtask"
 	default:
 		return fmt.Errorf("unknown dialog callback id %q", dialog.CallbackId)
 	}
@@ -424,3 +428,206 @@ func (p *Plugin) openTaskDetailDialog(w http.ResponseWriter, r *http.Request) {
 // manifestID is the plugin id from plugin.json, used to build dialog callback
 // URLs.
 const manifestID = "com.mattermost.plugin-task"
+
+// --- New Task dialog (#95) -------------------------------------------------
+//
+// `/task add "<summary>"` opens this dialog pre-filled with the summary so the
+// user can fill assignee / due / description / scope before the task is
+// created (PLAN.md §5.2, review #9). When no trigger id is available the
+// command still creates the task immediately with just the summary so the
+// flow never dead-ends.
+
+// dialogFieldNewScope is the scope toggle in the New Task dialog (personal vs
+// channel). Distinct from dialogFieldScope (the Quick List filter) so the two
+// dialogs don't share a field name.
+const dialogFieldNewScope = "new_scope"
+
+// buildNewTaskDialog builds the Interactive Dialog for creating a task. The
+// summary is pre-filled when the user typed `/task add "<summary>"`. The scope
+// toggle defaults to channel when a channel context is present, personal
+// otherwise (or when opened from a DM with the bot — PLAN §5.1.A). The state
+// carries the chosen channel id (empty for a personal task) so the submit
+// handler doesn't have to re-derive scope.
+func buildNewTaskDialog(prefillSummary, channelID string, isPersonal bool) model.Dialog {
+	scopeDefault := "channel"
+	if isPersonal {
+		scopeDefault = "personal"
+	}
+
+	// Scope options: the channel option is only meaningful when a channel
+	// context exists. When there is no channel (e.g. a DM with the bot), only
+	// the personal option is offered.
+	scopeOptions := []*model.PostActionOptions{
+		{Text: "Personal", Value: "personal"},
+	}
+	if channelID != "" {
+		scopeOptions = append(scopeOptions, &model.PostActionOptions{
+			Text:  "Channel",
+			Value: "channel",
+		})
+	}
+
+	return model.Dialog{
+		CallbackId:  dialogCallbackNewTask,
+		Title:       "New Task",
+		SubmitLabel: "Create",
+		State:       channelID,
+		Elements: []model.DialogElement{
+			{
+				DisplayName: "Summary",
+				Name:        dialogFieldSummary,
+				Type:        "text",
+				SubType:     "text",
+				Default:     prefillSummary,
+				Placeholder: "Task summary",
+			},
+			{
+				DisplayName: "Assignee",
+				Name:        dialogFieldAssignee,
+				Type:        "select",
+				DataSource:  "users",
+				Optional:    true,
+			},
+			{
+				DisplayName: "Due (ms timestamp)",
+				Name:        dialogFieldTaskDue,
+				Type:        "text",
+				SubType:     "number",
+				Optional:    true,
+				Placeholder: "e.g. 1700000000000",
+			},
+			{
+				DisplayName: "Description",
+				Name:        dialogFieldDescription,
+				Type:        "textarea",
+				Optional:    true,
+			},
+			{
+				DisplayName: "Scope",
+				Name:        dialogFieldNewScope,
+				Type:        "select",
+				Default:     scopeDefault,
+				Options:     scopeOptions,
+			},
+		},
+	}
+}
+
+// openNewTaskDialogFor opens the New Task dialog for the user. prefillSummary is
+// the text the user typed after `/task add`. channelID is the originating
+// channel (empty for a DM with the bot, which forces personal scope).
+func (p *Plugin) openNewTaskDialogFor(triggerID, prefillSummary, channelID string) error {
+	isPersonal := channelID == ""
+	dialog := buildNewTaskDialog(prefillSummary, channelID, isPersonal)
+	return p.openDialog(triggerID, dialog)
+}
+
+// submitNewTaskDialog handles the New Task dialog submit callback. It creates
+// the task with the submitted fields (reusing the same taskService.Create +
+// card-post path as POST /tasks), so behavior is identical to the REST API.
+// Validation errors (empty summary, invalid due) are surfaced inline.
+func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
+	var req model.SubmitDialogRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid dialog submission", http.StatusBadRequest)
+		return
+	}
+
+	summary, _ := req.Submission[dialogFieldSummary].(string)
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		writeDialogResponse(w, "Summary is required.")
+		return
+	}
+
+	// Scope: when the user picks "channel", use the channel id carried in the
+	// dialog state (the originating channel). Personal leaves ChannelID empty.
+	scope, _ := req.Submission[dialogFieldNewScope].(string)
+	channelID := req.State
+	if scope != "channel" {
+		channelID = ""
+	}
+
+	in := task.CreateInput{
+		Summary:   summary,
+		CreatorID: req.UserId,
+		ChannelID: channelID,
+	}
+
+	if assigneeID, ok := req.Submission[dialogFieldAssignee].(string); ok && assigneeID != "" {
+		in.AssigneeID = assigneeID
+	}
+	if desc, ok := req.Submission[dialogFieldDescription].(string); ok {
+		in.Description = desc
+	}
+	if dueRaw, ok := req.Submission[dialogFieldTaskDue].(string); ok && dueRaw != "" {
+		var ms int64
+		if _, err := fmt.Sscanf(dueRaw, "%d", &ms); err != nil || ms <= 0 {
+			writeDialogResponse(w, "Due must be a numeric millisecond timestamp.")
+			return
+		}
+		in.Due = &ms
+	}
+
+	created, err := p.taskService.Create(in)
+	if err != nil {
+		// Surface validation errors inline; log unexpected ones server-side.
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "parent") {
+			writeDialogResponse(w, err.Error())
+			return
+		}
+		p.API.LogError("Failed to create task from New Task dialog", "user_id", req.UserId, "error", err)
+		writeDialogResponse(w, "Failed to create the task. Please try again.")
+		return
+	}
+
+	// Post the interactive task card (channel + DM) and persist the post ids,
+	// mirroring POST /tasks so the experience is identical.
+	var channelPostID, dmPostID string
+	if created.ChannelID != "" {
+		channelPostID = p.postCard(created.ChannelID, created)
+	}
+	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
+		dmPostID = p.postCardDM(created.AssigneeID, created)
+	}
+	if channelPostID != "" || dmPostID != "" {
+		if updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID); err != nil {
+			p.API.LogError("Failed to persist task card post IDs from dialog",
+				"task_id", created.ID, "error", err)
+		} else if updated != nil {
+			created = updated
+		}
+	}
+
+	// Real-time: the new task is visible to Quick List / Kanban clients (#32).
+	p.broadcastTaskUpdated(created, []string{"created"})
+
+	// Empty error closes the dialog.
+	writeDialogResponse(w, "")
+}
+
+// openNewTaskDialogRequest is the body for POST /dialogs/open-new-task, the
+// opener endpoint used by callers with a trigger id (e.g. a post-menu action).
+type openNewTaskDialogRequest struct {
+	TriggerID      string `json:"trigger_id"`
+	PrefillSummary string `json:"prefill_summary"`
+	ChannelID      string `json:"channel_id"`
+}
+
+// openNewTaskDialog opens the New Task dialog for a caller with a trigger id.
+func (p *Plugin) openNewTaskDialog(w http.ResponseWriter, r *http.Request) {
+	var req openNewTaskDialogRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.TriggerID == "" {
+		http.Error(w, "trigger_id is required", http.StatusBadRequest)
+		return
+	}
+	if err := p.openNewTaskDialogFor(req.TriggerID, req.PrefillSummary, req.ChannelID); err != nil {
+		writeDialogResponse(w, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
