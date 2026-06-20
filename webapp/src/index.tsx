@@ -18,6 +18,8 @@
 import {useFormatMessage} from 'i18n_utils';
 import manifest from 'manifest';
 import React from 'react';
+// eslint-disable-next-line no-restricted-imports -- plugin has no access to the host's components/overlay_trigger wrapper, so we use react-bootstrap directly (a webpack external supplied by the host at runtime), the same pattern mattermost-plugin-calls uses.
+import {OverlayTrigger, Tooltip} from 'react-bootstrap';
 import {useDispatch} from 'react-redux';
 import reducer, {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
@@ -85,15 +87,24 @@ export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Eleme
         });
     };
     return (
-        <button
-            type='button'
-            className='style--none AdvancedTextEditor__action-button'
-            onClick={onClick}
-            aria-label={t('webapp.task.tooltip.new_task')}
-            title={t('webapp.task.tooltip.new_task')}
+        <OverlayTrigger
+            delay={{show: 300, hide: 0}}
+            placement='top'
+            overlay={
+                <Tooltip id='task-new-composer-tooltip'>
+                    {t('webapp.task.tooltip.new_task')}
+                </Tooltip>
+            }
         >
-            <i className='icon fa fa-tasks'/>
-        </button>
+            <button
+                type='button'
+                className='style--none AdvancedTextEditor__action-button'
+                onClick={onClick}
+                aria-label={t('webapp.task.tooltip.new_task')}
+            >
+                <i className='icon fa fa-tasks'/>
+            </button>
+        </OverlayTrigger>
     );
 }
 

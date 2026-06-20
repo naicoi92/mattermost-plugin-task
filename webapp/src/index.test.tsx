@@ -7,9 +7,9 @@
 // (Kanban + New Task dialog), WebSocket handler, reducer, translations, and the
 // post dropdown action. Uses a fake registry + store so no host app is needed.
 
-// Mock react-redux so the NewTaskHeaderIcon component (which calls useDispatch
-// and, via useFormatMessage, useSelector) can be exercised without a real
-// <Provider>. The dispatch and the locale selector are captured per-test.
+// Mock react-redux so the NewTaskComposerButton component (which calls
+// useDispatch and, via useFormatMessage, useSelector) can be exercised without
+// a real <Provider>. The dispatch and the locale selector are captured per-test.
 jest.mock('react-redux', () => ({
     useDispatch: () => mockDispatch,
     useSelector: (selector: (s: unknown) => unknown) => selector(mockState),
@@ -22,6 +22,11 @@ jest.mock('i18n_utils', () => ({
     formatMessage: (id: string) => id,
     activeLocaleSelector: () => 'en',
 }));
+
+// react-bootstrap is a webpack external supplied by the host at runtime, so it
+// is not installed as a package. It is mapped to a passthrough mock via Jest's
+// moduleNameMapper in package.json so importing it (OverlayTrigger/Tooltip)
+// works under Jest without a real install.
 
 import Plugin, {NewTaskComposerButton, openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
@@ -148,12 +153,12 @@ describe('Plugin.initialize registrations (#27)', () => {
         mockState = {};
 
         // Invoke the component as a function (it is a function component) with
-        // the draft prop the host's PostEditorAction Pluggable passes. We then
-        // pull the onClick handler off the rendered <button> and fire it.
-        const element = NewTaskComposerButton({draft: {channelId: 'ch123'}}) as {
-            props: {onClick: () => void};
-        };
-        element.props.onClick();
+        // the draft prop the host's PostEditorAction Pluggable passes. The
+        // component wraps the <button> in an OverlayTrigger; the react-bootstrap
+        // mock passes children through, so the button is reachable as the
+        // OverlayTrigger element's `children` prop.
+        const button = buttonInside(NewTaskComposerButton({draft: {channelId: 'ch123'}}));
+        button.props.onClick();
 
         expect(actions).toContainEqual({
             type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
@@ -168,10 +173,8 @@ describe('Plugin.initialize registrations (#27)', () => {
         };
         mockState = {};
 
-        const element = NewTaskComposerButton({}) as {
-            props: {onClick: () => void};
-        };
-        element.props.onClick();
+        const button = buttonInside(NewTaskComposerButton({}));
+        button.props.onClick();
 
         expect(actions).toContainEqual({
             type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
@@ -179,6 +182,14 @@ describe('Plugin.initialize registrations (#27)', () => {
         });
     });
 });
+
+// buttonInside digs the <button> out of the OverlayTrigger wrapper the
+// react-bootstrap mock renders. The mock passes `children` through unchanged,
+// so the OverlayTrigger element's props.children is the <button> element.
+function buttonInside(element: unknown): {props: {onClick: () => void}} {
+    const props = (element as {props: {children: {props: {onClick: () => void}}}}).props;
+    return props.children;
+}
 
 describe('openNewTaskFromMessage', () => {
     // A host state shape with a post under entities.posts.posts, matching where
