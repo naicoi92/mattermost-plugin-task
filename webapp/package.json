@@ -80,7 +80,8 @@
       "^.+\\.(css|less|scss)$": "identity-obj-proxy",
       "^.*i18n.*\\.(json)$": "<rootDir>/tests/i18n_mock.json",
       "^bundle-loader\\?lazy\\!(.*)$": "$1",
-      "^react-bootstrap$": "<rootDir>/tests/react-bootstrap-mock.js"
+      "^react-bootstrap$": "<rootDir>/tests/react-bootstrap-mock.js",
+      "^mattermost-redux/client$": "<rootDir>/tests/mattermost-redux-client-mock.js"
     },
     "moduleDirectories": [
       "src",

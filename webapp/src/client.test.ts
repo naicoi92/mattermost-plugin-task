@@ -1,3 +1,7 @@
+/**
+ * @jest-environment jsdom
+ */
+
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
@@ -10,6 +14,14 @@
 // returns a minimal response-like object exposing exactly the surface the client
 // uses (.ok, .status, .statusText, .text()). This keeps the tests fast and
 // environment-independent.
+//
+// Client4 (from mattermost-redux/client) is replaced with a mock via Jest's
+// moduleNameMapper (see package.json → tests/mattermost-redux-client-mock.js)
+// because the real module's deep @mattermost/* dependency chain relies on the
+// package.json "exports" field, which Jest 27's resolver doesn't support. The
+// mock reproduces getOptions's contract: X-Requested-With on every request,
+// X-CSRF-Token (from the MMCSRF cookie) on non-GET methods, and
+// credentials: 'include'.
 
 import {ClientError, PLUGIN_API_BASE_URL} from 'client';
 import manifest from 'manifest';
@@ -94,7 +106,15 @@ describe('doFetch happy path', () => {
         expect(captured).not.toBeNull();
         expect(captured!.url).toBe(`${PLUGIN_API_BASE_URL}/tasks`);
         expect(captured!.init?.method).toBe('POST');
-        expect(captured!.init?.headers).toEqual({'Content-Type': 'application/json'});
+
+        // Client4.getOptions injects X-Requested-With; Content-Type comes from
+        // the request body being set.
+        const headers = captured!.init?.headers as Record<string, string>;
+        expect(headers['Content-Type']).toBe('application/json');
+        expect(headers['X-Requested-With']).toBe('XMLHttpRequest');
+
+        // credentials: 'include' is set so the session cookie is sent.
+        expect(captured!.init?.credentials).toBe('include');
         expect(captured!.init?.body).toBe(JSON.stringify({summary: 'Buy milk'}));
     });
 });
@@ -283,5 +303,84 @@ describe('getUserByUsername (#96)', () => {
             status: 404,
             message: 'user not found',
         });
+    });
+});
+
+// Client4.getOptions is the single place where the Mattermost-required request
+// headers are assembled. These tests pin the CSRF contract that fixes the 401
+// on write requests: the server's CSRF check (EnableCSRFChecks is on by
+// default) needs X-CSRF-Token on POST/PATCH/DELETE or it never injects the
+// Mattermost-User-Id header and the plugin's auth middleware rejects the
+// request. The token is read from the MMCSRF cookie, which the host sets on
+// the authenticated session.
+describe('doFetch CSRF token via Client4.getOptions', () => {
+    // jsdom persists document.cookie across tests, so clear it explicitly.
+    afterEach(() => {
+        document.cookie = 'MMCSRF=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+    });
+
+    test('POST includes X-CSRF-Token when the MMCSRF cookie is present', async () => {
+        document.cookie = 'MMCSRF=test-csrf-token;path=/';
+        let captured: {init?: RequestInit} | null = null;
+        mockFetch((_url, init) => {
+            captured = {init};
+            return {...mockResponse(201, {id: 'new'}), ok: true} as unknown as MockResponse;
+        });
+
+        const {createTask} = await importClient();
+        await createTask({summary: 'ship it'});
+
+        const headers = captured!.init?.headers as Record<string, string>;
+        expect(headers['X-CSRF-Token']).toBe('test-csrf-token');
+        expect(headers['X-Requested-With']).toBe('XMLHttpRequest');
+    });
+
+    test('GET does not carry X-CSRF-Token (CSRF only applies to write methods)', async () => {
+        document.cookie = 'MMCSRF=test-csrf-token;path=/';
+        let captured: {init?: RequestInit} | null = null;
+        mockFetch((_url, init) => {
+            captured = {init};
+            return okResponse({id: 'abc'});
+        });
+
+        const {getTask} = await importClient();
+        await getTask('abc');
+
+        const headers = captured!.init?.headers as Record<string, string>;
+        expect(headers['X-CSRF-Token']).toBeUndefined();
+        expect(headers['X-Requested-With']).toBe('XMLHttpRequest');
+    });
+
+    test('POST still sends X-Requested-With when no MMCSRF cookie exists', async () => {
+        // No cookie set; the request must still be identifiable as an XHR and
+        // carry credentials, even though the CSRF header is omitted.
+        let captured: {init?: RequestInit} | null = null;
+        mockFetch((_url, init) => {
+            captured = {init};
+            return {...mockResponse(201, {id: 'new'}), ok: true} as unknown as MockResponse;
+        });
+
+        const {createTask} = await importClient();
+        await createTask({summary: 'no cookie'});
+
+        const headers = captured!.init?.headers as Record<string, string>;
+        expect(headers['X-CSRF-Token']).toBeUndefined();
+        expect(headers['X-Requested-With']).toBe('XMLHttpRequest');
+        expect(captured!.init?.credentials).toBe('include');
+    });
+
+    test('DELETE also carries X-CSRF-Token', async () => {
+        document.cookie = 'MMCSRF=delete-token;path=/';
+        let captured: {init?: RequestInit} | null = null;
+        mockFetch((_url, init) => {
+            captured = {init};
+            return {status: 204, ok: true, statusText: '', text: () => Promise.resolve('')} as unknown as MockResponse;
+        });
+
+        const {deleteTask} = await importClient();
+        await deleteTask('abc');
+
+        const headers = captured!.init?.headers as Record<string, string>;
+        expect(headers['X-CSRF-Token']).toBe('delete-token');
     });
 });

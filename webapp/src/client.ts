@@ -14,6 +14,8 @@
 
 import manifest from 'manifest';
 
+import {Client4} from 'mattermost-redux/client';
+
 import type {
     Comment,
     CreateCommentInput,
@@ -86,19 +88,25 @@ function buildQuery(params?: ListTasksParams): string {
 
 // doFetch performs a JSON request against the plugin API, returning the parsed
 // body. A non-2xx response is surfaced as ClientError; 204 No Content yields
-// undefined. The browser supplies the Mattermost-User-ID auth header via
-// cookies, so no manual auth header is needed here.
+// undefined.
+//
+// Request options are delegated to Client4.getOptions(), the same helper the
+// host webapp and the official plugins (e.g. mattermost-plugin-jira) use.
+// Client4 injects the headers the Mattermost server requires before it forwards
+// a request to a plugin: X-Requested-With: XMLHttpRequest, X-CSRF-Token (read
+// from the MMCSRF cookie) on write methods, and credentials: 'include'. Without
+// X-CSRF-Token the server rejects the CSRF check (EnableCSRFChecks is enabled
+// by default) and never injects the Mattermost-User-Id header, so the plugin's
+// auth middleware returns 401 even though the session cookie was sent.
 export async function doFetch<T>(path: string, options: FetchOptions = {}): Promise<T> {
     const {method = 'GET', body} = options;
     const url = `${PLUGIN_API_BASE_URL}${path}`;
 
-    const headers = body === undefined ? undefined : {'Content-Type': 'application/json'};
-    const res = await fetch(url, {
+    const res = await fetch(url, Client4.getOptions({
         method,
-        headers,
-        credentials: 'same-origin',
+        headers: body === undefined ? undefined : {'Content-Type': 'application/json'},
         body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    }));
 
     if (!res.ok) {
         // The server uses plain-text error bodies (writeError in api.go); fall
@@ -247,10 +255,13 @@ export interface User {
 // getUserByUsername resolves a username (without the leading @) to a user via
 // the host REST API. Throws ClientError (404) when the username is unknown. It
 // hits the host /api/v4 path directly (not the plugin API prefix), so it
-// performs its own fetch rather than reuse doFetch.
+// performs its own fetch rather than reuse doFetch, but still delegates request
+// options to Client4.getOptions() so the host's auth/credential handling is
+// consistent (GET needs no CSRF token, but credentials: 'include' and
+// X-Requested-With still apply).
 export async function getUserByUsername(username: string): Promise<User> {
     const url = `/api/v4/users/username/${encodeURIComponent(username)}`;
-    const res = await fetch(url, {credentials: 'same-origin'});
+    const res = await fetch(url, Client4.getOptions({}));
     if (!res.ok) {
         let message = '';
         try {
