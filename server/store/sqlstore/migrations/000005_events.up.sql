@@ -14,7 +14,7 @@
 -- MVP hard-delete model; if a retention/soft-delete policy is added later the
 -- cascade can be revisited.
 
-CREATE TABLE {{prefix}}task_events (
+CREATE TABLE {{prefix}}events (
     id          VARCHAR(26) PRIMARY KEY,
     task_id     VARCHAR(26) NOT NULL,
     actor_id    VARCHAR(26) NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE {{prefix}}task_events (
     to_value    TEXT DEFAULT NULL,
     created_at  BIGINT NOT NULL,
     CONSTRAINT fk_events_task FOREIGN KEY (task_id)
-        REFERENCES {{prefix}}task_tasks(id) ON DELETE CASCADE
+        REFERENCES {{prefix}}tasks(id) ON DELETE CASCADE
 );
 
-{{createIndex (printf "%sevents_task_idx" (prefix)) (printf "%stask_events" (prefix)) "task_id, created_at DESC"}}
+{{createIndex (printf "%sevents_task_idx" (prefix)) (printf "%sevents" (prefix)) "task_id, created_at DESC"}}

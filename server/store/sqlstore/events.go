@@ -12,7 +12,7 @@ import (
 )
 
 // eventsTableShort is the short (unprefixed) name of the task_events table.
-const eventsTableShort = "task_events"
+const eventsTableShort = "events"
 
 // eventColumns lists every column of task_events in scan order.
 var eventColumns = []string{"id", "task_id", "actor_id", "event_type", "from_value", "to_value", "created_at"}

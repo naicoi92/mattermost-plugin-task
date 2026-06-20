@@ -13,15 +13,15 @@
 --
 -- post_id is UNIQUE so a reply can't be linked to two tasks.
 
-CREATE TABLE {{prefix}}task_comments (
+CREATE TABLE {{prefix}}comments (
     id         VARCHAR(26) PRIMARY KEY,
     task_id    VARCHAR(26) NOT NULL,
     post_id    VARCHAR(26) NOT NULL,
     author_id  VARCHAR(26) NOT NULL,
     created_at BIGINT NOT NULL,
     CONSTRAINT fk_comments_task FOREIGN KEY (task_id)
-        REFERENCES {{prefix}}task_tasks(id) ON DELETE CASCADE,
+        REFERENCES {{prefix}}tasks(id) ON DELETE CASCADE,
     CONSTRAINT uq_comments_post UNIQUE (post_id)
 );
 
-{{createIndex (printf "%scomments_task_idx" (prefix)) (printf "%stask_comments" (prefix)) "task_id, created_at"}}
+{{createIndex (printf "%scomments_task_idx" (prefix)) (printf "%scomments" (prefix)) "task_id, created_at"}}

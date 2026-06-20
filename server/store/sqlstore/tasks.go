@@ -16,7 +16,7 @@ import (
 
 // taskTableShort is the short (unprefixed) name of the task_tasks table; the
 // store's tableName() adds the configured prefix.
-const taskTableShort = "task_tasks"
+const taskTableShort = "tasks"
 
 // taskColumns lists every column of task_tasks in the order scanRow reads
 // them. Keeping it in one place means a missing column in a SELECT surfaces
