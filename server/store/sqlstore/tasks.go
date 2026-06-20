@@ -192,12 +192,14 @@ func (s *SQLStore) ListTasks(ctx context.Context, q store.ListQuery) (store.Page
 	}
 
 	// Keyset pagination on order_key (strictly greater than the cursor),
-	// ordered ascending so pages flow in creation/kanban order.
+	// ordered ascending so pages flow in creation/kanban order. Qualify with
+	// the t. alias because ScopeMine joins task_members which could otherwise
+	// make order_key ambiguous.
 	builder = builder.
-		OrderByClause(s.escapeField("order_key") + " ASC").
+		OrderByClause("t." + s.escapeField("order_key") + " ASC").
 		Limit(toUint64(q.Limit + 1)) // +1 to detect HasMore.
 	if q.AfterOrderKey != "" {
-		builder = builder.Where(sq.Gt{"order_key": q.AfterOrderKey})
+		builder = builder.Where(sq.Gt{"t.order_key": q.AfterOrderKey})
 	}
 
 	rows, err := builder.QueryContext(ctx)
@@ -240,7 +242,7 @@ func (s *SQLStore) CountTasksByStatus(ctx context.Context, q store.ListQuery) (m
 	if err != nil {
 		return nil, err
 	}
-	builder = builder.GroupBy("status")
+	builder = builder.GroupBy("t.status")
 
 	rows, err := builder.QueryContext(ctx)
 	if err != nil {
@@ -366,20 +368,39 @@ func (s *SQLStore) NextGlobalOrderKey(ctx context.Context) (string, error) {
 // applyTaskFilters returns a SelectBuilder with the WHERE clauses implied by
 // the ListQuery (scope, status, due). Columns selects what to project; both
 // ListTasks and CountTasksByStatus use it so the WHERE stays identical.
+//
+// The main table is always aliased `t` so that when ScopeMine JOINs
+// task_members (which also has a created_at column), SELECT/WHERE column
+// references can be qualified unambiguously as t.<col>.
 func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.SelectBuilder, error) {
-	b := s.builder().Select(columns...).From(s.tableName(taskTableShort))
+	// Qualify simple column names with the main-table alias `t`. When
+	// ScopeMine joins task_members (which also has a created_at column), bare
+	// column names would be ambiguous; qualifying as t.<col> resolves it.
+	// Expressions (COUNT(*), aggregates, "col AS x") are passed through
+	// unchanged so we don't break their syntax.
+	qcols := make([]string, len(columns))
+	for i, c := range columns {
+		qcols[i] = qualifyColumn(c)
+	}
+	b := s.builder().Select(qcols...).From(s.tableName(taskTableShort) + " AS t")
 
 	switch q.Scope {
 	case store.ScopeMine:
-		// JOIN task_members role='assignee' for the user. task_members is
-		// created in M2-2; until then this branch returns an error so a
-		// misconfigured caller fails loudly instead of returning all rows.
-		return b, errors.New("list tasks: scope=mine requires task_members (M2-2)")
+		// "My Tasks" = tasks where the user is the assignee, expressed as a
+		// JOIN on task_members (role='assignee'). This is one query instead of
+		// the KV store's ListKeys + per-task Get N+1 pattern. UserID is
+		// required; an empty value would match every unassigned-less task, so
+		// we reject it explicitly.
+		if q.UserID == "" {
+			return b, errors.New("list tasks: scope=mine requires UserID")
+		}
+		b = b.Join(s.tableName(membersTableShort) + " AS m ON m.task_id = t.id").
+			Where(sq.Eq{"m.user_id": q.UserID, "m.role": model.MemberRoleAssignee})
 	case store.ScopeChannel:
 		if q.ChannelID == "" {
 			return b, errors.New("list tasks: scope=channel requires ChannelID")
 		}
-		b = b.Where(sq.Eq{"channel_id": q.ChannelID})
+		b = b.Where(sq.Eq{"t.channel_id": q.ChannelID})
 	case store.ScopeAll:
 		// no extra filter
 	default:
@@ -387,7 +408,7 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 	}
 
 	if q.Status != "" {
-		b = b.Where(sq.Eq{"status": q.Status})
+		b = b.Where(sq.Eq{"t.status": q.Status})
 	}
 	if q.Due != store.DueAny {
 		if q.DueAsOf == 0 {
@@ -398,17 +419,17 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 			return b, fmt.Errorf("list tasks: unknown due filter %q", q.Due)
 		}
 		// due_at IS NOT NULL is implied by any range filter.
-		b = b.Where(sq.NotEq{"due_at": nil})
+		b = b.Where(sq.NotEq{"t.due_at": nil})
 		if start > 0 {
-			b = b.Where(sq.GtOrEq{"due_at": start})
+			b = b.Where(sq.GtOrEq{"t.due_at": start})
 		}
 		if end > 0 {
-			b = b.Where(sq.Lt{"due_at": end})
+			b = b.Where(sq.Lt{"t.due_at": end})
 		}
 		if q.Due == store.DueOverdue {
 			// Overdue excludes done/cancelled tasks. NotEq with a slice
 			// renders as "status NOT IN (?, ?)".
-			b = b.Where(sq.NotEq{"status": []string{model.StatusDone, model.StatusCancelled}})
+			b = b.Where(sq.NotEq{"t.status": []string{model.StatusDone, model.StatusCancelled}})
 		}
 	}
 	return b, nil
@@ -470,6 +491,18 @@ func nullableString(v string) any {
 		return nil
 	}
 	return v
+}
+
+// qualifyColumn prefixes a bare column name with the main-table alias `t.` so
+// JOINs against task_members (which shares some column names like created_at)
+// stay unambiguous. SQL expressions — anything containing a space, paren,
+// comma, or already-qualified name — are returned unchanged so aggregates and
+// aliases ("COUNT(*) AS cnt") keep their syntax.
+func qualifyColumn(col string) string {
+	if col == "" || strings.ContainsAny(col, " (),.*") {
+		return col
+	}
+	return "t." + col
 }
 
 // toUint64 converts a non-negative int to uint64 without tripping gosec's G115
