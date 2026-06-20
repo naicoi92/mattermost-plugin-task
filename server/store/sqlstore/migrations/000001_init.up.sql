@@ -1,0 +1,11 @@
+-- 000001_init: migration framework bootstrap.
+--
+-- This migration is intentionally a no-op DDL statement: it exists so the
+-- migration engine has at least one migration to apply and can prove the
+-- schema_migrations bookkeeping table is created and tracked. The actual
+-- task_tasks / task_members / ... schema is introduced by migrations
+-- 000002+ (M2-x), keeping each table's DDL reviewable in its own issue.
+--
+-- "SELECT 1" is dialect-agnostic (postgres, mysql, sqlite all accept it) and
+-- produces no schema change, so applying it is always safe and idempotent.
+SELECT 1;
