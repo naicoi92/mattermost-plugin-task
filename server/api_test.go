@@ -180,6 +180,21 @@ func authedRequest(method, target, body, userID string) *http.Request {
 	return r
 }
 
+// unauthedRequest builds a request WITHOUT the Mattermost-User-ID header,
+// mirroring how the Mattermost server issues an Interactive Dialog submit
+// callback (an internal server→plugin request that carries no session
+// cookie). Used to verify dialog submit endpoints are reachable without auth
+// (#109). The actor is supplied via the request body instead.
+func unauthedRequest(method, target, body string) *http.Request {
+	var r *http.Request
+	if body != "" {
+		r = httptest.NewRequest(method, target, bytes.NewReader([]byte(body)))
+	} else {
+		r = httptest.NewRequest(method, target, nil)
+	}
+	return r
+}
+
 func TestCreateTask_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin()
 
@@ -696,4 +711,35 @@ func TestDeleteAssignee_Endpoint(t *testing.T) {
 	var got model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Empty(t, got.AssigneeID)
+}
+
+// TestAuthenticatedRoutes_StillRequireHeader pins the security boundary after
+// #109: endpoints reached from the browser session (task CRUD, card actions,
+// dialog openers) must keep rejecting requests that lack the Mattermost-User-ID
+// header. Only the dialog SUBMIT callbacks are exempt (tested separately).
+func TestAuthenticatedRoutes_StillRequireHeader(t *testing.T) {
+	// Representative endpoints from each authenticated route group. The body is
+	// valid JSON so the auth middleware (which runs before the handler) is the
+	// only thing under test; a 401 must come back regardless of payload.
+	cases := []struct {
+		name   string
+		method string
+		target string
+		body   string
+	}{
+		{"task create", http.MethodPost, "/api/v1/tasks", `{"summary":"x"}`},
+		{"task list", http.MethodGet, "/api/v1/tasks", ""},
+		{"card action", http.MethodPost, "/api/v1/actions", `{}`},
+		{"dialog open task detail", http.MethodPost, "/api/v1/dialogs/open-task-detail", `{"trigger_id":"t","task_id":"x"}`},
+		{"dialog open new task", http.MethodPost, "/api/v1/dialogs/open-new-task", `{"trigger_id":"t"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := newTestPlugin()
+			w := httptest.NewRecorder()
+			p.ServeHTTP(nil, w, unauthedRequest(tc.method, tc.target, tc.body))
+			assert.Equal(t, http.StatusUnauthorized, w.Code,
+				"%s %s must require the Mattermost-User-ID header", tc.method, tc.target)
+		})
+	}
 }

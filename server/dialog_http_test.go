@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
+	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
 // submitNewTaskDialog tests exercise the New Task dialog submit handler
@@ -191,4 +194,114 @@ func TestSubmitNewTaskDialog_ChannelTaskCreatedWithChannelScope(t *testing.T) {
 	for _, tsk := range store.tasks {
 		assert.Equal(t, "ch1", tsk.ChannelID, "channel task has a channel card")
 	}
+}
+
+// --- Regression tests for #109: dialog submit callbacks must be reachable
+// without the Mattermost-User-ID header, because the Mattermost server issues
+// them as internal server→plugin requests that carry no session cookie. The
+// actor is taken from SubmitDialogRequest.UserId in the body. The authed
+// tests above cover the legacy harness path; these mirror production. ---
+
+// TestSubmitNewTaskDialog_NoAuthHeaderStillRuns posts a New Task submission
+// WITHOUT the Mattermost-User-ID header and asserts the handler runs and
+// creates the task (instead of returning 401 as it did before #109).
+func TestSubmitNewTaskDialog_NoAuthHeaderStillRuns(t *testing.T) {
+	p, store := newTestPlugin()
+	w := httptest.NewRecorder()
+	body := submissionEnvelope("u1", "ch1", minimalSubmission("Ship release", "channel"))
+	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body))
+
+	// The handler responds 200 with a SubmitDialogResponse, NOT 401.
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp mmmodel.SubmitDialogResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Empty(t, resp.Error, "successful submit closes the dialog")
+
+	// The actor (req.UserId from the body, not the header) created the task.
+	require.Len(t, store.tasks, 1)
+	for _, tsk := range store.tasks {
+		assert.Equal(t, "u1", tsk.CreatorID, "actor taken from body UserId")
+	}
+}
+
+// TestSubmitNewTaskDialog_MissingUserIDRejected verifies the hardening: a
+// submit callback whose body carries no user id is rejected with 401 even
+// though the route bypasses the auth middleware.
+func TestSubmitNewTaskDialog_MissingUserIDRejected(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	body := submissionEnvelope("", "ch1", minimalSubmission("Ship release", "channel"))
+	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body))
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestSubmitQuickListDialog_NoAuthHeaderStillRuns posts a Quick List
+// submission WITHOUT the Mattermost-User-ID header and asserts the handler
+// runs (200 + SubmitDialogResponse) instead of 401.
+func TestSubmitQuickListDialog_NoAuthHeaderStillRuns(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	body := submissionEnvelope("u1", "", map[string]any{
+		dialogFieldTaskPick: "t1",
+	})
+	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/quicklist", body))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp mmmodel.SubmitDialogResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp.Error, "/task show t1")
+}
+
+// TestSubmitQuickListDialog_MissingUserIDRejected verifies the hardening for
+// the Quick List callback.
+func TestSubmitQuickListDialog_MissingUserIDRejected(t *testing.T) {
+	p, _ := newTestPlugin()
+	w := httptest.NewRecorder()
+	body := submissionEnvelope("", "", map[string]any{dialogFieldTaskPick: "t1"})
+	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/quicklist", body))
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestSubmitTaskDetailDialog_NoAuthHeaderStillRuns posts a Task Detail save
+// WITHOUT the Mattermost-User-ID header and asserts the handler runs (not
+// 401). The task must exist first so the PATCH path is exercised.
+func TestSubmitTaskDetailDialog_NoAuthHeaderStillRuns(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "Old", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	body := submissionEnvelope("u1", created.ID, map[string]any{
+		dialogFieldSummary: "Updated summary",
+		dialogFieldStatus:  taskmodel.StatusTodo,
+	})
+	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/taskdetail", body))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp mmmodel.SubmitDialogResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Empty(t, resp.Error, "successful save closes the dialog")
+
+	updated, err := p.taskService.Get(created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated summary", updated.Summary)
+}
+
+// TestSubmitTaskDetailDialog_MissingUserIDRejected verifies the hardening for
+// the Task Detail callback.
+func TestSubmitTaskDetailDialog_MissingUserIDRejected(t *testing.T) {
+	p, _ := newTestPlugin()
+	created, err := p.taskService.Create(task.CreateInput{Summary: "Old", CreatorID: "u1"})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	body := submissionEnvelope("", created.ID, map[string]any{
+		dialogFieldSummary: "Updated summary",
+		dialogFieldStatus:  taskmodel.StatusTodo,
+	})
+	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/taskdetail", body))
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
 }
