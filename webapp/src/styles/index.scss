@@ -24,6 +24,54 @@ $bg-hover: #eef1f5;
 $radius: 4px;
 $gap: 8px;
 
+// --- New Task channel-header button (#107) --------------------------------
+// Mirrors the host's call-button styles (webapp/channels/src/plugins/call_button/
+// call_button.scss) so the New Task icon visually matches Start call: a compact
+// pill that uses the theme's button color, with hover/active states. We use
+// CSS variables (--button-bg-rgb, --center-channel-color-rgb) supplied by the
+// host so the button adapts to light/dark themes automatically.
+//
+// The high-specificity nesting (button.task-header-new-task-btn) mirrors the
+// `button.call-button` pattern in the host so our styles compete with the
+// generic `.style--none` / header resets on equal footing.
+
+button.task-header-new-task-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 4px;
+    color: rgb(var(--button-bg-rgb, 28, 88, 217));
+    fill: currentColor;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(var(--button-bg-rgb, 28, 88, 217), 0.08);
+    }
+
+    &:active {
+        background: rgba(var(--button-bg-rgb, 28, 88, 217), 0.16);
+    }
+
+    i,
+    span {
+        font-size: 14px;
+        line-height: 14px;
+    }
+
+    i::before {
+        margin: 0;
+    }
+
+    .task-header-new-task-btn__label {
+        margin: 0 6px;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 16px;
+    }
+}
+
 // --- TaskSidebar (RHS container) -------------------------------------------
 
 .task-rhs {
