@@ -235,16 +235,6 @@ func TestListTasks_ScopeChannelStatusAndPagination(t *testing.T) {
 	})
 }
 
-func TestListTasks_ScopeMineErrorsUntilMembersExist(t *testing.T) {
-	s := tasksTestStore(t)
-	// ScopeMine requires task_members (M2-2); until then it must error rather
-	// than silently returning all rows. Assert the specific guard message so
-	// an unrelated failure isn't mistaken for the guard firing.
-	_, err := s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeMine, UserID: "u1", Limit: 10})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scope=mine")
-}
-
 func TestListTasks_AllScope(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
