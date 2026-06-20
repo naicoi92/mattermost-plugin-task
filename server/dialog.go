@@ -342,6 +342,13 @@ func (p *Plugin) submitQuickListDialog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid dialog submission", http.StatusBadRequest)
 		return
 	}
+	if req.UserId == "" {
+		// Submit callbacks are mounted without the auth middleware (#109); the
+		// actor is trusted via SubmitDialogRequest.UserId, so an empty value
+		// means the callback was not issued by the server and must be rejected.
+		http.Error(w, "Not authorized", http.StatusUnauthorized)
+		return
+	}
 	taskID, _ := req.Submission[dialogFieldTaskPick].(string)
 	if taskID == "" {
 		writeDialogResponse(w, "Pick a task to view it.")
@@ -357,6 +364,13 @@ func (p *Plugin) submitTaskDetailDialog(w http.ResponseWriter, r *http.Request) 
 	var req model.SubmitDialogRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid dialog submission", http.StatusBadRequest)
+		return
+	}
+	if req.UserId == "" {
+		// Submit callbacks are mounted without the auth middleware (#109); the
+		// actor is trusted via SubmitDialogRequest.UserId, so an empty value
+		// means the callback was not issued by the server and must be rejected.
+		http.Error(w, "Not authorized", http.StatusUnauthorized)
 		return
 	}
 	taskID := req.State
@@ -564,6 +578,13 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 	var req model.SubmitDialogRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid dialog submission", http.StatusBadRequest)
+		return
+	}
+	if req.UserId == "" {
+		// Submit callbacks are mounted without the auth middleware (#109); the
+		// actor is trusted via SubmitDialogRequest.UserId, so an empty value
+		// means the callback was not issued by the server and must be rejected.
+		http.Error(w, "Not authorized", http.StatusUnauthorized)
 		return
 	}
 

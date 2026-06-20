@@ -23,10 +23,12 @@ import (
 func (p *Plugin) initRouter() *mux.Router {
 	router := mux.NewRouter()
 
-	// Middleware to require that the user is logged in
-	router.Use(p.MattermostAuthorizationRequired)
-
+	// Authenticated sub-router: endpoints reached from the browser (task CRUD,
+	// card actions, dialog openers). The Mattermost host sets the
+	// Mattermost-User-ID header on these via the session cookie proxy, so the
+	// auth middleware rejects anything without it.
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
+	apiRouter.Use(p.MattermostAuthorizationRequired)
 
 	apiRouter.HandleFunc("/hello", p.HelloWorld).Methods(http.MethodGet)
 
@@ -34,12 +36,23 @@ func (p *Plugin) initRouter() *mux.Router {
 	// Subtask/Comment buttons POST here with context {action, task_id}.
 	apiRouter.HandleFunc("/actions", p.handleCardAction).Methods(http.MethodPost)
 
-	// Interactive Dialog submit callbacks + openers (issues #8, #17, #95).
-	apiRouter.HandleFunc("/dialogs/quicklist", p.submitQuickListDialog).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/dialogs/taskdetail", p.submitTaskDetailDialog).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/dialogs/newtask", p.submitNewTaskDialog).Methods(http.MethodPost)
+	// Dialog openers are HTTP endpoints called from clients that hold a
+	// browser session, so they stay authenticated (issues #8, #17, #95).
 	apiRouter.HandleFunc("/dialogs/open-task-detail", p.openTaskDetailDialog).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/dialogs/open-new-task", p.openNewTaskDialog).Methods(http.MethodPost)
+
+	// Dialog SUBMIT callbacks arrive as internal server→plugin HTTP requests
+	// issued by the Mattermost server when a user submits an Interactive
+	// Dialog. They do NOT carry the Mattermost-User-ID header (that header is
+	// only set on browser-session requests), so they cannot be mounted under
+	// the auth middleware or they are rejected with 401 before the handler
+	// runs (#109). The actor is trusted via model.SubmitDialogRequest.UserId
+	// in the body, and each handler validates that field non-empty as a
+	// hardening check.
+	dialogCallbacks := router.PathPrefix("/api/v1/dialogs").Subrouter()
+	dialogCallbacks.HandleFunc("/quicklist", p.submitQuickListDialog).Methods(http.MethodPost)
+	dialogCallbacks.HandleFunc("/taskdetail", p.submitTaskDetailDialog).Methods(http.MethodPost)
+	dialogCallbacks.HandleFunc("/newtask", p.submitNewTaskDialog).Methods(http.MethodPost)
 
 	// Task CRUD (issue #7).
 	tasks := apiRouter.PathPrefix("/tasks").Subrouter()
