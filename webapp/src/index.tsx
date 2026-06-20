@@ -4,6 +4,7 @@
 // Webapp plugin entry point (issue #27). Wires the plugin into the Mattermost
 // desktop UI through the official registry methods:
 //   - channel header button → opens the RHS
+//   - channel header icon ("New Task") → opens the New Task dialog (#107)
 //   - Right-Hand Sidebar → TaskSidebar (Quick List + Task Detail)
 //   - root components → KanbanModal (board) and NewTaskDialog (create popup)
 //   - WebSocket event handler → real-time task updates (#32 fills the body)
@@ -14,12 +15,15 @@
 // React/Redux/ReactRouter are webpack externals (webpack.config.js), supplied
 // by the host app at runtime; they are never bundled.
 
+import {useFormatMessage} from 'i18n_utils';
 import manifest from 'manifest';
 import React from 'react';
+import {useDispatch} from 'react-redux';
 import reducer, {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
 import type {WebSocketMessage} from '@mattermost/client';
+import type {Channel} from '@mattermost/types/channels';
 import type {GlobalState} from '@mattermost/types/store';
 
 import KanbanModal from 'components/kanban_modal/kanban_modal';
@@ -51,6 +55,48 @@ function getTranslationsForLocale(locale: string): Record<string, string> {
     }
 }
 
+// NewTaskHeaderIconProps is the prop shape the host's ChannelHeaderIcon
+// Pluggable passes to the registered component: the current channel and
+// membership, plus theme/webSocketClient injected by Pluggable. We declare
+// only what we read.
+interface NewTaskHeaderIconProps {
+    channel?: Channel;
+}
+
+// NewTaskHeaderIcon is the "New Task" icon rendered in the channel header icon
+// group (issue #107). Registered via registerChannelHeaderIcon, so it renders
+// INDEPENDENTLY in the header icon group (alongside mute/members/pinned),
+// never collapsed into the "Call" dropdown or grouped with the "Tasks" button
+// (both are different host slots — see channel_header.tsx). Desktop only: the
+// host does not render ChannelHeaderIcon on mobile (mobile uses the "..."
+// menu, where New Task is also listed via MobileChannelHeaderButton).
+//
+// On click it dispatches OPEN_NEW_TASK_DIALOG with the current channel id, so
+// NewTaskDialog opens pre-scoped (scope "Channel" radio enabled). The label
+// and tooltip are locale-aware via useFormatMessage.
+export function NewTaskHeaderIcon({channel}: NewTaskHeaderIconProps): JSX.Element {
+    const dispatch = useDispatch();
+    const t = useFormatMessage();
+    const onClick = () => {
+        dispatch({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            channelID: channel?.id,
+        });
+    };
+    return (
+        <button
+            type='button'
+            className='style--none task-header-new-task-btn'
+            onClick={onClick}
+            aria-label={t('webapp.task.tooltip.new_task')}
+            title={t('webapp.task.tooltip.new_task')}
+        >
+            <i className='icon fa fa-plus'/>
+            <span className='task-header-new-task-btn__label'>{t('webapp.task.new')}</span>
+        </button>
+    );
+}
+
 export default class Plugin {
     // registry is captured in initialize so the post-dropdown action and other
     // imperative callbacks can dispatch without re-deriving it.
@@ -72,6 +118,16 @@ export default class Plugin {
             'Tasks',
             'Mở danh sách task',
         );
+
+        // "New Task" channel header icon (issue #107). Registered via
+        // registerChannelHeaderIcon, which renders the component in the header
+        // icon group (channel_header.tsx ChannelHeaderIcon Pluggable) —
+        // INDEPENDENTLY, never grouped with the "Call" dropdown (slot
+        // CallButton) nor with the "Tasks" button (slot ChannelHeaderPlug).
+        // Each registered icon renders side-by-side (the host maps over them).
+        // Desktop only: the host does not render ChannelHeaderIcon on mobile;
+        // on mobile New Task is reachable via the "..." menu instead.
+        registry.registerChannelHeaderIcon(NewTaskHeaderIcon);
 
         // Root components: the Kanban board and the New Task popup. Mounted once
         // and toggled via Redux/props by their consumers.

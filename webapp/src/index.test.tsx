@@ -3,15 +3,37 @@
 
 // Unit tests for the plugin entry point (issue #27). Verifies that initialize
 // registers every desktop integration the issue requires: channel header button,
-// RHS component, root components (Kanban + New Task dialog), WebSocket handler,
-// reducer, translations, and the post dropdown action. Uses a fake registry +
-// store so no host app is needed.
+// channel header icon (New Task #107), RHS component, root components
+// (Kanban + New Task dialog), WebSocket handler, reducer, translations, and the
+// post dropdown action. Uses a fake registry + store so no host app is needed.
 
-import Plugin, {openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
+// Mock react-redux so the NewTaskHeaderIcon component (which calls useDispatch
+// and, via useFormatMessage, useSelector) can be exercised without a real
+// <Provider>. The dispatch and the locale selector are captured per-test.
+jest.mock('react-redux', () => ({
+    useDispatch: () => mockDispatch,
+    useSelector: (selector: (s: unknown) => unknown) => selector(mockState),
+}));
+
+// Mock i18n_utils so useFormatMessage returns a plain identity function and
+// activeLocaleSelector returns a stable locale without touching the store shape.
+jest.mock('i18n_utils', () => ({
+    useFormatMessage: () => (id: string) => id,
+    formatMessage: (id: string) => id,
+    activeLocaleSelector: () => 'en',
+}));
+
+import Plugin, {NewTaskHeaderIcon, openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
+import type {Channel} from '@mattermost/types/channels';
 import type {GlobalState} from '@mattermost/types/store';
+
+// Per-test dispatch + state shared with the react-redux / i18n_utils mocks
+// above. Reset at the top of each New Task icon test.
+let mockDispatch: (a: {type: string}) => void;
+let mockState: unknown;
 
 // A minimal store whose dispatch records every action, used to assert the
 // channel header button and post dropdown action dispatch the right thing.
@@ -42,6 +64,7 @@ function fakeRegistry() {
             toggleRHSPlugin: {type: 'TOGGLE_RHS'},
         })),
         registerChannelHeaderButtonAction: jest.fn(),
+        registerChannelHeaderIcon: jest.fn(),
         registerRootComponent: jest.fn(),
         registerWebSocketEventHandler: jest.fn(),
         registerReducer: jest.fn(),
@@ -63,11 +86,21 @@ describe('Plugin.initialize registrations (#27)', () => {
         expect(typeof rhsArgs[0]).toBe('function'); // TaskSidebar component
         expect(rhsArgs[1]).toBe('Tasks');
 
-        // Channel header button: icon, action, dropdown text, tooltip.
+        // Channel header button: ONE registration — "Tasks" (opens RHS).
+        // registerChannelHeaderButtonAction renders in the ChannelHeaderPlug
+        // slot, which the host also dispatches to MobileChannelHeaderButton.
         expect(registry.registerChannelHeaderButtonAction).toHaveBeenCalledTimes(1);
-        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
-        expect(headerArgs[2]).toBe('Tasks');
-        expect(headerArgs[3]).toBe('Mở danh sách task');
+        const tasksArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
+        expect(tasksArgs[2]).toBe('Tasks');
+        expect(tasksArgs[3]).toBe('Mở danh sách task');
+
+        // Channel header icon: ONE registration — "New Task" (#107).
+        // registerChannelHeaderIcon renders in the ChannelHeaderIcon Pluggable
+        // (header icon group), independently — never grouped into the "Call"
+        // dropdown or with the "Tasks" button. Desktop only.
+        expect(registry.registerChannelHeaderIcon).toHaveBeenCalledTimes(1);
+        const iconArgs = registry.registerChannelHeaderIcon.mock.calls[0] as unknown[];
+        expect(typeof iconArgs[0]).toBe('function'); // NewTaskHeaderIcon component
 
         // Two root components: Kanban modal + New Task dialog.
         expect(registry.registerRootComponent).toHaveBeenCalledTimes(2);
@@ -106,6 +139,45 @@ describe('Plugin.initialize registrations (#27)', () => {
 
         // showRHSPlugin is the object the RHS registration returned.
         expect(actions).toContainEqual({type: 'SHOW_RHS'});
+    });
+
+    test('NewTaskHeaderIcon dispatches OPEN_NEW_TASK_DIALOG with the current channel id on click (#107)', () => {
+        const actions: Array<{type: string}> = [];
+        mockDispatch = (a: {type: string}) => {
+            actions.push(a);
+        };
+        mockState = {};
+
+        // Invoke the component as a function (it is a function component) with
+        // the channel prop the host's ChannelHeaderIcon Pluggable would pass.
+        // We then pull the onClick handler off the rendered <button> and fire it.
+        const element = NewTaskHeaderIcon({channel: {id: 'ch123'} as Channel}) as {
+            props: {onClick: () => void};
+        };
+        element.props.onClick();
+
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            channelID: 'ch123',
+        });
+    });
+
+    test('NewTaskHeaderIcon is nil-safe when no channel is passed', () => {
+        const actions: Array<{type: string}> = [];
+        mockDispatch = (a: {type: string}) => {
+            actions.push(a);
+        };
+        mockState = {};
+
+        const element = NewTaskHeaderIcon({}) as {
+            props: {onClick: () => void};
+        };
+        element.props.onClick();
+
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            channelID: undefined,
+        });
     });
 });
 
