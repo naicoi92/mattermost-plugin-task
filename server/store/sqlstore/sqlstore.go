@@ -18,14 +18,22 @@
 package sqlstore
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 
 	sq "github.com/Masterminds/squirrel"
+	mmmodel "github.com/mattermost/mattermost/server/public/model"
 
-	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
 )
+
+// Compile-time guard: *SQLStore must implement the aggregate store.Store
+// interface assembled in M3-1. If a repository method signature drifts from
+// the interface, this fails to compile at the sqlstore package boundary rather
+// than surfacing later at a call site.
+var _ store.Store = (*SQLStore)(nil)
 
 // Dialect identifiers derived from the server's SqlSettings.DriverName. They
 // drive placeholder rendering and identifier quoting across every repository.
@@ -95,7 +103,7 @@ func New(db *sql.DB, dbType, tablePrefix string) (*SQLStore, error) {
 // server exposes its active driver via SqlSettings.DriverName; we map it to
 // our Dialect* constants so callers don't have to. It is a convenience used by
 // the plugin OnActivate wiring (M4-1).
-func NewFromConfig(db *sql.DB, cfg *model.SqlSettings, tablePrefix string) (*SQLStore, error) {
+func NewFromConfig(db *sql.DB, cfg *mmmodel.SqlSettings, tablePrefix string) (*SQLStore, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("sqlstore: SqlSettings must not be nil")
 	}
@@ -123,7 +131,7 @@ func dialectForDriver(driver string) string {
 	switch driver {
 	case driverMySQL:
 		return DialectMySQL
-	case driverPostgres: // == model.DatabaseDriverPostgres ("postgres")
+	case driverPostgres: // == mmmodel.DatabaseDriverPostgres ("postgres")
 		return DialectPostgres
 	default:
 		// Includes the empty case (config default applies later in the
@@ -185,12 +193,50 @@ func (s *SQLStore) builder() sq.StatementBuilderType {
 // withRunner returns a shallow clone of the store bound to a different runner
 // (typically a *sql.Tx). All other fields (db, dbType, prefix, placeholder
 // format) are shared with the parent, so a transaction-bound clone renders
-// SQL identically to the pool store. This is the mechanism WithTx (M3-1) uses
-// to hand repositories a tx-scoped Store.
+// SQL identically to the pool store. This is the mechanism WithTx uses to
+// hand repositories a tx-scoped Store.
 func (s *SQLStore) withRunner(runner sq.BaseRunner) *SQLStore {
 	clone := *s
 	clone.runner = runner
 	return &clone
+}
+
+// WithTx runs fn against a transaction-bound Store: every statement fn issues
+// shares the same *sql.Tx, so a multi-table operation (e.g. service.Create =
+// CreateTask + AddMember(creator) + AddMember(assignee) + SetReminder +
+// AppendTaskEvent) commits atomically or rolls back together.
+//
+// On fn error the tx is rolled back and the error is returned unwrapped from
+// the rollback (the original fn error is what callers care about). On success
+// the tx is committed. A panic inside fn is recovered into a rollback + repanic
+// so a half-applied transaction can't escape.
+func (s *SQLStore) WithTx(ctx context.Context, fn func(store.Store) error) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("withtx: begin: %w", err)
+	}
+	// Recover from a panic inside fn so the tx is rolled back before the
+	// panic propagates; without this the connection returns to the pool with
+	// an aborted tx and the next user sees confusing errors.
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+	txStore := s.withRunner(tx)
+	if ferr := fn(txStore); ferr != nil {
+		// Roll back and surface the original fn error; a rollback error here
+		// is secondary (the connection is being discarded anyway).
+		if rerr := tx.Rollback(); rerr != nil {
+			return fmt.Errorf("withtx: %w (rollback: %v)", ferr, rerr)
+		}
+		return ferr
+	}
+	if cerr := tx.Commit(); cerr != nil {
+		return fmt.Errorf("withtx: commit: %w", cerr)
+	}
+	return nil
 }
 
 // likePattern escapes SQL LIKE/ILIKE metacharacters in a user-supplied keyword
