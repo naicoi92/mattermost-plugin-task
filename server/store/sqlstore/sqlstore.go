@@ -197,6 +197,12 @@ func (s *SQLStore) withRunner(runner sq.BaseRunner) *SQLStore {
 // and wraps it in %...% for a substring search. Underscore and percent are the
 // two wildcards common to all supported dialects; escaping them keeps the
 // search behaving as a plain "contains" regardless of the input.
+//
+// Callers MUST pair the resulting predicate with an explicit ESCAPE clause,
+// e.g. `WHERE summary LIKE ? ESCAPE '\'`. Postgres and MySQL treat backslash
+// as the default LIKE escape, but SQLite has no default escape character, so
+// without ESCAPE the escaped backslashes would match literally and the
+// wildcard escaping would be silently ignored under sqlite tests.
 func likePattern(keyword string) string {
 	keyword = strings.ReplaceAll(keyword, `\`, `\\`)
 	keyword = strings.ReplaceAll(keyword, "%", `\%`)
