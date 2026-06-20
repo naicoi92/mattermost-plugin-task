@@ -3,6 +3,7 @@ module github.com/naicoi92/mattermost-plugin-task
 go 1.25
 
 require (
+	github.com/Masterminds/squirrel v1.5.4
 	github.com/gorilla/mux v1.8.1
 	github.com/mattermost/mattermost/server/public v0.1.21
 	github.com/oklog/ulid/v2 v2.1.1
@@ -28,6 +29,8 @@ require (
 	github.com/hashicorp/go-plugin v1.7.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
+	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
+	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattermost/go-i18n v1.11.1-0.20211013152124-5c415071e404 // indirect
 	github.com/mattermost/gosaml2 v0.10.0 // indirect
