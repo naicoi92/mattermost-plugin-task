@@ -108,12 +108,25 @@ func (s *SQLStore) ListMembers(ctx context.Context, taskID string) ([]model.Task
 
 // GetMemberByRole returns the user_id of the single member holding `role` on
 // `taskID` (e.g. the assignee or creator). Returns ErrMemberNotFound when no
-// such edge exists. The MVP enforces one creator + one assignee per task at
-// the application layer; if multi-assignee is enabled later, this method
-// should grow a List variant.
+// such edge exists.
+//
+// The schema (PK task_id+user_id+role) deliberately allows several users in
+// the same role on a task — that's the future-proofing decision (see
+// SQL_MIGRATION_PLAN.md §3.2): the schema is ready for multi-assignee /
+// follower without a later migration. This method returns the first such row;
+// the MVP enforces one creator + one assignee per task at the application
+// layer. If multi-assignee is enabled later, a List variant should be added.
 func (s *SQLStore) GetMemberByRole(ctx context.Context, taskID, role string) (string, error) {
-	if taskID == "" || role == "" {
-		return "", errors.New("get member by role: task id and role are required")
+	if taskID == "" {
+		return "", errors.New("get member by role: task id is required")
+	}
+	if role == "" {
+		return "", errors.New("get member by role: role is required")
+	}
+	// Validate role so a typo like "assginee" fails loudly here rather than
+	// being masked as ErrMemberNotFound.
+	if !model.IsValidMemberRole(role) {
+		return "", fmt.Errorf("get member by role: invalid role %q", role)
 	}
 	var userID string
 	err := s.builder().

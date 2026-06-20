@@ -30,6 +30,36 @@ func TestAddMember_IdempotentAndValidates(t *testing.T) {
 	})
 }
 
+func TestAddMember_AllowsMultipleUsersPerRoleAtSchemaLevel(t *testing.T) {
+	// The composite PK (task_id, user_id, role) — not (task_id, role) — is a
+	// deliberate future-proofing choice (see SQL_MIGRATION_PLAN.md §3.2): the
+	// schema must allow several users in the same role so multi-assignee /
+	// follower can be enabled without a migration. This test locks that
+	// invariant at the storage layer; the MVP still enforces one creator +
+	// one assignee per task at the application/service layer.
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+
+	require.NoError(t, s.AddMember(ctx, "T1", "u1", model.MemberRoleAssignee))
+	// Same role, different user — must succeed at the store layer.
+	require.NoError(t, s.AddMember(ctx, "T1", "u2", model.MemberRoleAssignee))
+
+	members, err := s.ListMembers(ctx, "T1")
+	require.NoError(t, err)
+	assert.Len(t, members, 2)
+}
+
+func TestGetMemberByRole_RejectsInvalidRole(t *testing.T) {
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+	// An invalid role must error here rather than be masked as not-found.
+	_, err := s.GetMemberByRole(ctx, "T1", "assginee")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid role")
+}
+
 func TestAddMember_FKCascadeOnTaskDelete(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
