@@ -134,3 +134,29 @@ func TestWithTx_RollsBackOnPanic(t *testing.T) {
 	_, err := s.GetTask(ctx, "T1")
 	require.ErrorIs(t, err, ErrTaskNotFound, "panic must roll back the tx")
 }
+
+func TestWithTx_NestedJoinsOuterTransaction(t *testing.T) {
+	// A nested WithTx must reuse the OUTER transaction, not start a new one.
+	// If the outer rolls back, the inner's writes must roll back too —
+	// otherwise an inner commit could survive an outer failure and break
+	// atomicity.
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	sentinel := errors.New("outer boom")
+
+	err := s.WithTx(ctx, func(outer store.Store) error {
+		// Inner WithTx: must run against the same outer tx.
+		if e := outer.WithTx(ctx, func(inner store.Store) error {
+			_, ie := inner.CreateTask(ctx, fixture("T1", "k1"))
+			return ie
+		}); e != nil {
+			return e
+		}
+		return sentinel // outer fails -> whole tx must roll back
+	})
+	require.ErrorIs(t, err, sentinel)
+
+	// The inner write must NOT have survived the outer rollback.
+	_, err = s.GetTask(ctx, "T1")
+	require.ErrorIs(t, err, ErrTaskNotFound, "nested write must roll back with the outer tx")
+}

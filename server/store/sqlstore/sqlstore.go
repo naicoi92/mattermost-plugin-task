@@ -210,7 +210,19 @@ func (s *SQLStore) withRunner(runner sq.BaseRunner) *SQLStore {
 // the rollback (the original fn error is what callers care about). On success
 // the tx is committed. A panic inside fn is recovered into a rollback + repanic
 // so a half-applied transaction can't escape.
+//
+// Nested WithTx: if this store is ALREADY transaction-bound (its runner is a
+// *sql.Tx, i.e. we're inside an outer WithTx), fn runs against the SAME outer
+// transaction rather than starting a new one. This makes a nested WithTx a
+// no-op wrapper: its writes join the outer tx and commit/roll back with it.
+// Without this, a nested call would open an independent transaction and could
+// commit while the outer rolls back — breaking atomicity.
 func (s *SQLStore) WithTx(ctx context.Context, fn func(store.Store) error) (err error) {
+	// Already inside a transaction? Reuse it instead of starting a new one.
+	if tx, ok := s.runner.(*sql.Tx); ok {
+		return fn(s.withRunner(tx))
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("withtx: begin: %w", err)
