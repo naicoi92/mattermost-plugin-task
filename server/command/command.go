@@ -253,6 +253,13 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 	addCmd.AddTextArgument("task summary", "\"<summary>\"", "")
 	taskCmd.AddCommand(addCmd)
 
+	// /task new ["<summary>"] — opens the New Task dialog (blank, or pre-filled).
+	// Mirrors the desktop channel-header "New Task" button; mobile uses this as
+	// the primary create entry point. The summary is optional.
+	newCmd := model.NewAutocompleteData("new", "[\"<summary>\"]", "Open the New Task dialog")
+	newCmd.AddTextArgument("optional task summary", "[\"<summary>\"]", "")
+	taskCmd.AddCommand(newCmd)
+
 	// /task list [mine|channel|all] [status ...] [due ...]
 	listCmd := model.NewAutocompleteData("list", "[mine|channel|all] [status] [due]", "List tasks")
 	listCmd.AddStaticListArgument("scope", false, []model.AutocompleteListItem{
@@ -324,6 +331,8 @@ func (c *Handler) handleTask(args *model.CommandArgs, subFields []string) (*mode
 	switch subFields[0] {
 	case "add":
 		return c.handleAdd(args, subFields[1:])
+	case "new":
+		return c.handleNew(args, subFields[1:])
 	case "list":
 		return c.handleList(args, subFields[1:])
 	case "show":
@@ -402,6 +411,38 @@ func (c *Handler) handleAdd(args *model.CommandArgs, rest []string) (*model.Comm
 		return ephemeral(fmt.Sprintf("Failed to create task: %s", err.Error())), nil
 	}
 	return ephemeral(fmt.Sprintf("➕ Task created: **%s** (`%s`)", created.Summary, created.ID)), nil
+}
+
+// handleNew implements /task new ["<summary>"] (issue #107). It mirrors the
+// desktop channel-header "New Task" button: it ALWAYS opens the New Task
+// Interactive Dialog, even with no arguments (blank dialog), and optionally
+// pre-fills the summary when one is supplied. This differs from /task add,
+// which REQUIRES a summary and can fall back to immediate creation.
+//
+// Because a blank dialog is the intended UX (the user fills it in the form),
+// there is no immediate-create fallback: if no trigger id or opener is
+// available, we surface a clear message directing the user to /task add.
+func (c *Handler) handleNew(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
+	summary := strings.TrimSpace(strings.Join(rest, " "))
+	summary = strings.Trim(summary, "\"'")
+
+	// A DM with the bot defaults to a Personal task (no channel scope). Same
+	// rule as handleAdd: pass "" so the dialog forces the personal scope.
+	channelID := args.ChannelId
+	if c.isBotDM(args.UserId, args.ChannelId) {
+		channelID = ""
+	}
+
+	if c.newTaskOpener != nil && args.TriggerId != "" {
+		if c.newTaskOpener.OpenNewTask(args.TriggerId, summary, channelID) {
+			return ephemeral(""), nil
+		}
+		return ephemeral("Could not open the New Task dialog. Use `/task add \"<summary>\"` instead."), nil
+	}
+
+	// No dialog path available (e.g. API-driven or bare-handler test). Give an
+	// actionable hint rather than creating an empty task.
+	return ephemeral("`/task new` opens a New Task dialog in the chat box. Use `/task add \"<summary>\"` to create a task immediately."), nil
 }
 
 // handleList implements /task list [mine|channel|all] [status ...] [due ...]
@@ -962,6 +1003,7 @@ func ephemeral(text string) *model.CommandResponse {
 // taskHelp returns the help text for the /task command.
 func taskHelp() string {
 	return "`/task` commands:\n" +
+		"• `/task new [\"<summary>\"]` — open the New Task dialog (blank or pre-filled)\n" +
 		"• `/task add \"<summary>\"` — create a new task\n" +
 		"• `/task list [mine|channel|all] [status] [due]` — list and filter tasks\n" +
 		"• `/task show <id>` — view task details\n" +

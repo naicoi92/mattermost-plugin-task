@@ -32,6 +32,7 @@ A Mattermost plugin that brings Lark-Suite-style task management into the chat f
 ## Slash commands
 
 ```
+/task new ["<summary>"]                                        open the New Task dialog (blank or pre-filled)
 /task add "<summary>"                                          create a task (opens a dialog)
 /task list [mine|channel|all] [status] [due]                   list and filter tasks
 /task show <id>                                                view task details
@@ -118,12 +119,13 @@ The four Kanban statuses (To Do / In Progress / Done / Cancelled) are fixed and 
 |---|---|---|
 | Slash command `/task *` | ✅ | ✅ |
 | Interactive task card (with buttons) | ✅ | ✅ |
-| Interactive Dialogs (`/task add`, `/task list`, `/task show`) | ✅ | ✅ |
+| Interactive Dialogs (`/task new`, `/task add`, `/task list`, `/task show`) | ✅ | ✅ |
+| Channel-header "New Task" button (icon) | ✅ | ❌ |
 | RHS Quick List + Task Detail (React) | ✅ | ❌ |
 | New Task popup dialog (React) | ✅ | ❌ |
 | Kanban board (drag-and-drop) | 🚧 planned | ❌ |
 
-Mobile relies on slash commands + interactive cards/dialogs (cross-platform); the React RHS and Kanban are desktop enhancements.
+Mobile relies on slash commands + interactive cards/dialogs (cross-platform); the React RHS, New Task button, and Kanban are desktop enhancements. Use `/task new` on mobile to open the create-task dialog.
 
 ## Development
 
