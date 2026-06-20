@@ -231,11 +231,16 @@ func validateMigrationPairs(names []string) error {
 	seenDown := make(map[string]bool)
 	for _, n := range names {
 		base := strings.TrimSuffix(n, ".sql")
-		if strings.HasSuffix(base, ".up") {
-			seenUp[strings.TrimSuffix(base, ".up")] = true
-		} else if strings.HasSuffix(base, ".down") {
-			seenDown[strings.TrimSuffix(base, ".down")] = true
-		} else {
+		switch {
+		case strings.HasSuffix(base, ".up"):
+			// CutSuffix returns (trimmed, true); the bool is guaranteed by the
+			// HasSuffix guard so we keep only the trimmed id.
+			id, _ := strings.CutSuffix(base, ".up")
+			seenUp[id] = true
+		case strings.HasSuffix(base, ".down"):
+			id, _ := strings.CutSuffix(base, ".down")
+			seenDown[id] = true
+		default:
 			return fmt.Errorf("migration %q missing .up/.down direction suffix", n)
 		}
 	}
