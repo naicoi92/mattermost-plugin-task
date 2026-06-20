@@ -2,7 +2,6 @@ package sqlstore
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -159,6 +158,8 @@ func TestListComments_CarriesPostIDForDefensiveRender(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "post-xyz", got[0].PostID, "PostID must be present for GetPost defensive lookup")
-	// Sanity: id is the 26-char ULID-shaped internal id.
-	assert.True(t, strings.HasPrefix(got[0].ID, "C1"))
+	// The internal id round-trips from the value the caller passed to
+	// LinkComment; this asserts identity, not ULID shape (the service layer
+	// owns id allocation).
+	assert.Equal(t, "C1", got[0].ID)
 }

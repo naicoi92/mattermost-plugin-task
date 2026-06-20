@@ -54,9 +54,10 @@ func (s *SQLStore) LinkComment(ctx context.Context, id, taskID, postID, authorID
 }
 
 // ListComments returns the comment mappings of a task in chronological order.
-// The caller fetches each post's content via GetPost(PostID) and should skip
-// rows whose post has been deleted (defensive self-heal, matching the KV
-// store's behaviour).
+// Ties on created_at are broken by id so the ordering is deterministic when
+// two comments share a timestamp (e.g. same-ms imports). The caller fetches
+// each post's content via GetPost(PostID) and should skip rows whose post has
+// been deleted (defensive self-heal, matching the KV store's behaviour).
 func (s *SQLStore) ListComments(ctx context.Context, taskID string) ([]model.TaskComment, error) {
 	if taskID == "" {
 		return nil, errors.New("list comments: task id is required")
@@ -65,7 +66,7 @@ func (s *SQLStore) ListComments(ctx context.Context, taskID string) ([]model.Tas
 		Select(commentColumns...).
 		From(s.tableName(commentsTableShort)).
 		Where(sq.Eq{"task_id": taskID}).
-		OrderByClause(s.escapeField("created_at") + " ASC").
+		OrderByClause(s.escapeField("created_at") + " ASC, " + s.escapeField("id") + " ASC").
 		QueryContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list comments %s: %w", taskID, err)
@@ -106,9 +107,10 @@ func (s *SQLStore) CountComments(ctx context.Context, taskID string) (int, error
 	return count, nil
 }
 
-// UnlinkComment removes the mapping for a single post. Idempotent: returns nil
-// if no mapping exists (a post can be deleted before its mapping is recorded).
-// Callers that need to assert existence should check rows affected explicitly.
+// UnlinkComment removes the mapping for a single post. Returns
+// ErrCommentNotFound when no mapping exists (a post can be deleted before its
+// mapping is recorded, or the hook may fire for a non-card reply); callers
+// that want idempotent behaviour can ignore ErrCommentNotFound.
 func (s *SQLStore) UnlinkComment(ctx context.Context, postID string) error {
 	if postID == "" {
 		return errors.New("unlink comment: post id is required")
