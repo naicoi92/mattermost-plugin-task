@@ -16,15 +16,15 @@
 -- no user-side FK because users live in the Mattermost server's user table
 -- (cross-table FK into a server table is not feasible for a plugin).
 
-CREATE TABLE {{prefix}}task_members (
+CREATE TABLE {{prefix}}members (
     task_id    VARCHAR(26) NOT NULL,
     user_id    VARCHAR(26) NOT NULL,
     role       VARCHAR(32) NOT NULL,
     created_at BIGINT NOT NULL,
     CONSTRAINT pk_members PRIMARY KEY (task_id, user_id, role),
     CONSTRAINT fk_members_task FOREIGN KEY (task_id)
-        REFERENCES {{prefix}}task_tasks(id) ON DELETE CASCADE
+        REFERENCES {{prefix}}tasks(id) ON DELETE CASCADE
 );
 
-{{createIndex (printf "%smembers_user_idx" (prefix)) (printf "%stask_members" (prefix)) "user_id, role"}}
-{{createIndex (printf "%smembers_task_idx" (prefix)) (printf "%stask_members" (prefix)) "task_id"}}
+{{createIndex (printf "%smembers_user_idx" (prefix)) (printf "%smembers" (prefix)) "user_id, role"}}
+{{createIndex (printf "%smembers_task_idx" (prefix)) (printf "%smembers" (prefix)) "task_id"}}

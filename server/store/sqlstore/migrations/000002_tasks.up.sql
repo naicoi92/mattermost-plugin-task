@@ -10,7 +10,7 @@
 --   * parent_task_id is a self-FK so subtasks cascade on parent delete.
 --   * channel_id = '' means a personal (non-channel-scoped) task.
 
-CREATE TABLE {{prefix}}task_tasks (
+CREATE TABLE {{prefix}}tasks (
     id             VARCHAR(26) PRIMARY KEY,
     summary        TEXT NOT NULL,
     description    TEXT NOT NULL DEFAULT '',
@@ -25,10 +25,10 @@ CREATE TABLE {{prefix}}task_tasks (
     created_at     BIGINT NOT NULL,
     updated_at     BIGINT NOT NULL,
     CONSTRAINT fk_tasks_parent FOREIGN KEY (parent_task_id)
-        REFERENCES {{prefix}}task_tasks(id) ON DELETE CASCADE
+        REFERENCES {{prefix}}tasks(id) ON DELETE CASCADE
 );
 
-{{createIndex (printf "%stasks_channel_idx" (prefix))    (printf "%stask_tasks" (prefix)) "channel_id, status"}}
-{{createIndex (printf "%stasks_parent_idx" (prefix))     (printf "%stask_tasks" (prefix)) "parent_task_id"}}
-{{createIndex (printf "%stasks_order_key_idx" (prefix))  (printf "%stask_tasks" (prefix)) "order_key"}}
-{{createIndex (printf "%stasks_status_due_idx" (prefix)) (printf "%stask_tasks" (prefix)) "status, due_at"}}
+{{createIndex (printf "%stasks_channel_idx" (prefix))    (printf "%stasks" (prefix)) "channel_id, status"}}
+{{createIndex (printf "%stasks_parent_idx" (prefix))     (printf "%stasks" (prefix)) "parent_task_id"}}
+{{createIndex (printf "%stasks_order_key_idx" (prefix))  (printf "%stasks" (prefix)) "order_key"}}
+{{createIndex (printf "%stasks_status_due_idx" (prefix)) (printf "%stasks" (prefix)) "status, due_at"}}

@@ -11,7 +11,7 @@ import (
 )
 
 // commentsTableShort is the short (unprefixed) name of the task_comments table.
-const commentsTableShort = "task_comments"
+const commentsTableShort = "comments"
 
 // commentColumns lists every column of task_comments in scan order.
 var commentColumns = []string{"id", "task_id", "post_id", "author_id", "created_at"}

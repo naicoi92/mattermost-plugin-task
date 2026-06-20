@@ -13,7 +13,7 @@ import (
 )
 
 // membersTableShort is the short (unprefixed) name of the task_members table.
-const membersTableShort = "task_members"
+const membersTableShort = "members"
 
 // membersColumns lists every column of task_members in scan order.
 var membersColumns = []string{"task_id", "user_id", "role", "created_at"}
