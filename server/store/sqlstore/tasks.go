@@ -192,7 +192,7 @@ func (s *SQLStore) ListTasks(ctx context.Context, q store.ListQuery) (store.Page
 	// ordered ascending so pages flow in creation/kanban order.
 	builder = builder.
 		OrderByClause(s.escapeField("order_key") + " ASC").
-		Limit(uint64(q.Limit) + 1) // +1 to detect HasMore.
+		Limit(toUint64(q.Limit + 1)) // +1 to detect HasMore.
 	if q.AfterOrderKey != "" {
 		builder = builder.Where(sq.Gt{"order_key": q.AfterOrderKey})
 	}
@@ -284,7 +284,7 @@ func (s *SQLStore) SearchTasks(ctx context.Context, keyword string, limit int) (
 			sq.Expr(s.escapeField("description")+" "+op+" ? ESCAPE '\\'", pattern),
 		}).
 		OrderByClause(s.escapeField("updated_at") + " DESC").
-		Limit(uint64(limit))
+		Limit(toUint64(limit))
 
 	rows, err := qb.QueryContext(ctx)
 	if err != nil {
@@ -461,6 +461,18 @@ func nullableString(v string) any {
 		return nil
 	}
 	return v
+}
+
+// toUint64 converts a non-negative int to uint64 without tripping gosec's G115
+// (integer-overflow) check, which a bare uint64(n) cast does because a
+// negative int would wrap. All callers in this package pass already-validated
+// non-negative values (page limits); the clamp keeps the conversion sound
+// even if a future caller forgets to validate.
+func toUint64(n int) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n) //nolint:gosec // G115: n clamped to >= 0 above
 }
 
 // joinColumns renders a comma-separated column list for RETURNING clauses.
