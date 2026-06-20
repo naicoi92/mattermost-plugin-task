@@ -6,8 +6,13 @@
 -- schema migration. `kind` distinguishes the post's role (channel / dm /
 -- future kinds).
 --
--- post_id is UNIQUE: a single post can't be the card for two tasks. The
--- FK cascade removes tracking rows when the task is deleted (the posts
+-- Two UNIQUE constraints guard the invariants:
+--   * uq_posts_post (post_id): a single post can't be the card for two tasks.
+--   * uq_posts_task_kind (task_id, kind): at most one card per (task, kind)
+--     pair -- so a task has exactly one channel card and one DM card. When
+--     multi-card-per-kind is enabled (e.g. cards in several follower DMs of
+--     the same dm kind), drop this constraint.
+-- The FK cascade removes tracking rows when the task is deleted (the posts
 -- themselves stay in Mattermost; best-effort DeletePost handles orphans).
 
 CREATE TABLE {{prefix}}posts (
@@ -18,7 +23,8 @@ CREATE TABLE {{prefix}}posts (
     created_at BIGINT NOT NULL,
     CONSTRAINT fk_posts_task FOREIGN KEY (task_id)
         REFERENCES {{prefix}}tasks(id) ON DELETE CASCADE,
-    CONSTRAINT uq_posts_post UNIQUE (post_id)
+    CONSTRAINT uq_posts_post UNIQUE (post_id),
+    CONSTRAINT uq_posts_task_kind UNIQUE (task_id, kind)
 );
 
 {{createIndex (printf "%sposts_task_idx" (prefix)) (printf "%sposts" (prefix)) "task_id"}}

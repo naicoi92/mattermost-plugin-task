@@ -58,6 +58,21 @@ func TestAddPost_PostIDUnique(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAddPost_OneCardPerTaskKind(t *testing.T) {
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+
+	require.NoError(t, s.AddPost(ctx, "P1", "T1", "ch1", model.PostKindChannel))
+	// A second channel card for the same task must fail: the
+	// UNIQUE(task_id, kind) constraint enforces one card per kind per task.
+	err := s.AddPost(ctx, "P2", "T1", "ch2", model.PostKindChannel)
+	require.Error(t, err)
+
+	// A different kind on the same task is allowed.
+	require.NoError(t, s.AddPost(ctx, "P3", "T1", "dm1", model.PostKindDM))
+}
+
 func TestListPosts_ReturnsAllKindsForTask(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
