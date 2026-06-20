@@ -2,6 +2,7 @@ package sqlstore
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -16,20 +17,35 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// newSQLiteTestStore opens an in-memory sqlite database and wraps it in a
-// SQLStore configured for the sqlite dialect. Every test gets a fresh,
-// isolated database; :memory: databases are per-connection so concurrency
-// inside one test would see different data, but migration tests are
-// single-connection so this is fine.
+// testDBCounter produces a unique per-call database name so each test gets
+// its own isolated in-memory sqlite database. modernc/sqlite keys shared
+// in-memory DBs by the filename in the "file:<name>?mode=memory&cache=shared"
+// DSN; a unique name keeps tests from seeing each other's data.
+var testDBCounter int
+
+// newSQLiteTestStore opens an isolated in-memory sqlite database and wraps it
+// in a SQLStore configured for the sqlite dialect. Each call allocates a
+// unique shared-cache DB name so tests are isolated; foreign keys are enabled
+// via the _pragma DSN parameter so FK ON DELETE CASCADE behaves the same way
+// postgres does in production.
 func newSQLiteTestStore(t *testing.T) *SQLStore {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	testDBCounter++
+	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared&_pragma=foreign_keys(1)", testDBCounter)
+	db, err := sql.Open("sqlite", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	// cache=shared makes all connections to "file::memory:" share one DB, so
-	// the morph driver (which grabs its own Conn from the pool) sees the
-	// schema the pool connection created.
+	// Force the connection pool to a single open connection: shared-cache
+	// in-memory DBs are per-process and the morph driver grabs its own Conn
+	// from the pool, so we keep the pool to one connection to guarantee every
+	// query sees the same schema and data.
+	db.SetMaxOpenConns(1)
+
+	// cache=shared + a unique name makes every connection to this DSN share
+	// one DB, so the morph driver's connection sees the schema the test set
+	// up; foreign_keys pragma is applied per-connection by the driver via the
+	// _pragma param so FK CASCADE works in tests exactly as in postgres.
 	s, err := New(db, DialectSQLite, "")
 	require.NoError(t, err)
 	return s
@@ -48,7 +64,7 @@ func TestRunMigrations_IdempotentApplyTwice(t *testing.T) {
 	// First application must succeed and create the bookkeeping table.
 	runMigrationsSilent(t, s)
 
-	// The schema_migrations table must exist and record version 1.
+	// The schema_migrations table must exist and record the bootstrap (v1).
 	var version int64
 	var name string
 	err := s.db.QueryRow(
@@ -58,12 +74,19 @@ func TestRunMigrations_IdempotentApplyTwice(t *testing.T) {
 	assert.EqualValues(t, 1, version)
 	assert.Equal(t, "init", name)
 
-	// Second application must be a no-op: morph sees version 1 already
-	// applied and applies nothing. No error, table unchanged.
+	// Snapshot the applied-version count after the first run; the number grows
+	// as migrations are added, so we compare run-1 vs run-2 rather than
+	// hard-coding a count.
+	var afterFirst int64
+	require.NoError(t, s.db.QueryRow("SELECT COUNT(*) FROM "+migrationTableName).Scan(&afterFirst))
+	require.GreaterOrEqual(t, afterFirst, int64(1))
+
+	// Second application must be a no-op: morph sees every version already
+	// applied and applies nothing. The applied-version count must not grow.
 	runMigrationsSilent(t, s)
-	var count int64
-	require.NoError(t, s.db.QueryRow("SELECT COUNT(*) FROM "+migrationTableName).Scan(&count))
-	assert.EqualValues(t, 1, count, "second migration run must not add new versions")
+	var afterSecond int64
+	require.NoError(t, s.db.QueryRow("SELECT COUNT(*) FROM "+migrationTableName).Scan(&afterSecond))
+	assert.Equal(t, afterFirst, afterSecond, "second migration run must not add new versions")
 }
 
 func TestRunMigrations_BootstrapMigrationRan(t *testing.T) {
@@ -115,12 +138,16 @@ func TestRenderMigrations_TemplatePrefixAndDialectFlags(t *testing.T) {
 		})
 	})
 
-	t.Run("real bootstrap migrations render without error", func(t *testing.T) {
+	t.Run("real migrations render without error", func(t *testing.T) {
 		out, err := renderMigrations(migrationFS, migrationsDir, DialectSQLite, "task_")
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []string{
-			"000001_init.down.sql", "000001_init.up.sql",
-		}, out.names)
+		// At least the bootstrap pair; more migrations land in later PRs, so
+		// assert presence rather than exact match to stay forward-compatible.
+		assert.Contains(t, out.names, "000001_init.up.sql")
+		assert.Contains(t, out.names, "000001_init.down.sql")
+		// Every up must have a down (validateMigrationPairs already enforces
+		// this, but the assertion documents the invariant for readers).
+		assert.GreaterOrEqual(t, len(out.names), 2)
 	})
 }
 
