@@ -104,6 +104,25 @@ type NewTaskDialogOpener interface {
 	OpenNewTask(triggerID, prefillSummary, channelID string) bool
 }
 
+// QuickListDialogOpener opens the Quick List Interactive Dialog scoped/filtered
+// for the user (#97). Supplied by the plugin layer; nil keeps /task list on the
+// ephemeral text fallback. Returns true when the dialog was opened.
+type QuickListDialogOpener interface {
+	// OpenQuickList opens the Quick List dialog for the user identified by
+	// triggerID. scope is mine/channel/all; channelID is the context channel
+	// (required when scope == channel); status/due are optional filters.
+	OpenQuickList(triggerID, userID, scope, channelID, status, due string) bool
+}
+
+// TaskDetailDialogOpener opens the Task Detail Interactive Dialog for a task
+// (#97). Supplied by the plugin layer; nil keeps /task show on the ephemeral
+// text card fallback. Returns true when the dialog was opened.
+type TaskDetailDialogOpener interface {
+	// OpenTaskDetail opens the Task Detail dialog for the user identified by
+	// triggerID, showing task taskID. Returns true when the dialog was opened.
+	OpenTaskDetail(triggerID, taskID string) bool
+}
+
 // TaskRef is the minimal task view the notifier needs (mirrors
 // notification.TaskSummary without importing that package).
 type TaskRef struct {
@@ -121,6 +140,8 @@ type Handler struct {
 	commentNotifier   CommentNotifier
 	commentAuthorizer CommentAuthorizer
 	newTaskOpener     NewTaskDialogOpener
+	quickListOpener   QuickListDialogOpener
+	taskDetailOpener  TaskDetailDialogOpener
 	users             UserResolver
 	botUserID         string
 }
@@ -136,13 +157,15 @@ const helloCommandTrigger = "hello"
 // Options configure optional collaborators on the command handler. Fields may
 // be nil to disable the corresponding behavior (notifications / @user lookup).
 type Options struct {
-	Notifier          TaskNotifier        // done/cancelled DMs
-	AssignNotifier    AssignNotifier      // assignee DM
-	CommentNotifier   CommentNotifier     // comment DM
-	CommentAuthorizer CommentAuthorizer   // view/comment permission (channel-aware)
-	NewTaskOpener     NewTaskDialogOpener // open New Task dialog from /task add (#95)
-	Users             UserResolver        // @username -> user id for /task assign
-	BotUserID         string              // plugin bot id, used to detect bot DMs for /task add scope
+	Notifier          TaskNotifier           // done/cancelled DMs
+	AssignNotifier    AssignNotifier         // assignee DM
+	CommentNotifier   CommentNotifier        // comment DM
+	CommentAuthorizer CommentAuthorizer      // view/comment permission (channel-aware)
+	NewTaskOpener     NewTaskDialogOpener    // open New Task dialog from /task add (#95)
+	QuickListOpener   QuickListDialogOpener  // open Quick List dialog from /task list (#97)
+	TaskDetailOpener  TaskDetailDialogOpener // open Task Detail dialog from /task show (#97)
+	Users             UserResolver           // @username -> user id for /task assign
+	BotUserID         string                 // plugin bot id, used to detect bot DMs for /task add scope
 }
 
 // NewCommandHandler registers the plugin's slash commands and returns a Handler
@@ -267,6 +290,8 @@ func NewCommandHandler(client *pluginapi.Client, taskService TaskService, opts O
 		commentNotifier:   opts.CommentNotifier,
 		commentAuthorizer: opts.CommentAuthorizer,
 		newTaskOpener:     opts.NewTaskOpener,
+		quickListOpener:   opts.QuickListOpener,
+		taskDetailOpener:  opts.TaskDetailOpener,
 		users:             opts.Users,
 		botUserID:         opts.BotUserID,
 	}
@@ -403,6 +428,16 @@ func (c *Handler) handleList(args *model.CommandArgs, rest []string) (*model.Com
 		channelID = args.ChannelId
 	}
 
+	// Open the Quick List Interactive Dialog when possible (PLAN §6.4 —
+	// mobile/fallback path: /task list opens a dialog with filters + a task
+	// picker). Fall back to the ephemeral text list when there is no trigger
+	// id or no opener wired (e.g. unit tests) so the flow never dead-ends.
+	if c.quickListOpener != nil && args.TriggerId != "" {
+		if c.quickListOpener.OpenQuickList(args.TriggerId, args.UserId, string(scope), channelID, status, due) {
+			return ephemeral(""), nil
+		}
+	}
+
 	tasks, err := c.taskService.List(task.ListQuery{
 		Scope:     scope,
 		UserID:    args.UserId,
@@ -426,13 +461,26 @@ func (c *Handler) handleList(args *model.CommandArgs, rest []string) (*model.Com
 	return ephemeral(b.String()), nil
 }
 
-// handleShow implements /task show <id> (issue #9). Returns an ephemeral card
-// with the task's details.
+// handleShow implements /task show <id> (issue #9, #97). Opens the Task Detail
+// Interactive Dialog when possible (PLAN §6.4 — mobile/fallback path); falls
+// back to an ephemeral text card when there is no trigger id or no opener.
 func (c *Handler) handleShow(args *model.CommandArgs, rest []string) (*model.CommandResponse, error) {
 	if len(rest) < 1 {
 		return ephemeral("Usage: /task show <id>"), nil
 	}
 	id := rest[0]
+
+	// Open the Task Detail Interactive Dialog when possible (mobile-friendly,
+	// editable fields on submit). The opener re-checks task existence and
+	// surfaces "not found" via its own error handling.
+	if c.taskDetailOpener != nil && args.TriggerId != "" {
+		if c.taskDetailOpener.OpenTaskDetail(args.TriggerId, id) {
+			return ephemeral(""), nil
+		}
+		// Opener failed (e.g. task not found or OpenInteractiveDialog error).
+		// Fall through to the text card path so the user still gets feedback.
+	}
+
 	t, err := c.taskService.Get(id)
 	if err != nil {
 		return ephemeral(fmt.Sprintf("Failed to load task %s.", id)), nil
