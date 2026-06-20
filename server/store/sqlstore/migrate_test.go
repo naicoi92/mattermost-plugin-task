@@ -2,7 +2,9 @@ package sqlstore
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,7 +52,7 @@ func TestRunMigrations_IdempotentApplyTwice(t *testing.T) {
 	var version int64
 	var name string
 	err := s.db.QueryRow(
-		"SELECT version, name FROM " + migrationTableName + " WHERE version = 1",
+		"SELECT version, name FROM "+migrationTableName+" WHERE version = 1",
 	).Scan(&version, &name)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, version)
@@ -79,15 +81,43 @@ func TestRunMigrations_BootstrapMigrationRan(t *testing.T) {
 }
 
 func TestRenderMigrations_TemplatePrefixAndDialectFlags(t *testing.T) {
-	t.Run("prefix substituted", func(t *testing.T) {
-		// Build a throwaway embed FS shape by reusing the real one: every real
-		// migration references no prefix today, so we assert the helper returns
-		// the configured prefix verbatim via a direct template render.
-		out, err := renderMigrations(migrationFS, migrationsDir, DialectSQLite, "demo_")
+	// Use a synthetic fstest.MapFS so the assertion really exercises
+	// {{prefix}} substitution and {{if sqlite}}/{{if postgres}} branches,
+	// independent of whatever the real bootstrap migration happens to contain.
+	t.Run("prefix and dialect branch render", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"migrations/000001_tpl.up.sql": &fstest.MapFile{
+				Data: []byte(`CREATE TABLE {{prefix}}items (id {{if sqlite}}INTEGER{{else}}BIGINT{{end}});`),
+			},
+			"migrations/000001_tpl.down.sql": &fstest.MapFile{
+				Data: []byte(`{{dropIfExists (printf "%sitems" (prefix))}}`),
+			},
+		}
+
+		t.Run("sqlite dialect + demo_ prefix", func(t *testing.T) {
+			out, err := renderMigrations(fsys, migrationsDir, DialectSQLite, "demo_")
+			require.NoError(t, err)
+			up, aErr := out.asset("000001_tpl.up.sql")
+			require.NoError(t, aErr)
+			assert.Equal(t, "CREATE TABLE demo_items (id INTEGER);", string(up))
+			down, dErr := out.asset("000001_tpl.down.sql")
+			require.NoError(t, dErr)
+			assert.Equal(t, "DROP TABLE IF EXISTS demo_items;", strings.TrimSpace(string(down)))
+		})
+
+		t.Run("postgres dialect uses BIGINT branch", func(t *testing.T) {
+			out, err := renderMigrations(fsys, migrationsDir, DialectPostgres, "task_")
+			require.NoError(t, err)
+			up, aErr := out.asset("000001_tpl.up.sql")
+			require.NoError(t, aErr)
+			assert.Contains(t, string(up), "id BIGINT")
+			assert.Contains(t, string(up), "CREATE TABLE task_items")
+		})
+	})
+
+	t.Run("real bootstrap migrations render without error", func(t *testing.T) {
+		out, err := renderMigrations(migrationFS, migrationsDir, DialectSQLite, "task_")
 		require.NoError(t, err)
-		// The bootstrap body has no {{prefix}} token, so rendering still
-		// succeeds and yields the original SQL; we mainly assert no error and
-		// that names include both up/down.
 		assert.ElementsMatch(t, []string{
 			"000001_init.down.sql", "000001_init.up.sql",
 		}, out.names)
@@ -145,7 +175,11 @@ func columnsOf(t *testing.T, db *sql.DB, tableName string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			t.Logf("close pragma rows: %v", cerr)
+		}
+	}()
 	var cols []string
 	for rows.Next() {
 		var cid int

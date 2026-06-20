@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -102,8 +103,8 @@ func (s *SQLStore) runMigrations(logger morph.Logger) error {
 // runner output.
 type silentLogger struct{}
 
-func (silentLogger) Printf(string, ...interface{}) {}
-func (silentLogger) Println(...interface{})        {}
+func (silentLogger) Printf(string, ...any) {}
+func (silentLogger) Println(...any)        {}
 
 // RunMigrationsClusterSafe wraps RunMigrations with the cluster mutex so only
 // one node runs migrations at a time. It is the entry point OnActivate uses
@@ -150,26 +151,29 @@ type renderedMigrations struct {
 	asset embedded.AssetFunc
 }
 
-// renderMigrations walks the embedded migrations directory, runs every .sql
+// renderMigrations walks the migrations directory of fsys, runs every .sql
 // file through the dialect template, and returns the rendered set keyed by
 // basename. The template dialect flags (`{{postgres}}`, `{{sqlite}}`,
 // `{{mysql}}`) let a single migration file emit slightly different DDL per
 // dialect (e.g. serial vs AUTOINCREMENT), while `{{prefix}}` substitutes the
 // configured table prefix so migrations stay namespace-correct.
-func renderMigrations(efs embed.FS, dir, dbType, prefix string) (*renderedMigrations, error) {
-	entries, err := efs.ReadDir(dir)
+//
+// fsys is typed as fs.FS (not embed.FS) so tests can substitute a
+// testing/fstest.MapFS to exercise template substitution in isolation.
+func renderMigrations(fsys fs.FS, dir, dbType, prefix string) (*renderedMigrations, error) {
+	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
-		return nil, errors.Wrapf(err, "read embedded migrations dir %q", dir)
+		return nil, errors.Wrapf(err, "read migrations dir %q", dir)
 	}
 
 	funcs := template.FuncMap{
-		"prefix":      func() string { return prefix },
-		"postgres":    func() bool { return dbType == DialectPostgres },
-		"mysql":       func() bool { return dbType == DialectMySQL },
-		"sqlite":      func() bool { return dbType == DialectSQLite },
-		"createIndex": createIndexIfNotExists,
+		"prefix":       func() string { return prefix },
+		"postgres":     func() bool { return dbType == DialectPostgres },
+		"mysql":        func() bool { return dbType == DialectMySQL },
+		"sqlite":       func() bool { return dbType == DialectSQLite },
+		"createIndex":  createIndexIfNotExists,
 		"dropIfExists": dropTableIfExists,
-		"notDialect":  func(name string) bool { return name != dbType },
+		"notDialect":   func(name string) bool { return name != dbType },
 	}
 
 	var names []string
@@ -179,7 +183,7 @@ func renderMigrations(efs embed.FS, dir, dbType, prefix string) (*renderedMigrat
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
-		raw, rErr := efs.ReadFile(filepath.Join(dir, e.Name()))
+		raw, rErr := fs.ReadFile(fsys, filepath.Join(dir, e.Name()))
 		if rErr != nil {
 			return nil, errors.Wrapf(rErr, "read embedded migration %q", e.Name())
 		}
@@ -251,9 +255,16 @@ func validateMigrationPairs(names []string) error {
 // createIndexIfNotExists is a migration-template helper that emits a
 // CREATE INDEX IF NOT EXISTS statement. The index and table names are emitted
 // verbatim — callers prefix them via the {{prefix}} token in the template so
-// the helper stays a pure DDL assembler. Postgres, sqlite and MySQL 8.0+ all
-// accept the bare IF NOT EXISTS guard, which makes the statement idempotent
-// across re-runs and safe under the migration engine.
+// the helper stays a pure DDL assembler.
+//
+// Dialect support: postgres and sqlite both accept the bare IF NOT EXISTS
+// guard, which makes the statement idempotent across re-runs and safe under
+// the migration engine. **MySQL does NOT support CREATE INDEX IF NOT EXISTS**
+// (including 8.0); under mysql this helper would error. The plugin's MVP only
+// runs migrations against postgres (production) and sqlite (test), so this is
+// acceptable. If/when mysql becomes a supported production dialect, guard the
+// call site with {{if mysql}} and use an information_schema pre-check, or add
+// a mysql-specific helper.
 //
 // Example template usage:
 //
