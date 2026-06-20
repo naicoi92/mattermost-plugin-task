@@ -23,11 +23,10 @@ jest.mock('i18n_utils', () => ({
     activeLocaleSelector: () => 'en',
 }));
 
-import Plugin, {NewTaskHeaderIcon, openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
+import Plugin, {NewTaskComposerButton, openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
-import type {Channel} from '@mattermost/types/channels';
 import type {GlobalState} from '@mattermost/types/store';
 
 // Per-test dispatch + state shared with the react-redux / i18n_utils mocks
@@ -64,7 +63,7 @@ function fakeRegistry() {
             toggleRHSPlugin: {type: 'TOGGLE_RHS'},
         })),
         registerChannelHeaderButtonAction: jest.fn(),
-        registerChannelHeaderIcon: jest.fn(),
+        registerPostEditorActionComponent: jest.fn(),
         registerRootComponent: jest.fn(),
         registerWebSocketEventHandler: jest.fn(),
         registerReducer: jest.fn(),
@@ -94,13 +93,13 @@ describe('Plugin.initialize registrations (#27)', () => {
         expect(tasksArgs[2]).toBe('Tasks');
         expect(tasksArgs[3]).toBe('Mở danh sách task');
 
-        // Channel header icon: ONE registration — "New Task" (#107).
-        // registerChannelHeaderIcon renders in the ChannelHeaderIcon Pluggable
-        // (header icon group), independently — never grouped into the "Call"
-        // dropdown or with the "Tasks" button. Desktop only.
-        expect(registry.registerChannelHeaderIcon).toHaveBeenCalledTimes(1);
-        const iconArgs = registry.registerChannelHeaderIcon.mock.calls[0] as unknown[];
-        expect(typeof iconArgs[0]).toBe('function'); // NewTaskHeaderIcon component
+        // Composer button: ONE registration — "New Task" (#107).
+        // registerPostEditorActionComponent renders in the message composer's
+        // additionalControls toolbar, next to the attachment/emoji buttons.
+        // Desktop only; mobile uses /task new.
+        expect(registry.registerPostEditorActionComponent).toHaveBeenCalledTimes(1);
+        const composerArgs = registry.registerPostEditorActionComponent.mock.calls[0] as unknown[];
+        expect(typeof composerArgs[0]).toBe('function'); // NewTaskComposerButton component
 
         // Two root components: Kanban modal + New Task dialog.
         expect(registry.registerRootComponent).toHaveBeenCalledTimes(2);
@@ -141,7 +140,7 @@ describe('Plugin.initialize registrations (#27)', () => {
         expect(actions).toContainEqual({type: 'SHOW_RHS'});
     });
 
-    test('NewTaskHeaderIcon dispatches OPEN_NEW_TASK_DIALOG with the current channel id on click (#107)', () => {
+    test('NewTaskComposerButton dispatches OPEN_NEW_TASK_DIALOG with the draft channel id on click (#107)', () => {
         const actions: Array<{type: string}> = [];
         mockDispatch = (a: {type: string}) => {
             actions.push(a);
@@ -149,9 +148,9 @@ describe('Plugin.initialize registrations (#27)', () => {
         mockState = {};
 
         // Invoke the component as a function (it is a function component) with
-        // the channel prop the host's ChannelHeaderIcon Pluggable would pass.
-        // We then pull the onClick handler off the rendered <button> and fire it.
-        const element = NewTaskHeaderIcon({channel: {id: 'ch123'} as Channel}) as {
+        // the draft prop the host's PostEditorAction Pluggable passes. We then
+        // pull the onClick handler off the rendered <button> and fire it.
+        const element = NewTaskComposerButton({draft: {channelId: 'ch123'}}) as {
             props: {onClick: () => void};
         };
         element.props.onClick();
@@ -162,14 +161,14 @@ describe('Plugin.initialize registrations (#27)', () => {
         });
     });
 
-    test('NewTaskHeaderIcon is nil-safe when no channel is passed', () => {
+    test('NewTaskComposerButton is nil-safe when no draft/channel is passed', () => {
         const actions: Array<{type: string}> = [];
         mockDispatch = (a: {type: string}) => {
             actions.push(a);
         };
         mockState = {};
 
-        const element = NewTaskHeaderIcon({}) as {
+        const element = NewTaskComposerButton({}) as {
             props: {onClick: () => void};
         };
         element.props.onClick();

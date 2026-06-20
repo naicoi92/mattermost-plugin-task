@@ -292,32 +292,6 @@ export interface PluginRegistry {
     ): UniqueIdentifier;
 
     /**
-        * Register a custom component to be rendered inline in the channel header
-        * icon group (alongside mute / members / pinned / files), via the host's
-        * `ChannelHeaderIcon` Pluggable. Unlike registerChannelHeaderButtonAction,
-        * each registered component renders independently side-by-side (the host
-        * maps over them) rather than collapsing into a dropdown — so a button
-        * here is never grouped with the "Call" dropdown or the "Tasks" button.
-        *
-        * Desktop only: the host does not render this Pluggable in the mobile
-        * channel header.
-        *
-        * The component receives `channel` and `channelMember` as props (plus
-        * theme/webSocketClient injected by Pluggable), so it can open a dialog
-        * scoped to the current channel on click.
-        * Accepts the following:
-        * - component - A React component type rendered in the header icon group.
-        * Returns a unique identifier.
-    */
-    registerChannelHeaderIcon(
-        ...args: [
-            component: React.ElementType,
-        ] | [{
-            component: React.ElementType;
-        }]
-    ): UniqueIdentifier;
-
-    /**
         * Add a button to the channel header. If there are more than one buttons registered by any
         * plugin, a dropdown menu is created to contain all the plugin buttons.
         * Accepts the following:

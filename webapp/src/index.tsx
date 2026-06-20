@@ -4,7 +4,7 @@
 // Webapp plugin entry point (issue #27). Wires the plugin into the Mattermost
 // desktop UI through the official registry methods:
 //   - channel header button → opens the RHS
-//   - channel header icon ("New Task") → opens the New Task dialog (#107)
+//   - composer button ("New Task") → opens the New Task dialog (#107)
 //   - Right-Hand Sidebar → TaskSidebar (Quick List + Task Detail)
 //   - root components → KanbanModal (board) and NewTaskDialog (create popup)
 //   - WebSocket event handler → real-time task updates (#32 fills the body)
@@ -23,7 +23,6 @@ import reducer, {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
 import type {WebSocketMessage} from '@mattermost/client';
-import type {Channel} from '@mattermost/types/channels';
 import type {GlobalState} from '@mattermost/types/store';
 
 import KanbanModal from 'components/kanban_modal/kanban_modal';
@@ -55,44 +54,45 @@ function getTranslationsForLocale(locale: string): Record<string, string> {
     }
 }
 
-// NewTaskHeaderIconProps is the prop shape the host's ChannelHeaderIcon
-// Pluggable passes to the registered component: the current channel and
-// membership, plus theme/webSocketClient injected by Pluggable. We declare
-// only what we read.
-interface NewTaskHeaderIconProps {
-    channel?: Channel;
+// PostEditorActionProps is the prop shape the host's PostEditorAction Pluggable
+// passes to composer toolbar buttons (see advanced_text_editor/use_plugin_items).
+// We read `draft.channelId` to open the New Task dialog scoped to the current
+// channel; getSelectedText/updateText are unused but part of the contract.
+interface PostEditorActionProps {
+    draft?: {channelId?: string; rootId?: string};
+    getSelectedText?: () => {start?: number; end?: number};
+    updateText?: (message: string) => void;
 }
 
-// NewTaskHeaderIcon is the "New Task" icon rendered in the channel header icon
-// group (issue #107). Registered via registerChannelHeaderIcon, so it renders
-// INDEPENDENTLY in the header icon group (alongside mute/members/pinned),
-// never collapsed into the "Call" dropdown or grouped with the "Tasks" button
-// (both are different host slots — see channel_header.tsx). Desktop only: the
-// host does not render ChannelHeaderIcon on mobile (mobile uses the "..."
-// menu, where New Task is also listed via MobileChannelHeaderButton).
+// NewTaskComposerButton is the "New Task" button in the message composer
+// toolbar (issue #107). Registered via registerPostEditorActionComponent, it
+// renders in the composer's additionalControls area, next to the attachment
+// and emoji buttons. It reuses the host's own `AdvancedTextEditor__action-button`
+// class so its styling — color, size, hover/active states — matches the other
+// composer buttons and adapts to the active theme automatically (no custom CSS).
 //
-// On click it dispatches OPEN_NEW_TASK_DIALOG with the current channel id, so
-// NewTaskDialog opens pre-scoped (scope "Channel" radio enabled). The label
-// and tooltip are locale-aware via useFormatMessage.
-export function NewTaskHeaderIcon({channel}: NewTaskHeaderIconProps): JSX.Element {
+// On click it dispatches OPEN_NEW_TASK_DIALOG with the draft's channelId, so
+// NewTaskDialog opens pre-scoped (scope "Channel" radio enabled). Desktop only:
+// the host does not render the composer plugin slot on the mobile app; mobile
+// uses the /task new slash command instead.
+export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Element {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const onClick = () => {
         dispatch({
             type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
-            channelID: channel?.id,
+            channelID: draft?.channelId,
         });
     };
     return (
         <button
             type='button'
-            className='style--none task-header-new-task-btn'
+            className='style--none AdvancedTextEditor__action-button'
             onClick={onClick}
             aria-label={t('webapp.task.tooltip.new_task')}
             title={t('webapp.task.tooltip.new_task')}
         >
-            <i className='icon fa fa-plus'/>
-            <span className='task-header-new-task-btn__label'>{t('webapp.task.new')}</span>
+            <i className='icon fa fa-check-square'/>
         </button>
     );
 }
@@ -119,15 +119,14 @@ export default class Plugin {
             'Mở danh sách task',
         );
 
-        // "New Task" channel header icon (issue #107). Registered via
-        // registerChannelHeaderIcon, which renders the component in the header
-        // icon group (channel_header.tsx ChannelHeaderIcon Pluggable) —
-        // INDEPENDENTLY, never grouped with the "Call" dropdown (slot
-        // CallButton) nor with the "Tasks" button (slot ChannelHeaderPlug).
-        // Each registered icon renders side-by-side (the host maps over them).
-        // Desktop only: the host does not render ChannelHeaderIcon on mobile;
-        // on mobile New Task is reachable via the "..." menu instead.
-        registry.registerChannelHeaderIcon(NewTaskHeaderIcon);
+        // "New Task" composer button (issue #107). Registered via
+        // registerPostEditorActionComponent, so it renders in the message
+        // composer's additionalControls toolbar — next to the attachment and
+        // emoji buttons. It reuses the host's AdvancedTextEditor__action-button
+        // class (same as the attachment button), so styling matches the other
+        // composer controls and follows the active theme with no custom CSS.
+        // Desktop only: mobile app uses the /task new slash command instead.
+        registry.registerPostEditorActionComponent(NewTaskComposerButton);
 
         // Root components: the Kanban board and the New Task popup. Mounted once
         // and toggled via Redux/props by their consumers.

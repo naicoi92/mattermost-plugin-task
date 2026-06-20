@@ -52,7 +52,7 @@ function recordingRegistry() {
             toggleRHSPlugin: {type: 'TOGGLE_RHS'},
         })),
         registerChannelHeaderButtonAction: jest.fn(),
-        registerChannelHeaderIcon: jest.fn(),
+        registerPostEditorActionComponent: jest.fn(),
         registerRootComponent: jest.fn(),
         registerWebSocketEventHandler: jest.fn(),
         registerReducer: jest.fn(),
