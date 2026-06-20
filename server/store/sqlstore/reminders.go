@@ -23,29 +23,22 @@ var reminderColumns = []string{"id", "task_id", "offset_ms", "fired_at", "create
 var ErrReminderNotFound = errors.New("task reminder not found")
 
 // SetReminder sets the reminder for a task. The MVP enforces one reminder per
-// task, so this is an UPSERT: any existing reminder for the task is deleted
-// first, then the new one is inserted. When multi-reminder support is enabled
-// later, the delete should be dropped and the caller decides whether to add or
-// replace.
+// task, backed by the UNIQUE(task_id) constraint: the INSERT uses ON CONFLICT
+// (task_id) DO UPDATE so a concurrent set can't create a duplicate and the
+// existing row's id/created_at are replaced atomically in a single statement.
+// When multi-reminder support is enabled later, drop the UNIQUE constraint and
+// this DO UPDATE clause.
 //
 // id is the caller-assigned ULID for the new reminder row (the service layer
 // owns id allocation, matching CreateTask). offsetMS is how many ms before
-// due_at the reminder fires.
+// due_at the reminder fires; the CHECK(offset_ms >= 0) constraint rejects
+// negatives at the DB.
 func (s *SQLStore) SetReminder(ctx context.Context, id, taskID string, offsetMS int64) (model.TaskReminder, error) {
 	if id == "" {
 		return model.TaskReminder{}, errors.New("set reminder: id is required")
 	}
 	if taskID == "" {
 		return model.TaskReminder{}, errors.New("set reminder: task id is required")
-	}
-	// Delete any existing reminder for the task (MVP: one reminder per task).
-	// Errors other than "no rows" are fatal; a missing reminder is the common
-	// first-set case and is tolerated.
-	if _, err := s.builder().
-		Delete(s.tableName(remindersTableShort)).
-		Where(sq.Eq{"task_id": taskID}).
-		ExecContext(ctx); err != nil {
-		return model.TaskReminder{}, fmt.Errorf("set reminder %s: clear existing: %w", taskID, err)
 	}
 
 	r := model.TaskReminder{
@@ -54,12 +47,21 @@ func (s *SQLStore) SetReminder(ctx context.Context, id, taskID string, offsetMS 
 		OffsetMS:  offsetMS,
 		CreatedAt: s.nowMilli(),
 	}
-	if _, err := s.builder().
+	// ON CONFLICT (task_id) DO UPDATE: if a reminder already exists for this
+	// task, replace its id/offset_ms/fired_at/created_at in place. This is a
+	// single atomic statement, so two concurrent SetReminder calls can't
+	// leave two rows. (task_id, fired_at reset to NULL so a rescheduled
+	// reminder fires fresh.)
+	_, err := s.builder().
 		Insert(s.tableName(remindersTableShort)).
 		Columns(reminderColumns...).
 		Values(r.ID, r.TaskID, r.OffsetMS, r.FiredAt, r.CreatedAt).
-		ExecContext(ctx); err != nil {
-		return model.TaskReminder{}, fmt.Errorf("set reminder %s: insert: %w", taskID, err)
+		Suffix("ON CONFLICT (task_id) DO UPDATE SET " +
+			"id = EXCLUDED.id, offset_ms = EXCLUDED.offset_ms, " +
+			"fired_at = NULL, created_at = EXCLUDED.created_at").
+		ExecContext(ctx)
+	if err != nil {
+		return model.TaskReminder{}, fmt.Errorf("set reminder %s: %w", taskID, err)
 	}
 	return r, nil
 }
