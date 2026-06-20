@@ -92,7 +92,7 @@ export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Eleme
             aria-label={t('webapp.task.tooltip.new_task')}
             title={t('webapp.task.tooltip.new_task')}
         >
-            <i className='icon fa fa-check-square'/>
+            <i className='icon fa fa-tasks'/>
         </button>
     );
 }
