@@ -30,6 +30,7 @@ type fakeTaskStore struct {
 	comments map[string][]model.Comment // taskID -> comments
 }
 
+// newFakeTaskStore returns an empty in-memory fakeTaskStore ready for a test.
 func newFakeTaskStore() *fakeTaskStore {
 	return &fakeTaskStore{
 		tasks:    map[string]model.Task{},
@@ -39,6 +40,8 @@ func newFakeTaskStore() *fakeTaskStore {
 	}
 }
 
+// GetTask returns the stored task by id, or (nil, nil) when absent (matches
+// the kvstore contract the service layer relies on).
 func (f *fakeTaskStore) GetTask(id string) (*model.Task, error) {
 	t, ok := f.tasks[id]
 	if !ok {
@@ -46,7 +49,12 @@ func (f *fakeTaskStore) GetTask(id string) (*model.Task, error) {
 	}
 	return &t, nil
 }
+
+// SaveTask stores or replaces a task keyed by its id.
 func (f *fakeTaskStore) SaveTask(t model.Task) error { f.tasks[t.ID] = t; return nil }
+
+// TouchTaskUpdatedAt bumps the task's UpdatedAt to updatedAt only when it is
+// newer, mirroring the optimistic-clock used by the real store.
 func (f *fakeTaskStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 	t, ok := f.tasks[id]
 	if !ok {
@@ -58,13 +66,20 @@ func (f *fakeTaskStore) TouchTaskUpdatedAt(id string, updatedAt int64) error {
 	}
 	return nil
 }
+
+// DeleteTask removes a task from the store.
 func (f *fakeTaskStore) DeleteTask(id string) error { delete(f.tasks, id); return nil }
+
+// SaveIndex records a lookup key (e.g. per-user/per-channel index entries).
 func (f *fakeTaskStore) SaveIndex(key string) error { f.indexes[key] = struct{}{}; return nil }
+
+// DeleteIndex removes a lookup key from the store.
 func (f *fakeTaskStore) DeleteIndex(key string) error {
 	delete(f.indexes, key)
 	return nil
 }
 
+// SaveSubtask records taskID as a direct child of parentID.
 func (f *fakeTaskStore) SaveSubtask(parentID, taskID string) error {
 	if f.subs[parentID] == nil {
 		f.subs[parentID] = map[string]struct{}{}
@@ -73,6 +88,7 @@ func (f *fakeTaskStore) SaveSubtask(parentID, taskID string) error {
 	return nil
 }
 
+// GetSubtaskIDs returns the sorted ids of the direct children of parentID.
 func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) {
 	var ids []string
 	for id := range f.subs[parentID] {
@@ -82,11 +98,13 @@ func (f *fakeTaskStore) GetSubtaskIDs(parentID string) ([]string, error) {
 	return ids, nil
 }
 
+// SaveComment appends a comment to the task's comment thread.
 func (f *fakeTaskStore) SaveComment(taskID string, c model.Comment) error {
 	f.comments[taskID] = append(f.comments[taskID], c)
 	return nil
 }
 
+// GetComment returns a comment by id within the task's thread, or (nil, nil).
 func (f *fakeTaskStore) GetComment(taskID, commentID string) (*model.Comment, error) {
 	for _, c := range f.comments[taskID] {
 		if c.ID == commentID {
@@ -97,6 +115,7 @@ func (f *fakeTaskStore) GetComment(taskID, commentID string) (*model.Comment, er
 	return nil, nil
 }
 
+// GetCommentIDs returns the sorted comment ids for the task's thread.
 func (f *fakeTaskStore) GetCommentIDs(taskID string) ([]string, error) {
 	var ids []string
 	for _, c := range f.comments[taskID] {
@@ -106,12 +125,23 @@ func (f *fakeTaskStore) GetCommentIDs(taskID string) ([]string, error) {
 	return ids, nil
 }
 
+// SaveReminder is a no-op stub; reminder tests that need behavior use a
+// dedicated failingReminderStore.
 func (f *fakeTaskStore) SaveReminder(string, model.ReminderMetadata) error {
 	return nil
 }
+
+// GetReminder is a no-op stub that always reports "no reminder".
 func (f *fakeTaskStore) GetReminder(string) (*model.ReminderMetadata, error) { return nil, nil }
-func (f *fakeTaskStore) DeleteReminder(string) error                         { return nil }
-func (f *fakeTaskStore) ListReminderKeys() ([]string, error)                 { return nil, nil }
+
+// DeleteReminder is a no-op stub.
+func (f *fakeTaskStore) DeleteReminder(string) error { return nil }
+
+// ListReminderKeys is a no-op stub that reports no keys.
+func (f *fakeTaskStore) ListReminderKeys() ([]string, error) { return nil, nil }
+
+// ListTaskIDsByPrefix returns every stored index key with the given prefix,
+// stripping the prefix from each returned id.
 func (f *fakeTaskStore) ListTaskIDsByPrefix(prefix string) ([]string, error) {
 	var ids []string
 	for k := range f.indexes {
@@ -122,22 +152,28 @@ func (f *fakeTaskStore) ListTaskIDsByPrefix(prefix string) ([]string, error) {
 	return ids, nil
 }
 
+// ListUserAssignedTaskIDs returns the tasks assigned to userID.
 func (f *fakeTaskStore) ListUserAssignedTaskIDs(userID string) ([]string, error) {
 	return f.ListTaskIDsByPrefix("idx:u:" + userID + ":assigned:")
 }
 
+// ListUserCreatedTaskIDs returns the tasks created by userID.
 func (f *fakeTaskStore) ListUserCreatedTaskIDs(userID string) ([]string, error) {
 	return f.ListTaskIDsByPrefix("idx:u:" + userID + ":created:")
 }
 
+// ListChannelTaskIDs returns the tasks scoped to channelID.
 func (f *fakeTaskStore) ListChannelTaskIDs(channelID string) ([]string, error) {
 	return f.ListTaskIDsByPrefix("idx:ch:" + channelID + ":task:")
 }
 
+// ListAllTaskIDs returns every known task id.
 func (f *fakeTaskStore) ListAllTaskIDs() ([]string, error) {
 	return f.ListTaskIDsByPrefix("idx:all:task:")
 }
 
+// SetAtomicWithRetries is a no-op stub; atomicity is exercised via the real
+// kvstore in its own package tests.
 func (f *fakeTaskStore) SetAtomicWithRetries(string, func([]byte) (any, error)) error {
 	return nil
 }
@@ -169,6 +205,9 @@ func newTestPlugin() (*Plugin, *fakeTaskStore) {
 	return p, store
 }
 
+// authedRequest builds an http.Request for an authenticated browser-session
+// endpoint: it sets the Mattermost-User-ID header that the session cookie proxy
+// normally injects, so handlers on the authenticated sub-router accept it.
 func authedRequest(method, target, body, userID string) *http.Request {
 	var r *http.Request
 	if body != "" {
@@ -648,6 +687,8 @@ type failingReminderStore struct {
 	*fakeTaskStore
 }
 
+// SaveReminder always fails with an internal error, to exercise the
+// setReminder handler's internal-error path.
 func (f *failingReminderStore) SaveReminder(string, model.ReminderMetadata) error {
 	return errInternalFake
 }
@@ -658,10 +699,14 @@ func (f *failingReminderStore) DeleteReminder(string) error {
 	return errInternalFake
 }
 
+// errInternalFakeType is a sentinel error type used to simulate the kvstore
+// internal-error sentinel (kvstore.ErrInternal) in reminder handler tests.
 type errInternalFakeType struct{}
 
+// Error implements the error interface for the sentinel.
 func (errInternalFakeType) Error() string { return "boom-internal" }
 
+// errInternalFake is the singleton sentinel value tests compare against.
 var errInternalFake errInternalFakeType
 
 func TestSetAssignee_Endpoint(t *testing.T) {
