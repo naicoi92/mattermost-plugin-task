@@ -42,11 +42,13 @@ const (
 )
 
 // ListQuery is the filter + pagination input for ListTasks / CountTasksByStatus.
-// Every field is optional except Scope; the repository composes only the WHERE
-// clauses the populated fields imply, so an empty ListQuery is a valid "list
-// all, newest first" request.
+//
+// Scope is the only required field; it selects the list view (mine/channel/
+// all). The other fields are optional filters — the repository composes only
+// the WHERE clauses the populated fields imply. A ListQuery with
+// Scope=ScopeAll and nothing else is the "list all" request.
 type ListQuery struct {
-	// Scope selects the list view (mine/channel/all). See the Scope constants.
+	// Scope selects the list view (mine/channel/all). Required.
 	Scope Scope
 	// UserID is required when Scope == ScopeMine (the assignee to filter on).
 	UserID string

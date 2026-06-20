@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 
@@ -20,8 +21,9 @@ import (
 // testDBCounter produces a unique per-call database name so each test gets
 // its own isolated in-memory sqlite database. modernc/sqlite keys shared
 // in-memory DBs by the filename in the "file:<name>?mode=memory&cache=shared"
-// DSN; a unique name keeps tests from seeing each other's data.
-var testDBCounter int
+// DSN; a unique name keeps tests from seeing each other's data. It is an
+// atomic.Int64 so t.Parallel tests don't race the counter.
+var testDBCounter atomic.Int64
 
 // newSQLiteTestStore opens an isolated in-memory sqlite database and wraps it
 // in a SQLStore configured for the sqlite dialect. Each call allocates a
@@ -30,8 +32,8 @@ var testDBCounter int
 // postgres does in production.
 func newSQLiteTestStore(t *testing.T) *SQLStore {
 	t.Helper()
-	testDBCounter++
-	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared&_pragma=foreign_keys(1)", testDBCounter)
+	id := testDBCounter.Add(1)
+	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared&_pragma=foreign_keys(1)", id)
 	db, err := sql.Open("sqlite", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })

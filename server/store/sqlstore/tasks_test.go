@@ -238,10 +238,11 @@ func TestListTasks_ScopeChannelStatusAndPagination(t *testing.T) {
 func TestListTasks_ScopeMineErrorsUntilMembersExist(t *testing.T) {
 	s := tasksTestStore(t)
 	// ScopeMine requires task_members (M2-2); until then it must error rather
-	// than silently returning all rows. This guards against a future wiring
-	// mistake.
+	// than silently returning all rows. Assert the specific guard message so
+	// an unrelated failure isn't mistaken for the guard firing.
 	_, err := s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeMine, UserID: "u1", Limit: 10})
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope=mine")
 }
 
 func TestListTasks_AllScope(t *testing.T) {
@@ -284,7 +285,11 @@ func TestSearchTasks_ILikeOrLike(t *testing.T) {
 	// Case-insensitive substring match across summary + description.
 	got, err := s.SearchTasks(ctx, "login", 10)
 	require.NoError(t, err)
-	assert.Len(t, got, 2)
+	require.Len(t, got, 2)
+	// Assert identity, not just count, so a regression that returns the
+	// wrong rows is caught.
+	ids := []string{got[0].ID, got[1].ID}
+	assert.ElementsMatch(t, []string{"T1", "T2"}, ids)
 }
 
 func TestSearchTasks_EscapesWildcards(t *testing.T) {

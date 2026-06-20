@@ -94,9 +94,12 @@ func (s *SQLStore) UpdateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		"cancelled_at":   task.CancelledAt,
 		"updated_at":     task.UpdatedAt,
 	}
-	// Postgres/mysql/sqlite all support RETURNING on UPDATE since sqlite 3.35
-	// (2021) and the plugin's min sqlite is well past that; postgres has it
-	// natively and mysql 8.0+ supports it.
+	// Postgres and sqlite both support UPDATE ... RETURNING (sqlite since
+	// 3.35, 2021; the plugin's min sqlite is well past that). MySQL does NOT
+	// support RETURNING on UPDATE (incl. 8.0) — but the plugin's MVP runs
+	// migrations/queries only against postgres (production) and sqlite (test),
+	// so this is acceptable. If mysql becomes a supported production dialect,
+	// split this into UPDATE then SELECT-by-id.
 	qb := s.builder().
 		Update(s.tableName(taskTableShort)).
 		SetMap(updates).
@@ -316,6 +319,12 @@ func (s *SQLStore) ListSubtasks(ctx context.Context, parentID string) ([]model.T
 // SubtaskProgress returns (done, total) counts for a parent's children with a
 // single GROUP BY query, instead of loading every subtask into Go. `done`
 // counts children whose status is done.
+//
+// The done count is built with a SUM(CASE WHEN status='done' THEN 1 ELSE 0 END)
+// expression. model.StatusDone is interpolated via fmt.Sprintf rather than a
+// bound parameter because squirrel does not support parameterised expressions
+// inside Select(); this is safe because StatusDone is a compile-time constant
+// defined in this module (not user input), so there is no injection surface.
 func (s *SQLStore) SubtaskProgress(ctx context.Context, parentID string) (done, total int, err error) {
 	if parentID == "" {
 		return 0, 0, errors.New("subtask progress: parent id is required")
