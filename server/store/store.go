@@ -1,12 +1,19 @@
 // Package store defines the persistence contracts and shared query types for
 // the Task plugin's relational store.
 //
-// This file holds the cross-cutting types used by every repository: the
-// ListQuery filter/pagination input, the PageResult envelope, and the Scope
-// constants that name the list "views" (mine / channel / all). Repository
-// methods live in the sqlstore package and operate on these types; the
-// aggregate Store interface is assembled in M3-1.
+// This file holds the cross-cutting types used by every repository (the
+// ListQuery filter/pagination input, the PageResult envelope, the Scope
+// constants) AND the aggregate Store interface that assembles every repository
+// method from M2-1..M2-6 plus the WithTx transaction primitive. The concrete
+// implementation lives in the sqlstore package; the service layer (M3-2)
+// programs against this interface so it can be faked in tests.
 package store
+
+import (
+	"context"
+
+	"github.com/naicoi92/mattermost-plugin-task/server/model"
+)
 
 // Scope names a task-list "view". It selects which WHERE clause ListTasks
 // applies: a user's assigned tasks, a channel's tasks, or everything.
@@ -85,4 +92,69 @@ type PageResult struct {
 	// HasMore is true when at least one more row exists after this page
 	// (detected by fetching Limit+1 rows).
 	HasMore bool
+}
+
+// Store is the aggregate persistence interface for the Task plugin, assembling
+// every repository method from M2-1..M2-6 plus the WithTx transaction
+// primitive. The service layer (M3-2) programs against this interface so it
+// can be faked in tests without a database.
+//
+// Every method takes context.Context first so requests respect cancellation /
+// deadlines. Methods that mutate multiple tables in one logical operation
+// (e.g. Create = task + members + reminder + event) are composed by the
+// service inside WithTx so the whole operation commits or rolls back together.
+//
+// (Note: this is the SQL-store interface. It is deliberately separate from the
+// legacy kvstore.KVStore interface until M5-1 removes the KV layer.)
+type Store interface {
+	// --- Tasks (M2-1) ---
+	CreateTask(ctx context.Context, task model.TaskRow) (model.TaskRow, error)
+	GetTask(ctx context.Context, id string) (*model.TaskRow, error)
+	UpdateTask(ctx context.Context, task model.TaskRow) (model.TaskRow, error)
+	TouchTaskUpdatedAt(ctx context.Context, id string, ts int64) error
+	DeleteTask(ctx context.Context, id string) error
+	ListTasks(ctx context.Context, q ListQuery) (PageResult, error)
+	CountTasksByStatus(ctx context.Context, q ListQuery) (map[string]int, error)
+	SearchTasks(ctx context.Context, keyword string, limit int) ([]model.TaskRow, error)
+	ListSubtasks(ctx context.Context, parentID string) ([]model.TaskRow, error)
+	SubtaskProgress(ctx context.Context, parentID string) (done, total int, err error)
+	NextGlobalOrderKey(ctx context.Context) (string, error)
+
+	// --- Members (M2-2) ---
+	AddMember(ctx context.Context, taskID, userID, role string) error
+	RemoveMember(ctx context.Context, taskID, userID, role string) error
+	ListMembers(ctx context.Context, taskID string) ([]model.TaskMember, error)
+	GetMemberByRole(ctx context.Context, taskID, role string) (string, error)
+	SwapAssignee(ctx context.Context, taskID, oldID, newID string) error
+
+	// --- Reminders (M2-3) ---
+	SetReminder(ctx context.Context, id, taskID string, offsetMS int64) (model.TaskReminder, error)
+	ClearReminder(ctx context.Context, taskID string) error
+	ListReminders(ctx context.Context, taskID string) ([]model.TaskReminder, error)
+	ListDueReminders(ctx context.Context, nowMs, graceMs int64) ([]model.DueReminder, error)
+	MarkReminderFired(ctx context.Context, reminderID string, firedAt int64) error
+
+	// --- Posts (M2-4) ---
+	AddPost(ctx context.Context, id, taskID, postID, kind string) error
+	ListPosts(ctx context.Context, taskID string) ([]model.TaskPost, error)
+	GetPostByKind(ctx context.Context, taskID, kind string) (string, error)
+	DeletePost(ctx context.Context, postID string) error
+
+	// --- Comments (M2-5) ---
+	LinkComment(ctx context.Context, id, taskID, postID, authorID string, createdAt int64) (model.TaskComment, error)
+	ListComments(ctx context.Context, taskID string) ([]model.TaskComment, error)
+	CountComments(ctx context.Context, taskID string) (int, error)
+	UnlinkComment(ctx context.Context, postID string) error
+
+	// --- Events (M2-6) ---
+	AppendTaskEvent(ctx context.Context, e model.TaskEvent) error
+	ListTaskEvents(ctx context.Context, taskID string, limit int) ([]model.TaskEvent, error)
+
+	// --- Transaction (M3-1) ---
+	// WithTx runs fn against a transaction-bound Store: every statement fn
+	// issues shares the same *sql.Tx, so a multi-table operation (e.g. Create
+	// = task + members + reminder + event) commits atomically or rolls back
+	// together. If fn returns an error the tx is rolled back and that error is
+	// returned; otherwise the tx is committed.
+	WithTx(ctx context.Context, fn func(Store) error) error
 }
