@@ -13,7 +13,7 @@ Dự án bắt đầu từ thư mục trống `mattermost-plugin-task`, dùng `m
 | Quyết định | Lựa chọn |
 |---|---|
 | **Phạm vi MVP** | ✅ Task + Assignee cơ bản · ✅ Subtask & Comment · ✅ Reminder & Thông báo · ✅ **Kanban board** (theo status). ⏸ Hoãn: Tasklist, Follower vai trò, Section, Custom Field, Attachment, Repeat rule, AI agent. |
-| **Cách tiếp cận UI** | **Hybrid** — Slash command `/task` + nút channel header + interactive message card + sidebar React + bảng Kanban. Bố cục: **Quick List → RHS**, **New Task → popup dialog**, **Task Detail → RHS**, **Kanban → modal gần full màn**. |
+| **Cách tiếp cận UI** | **Hybrid** — Slash command `/task` (+ `/task new` mở dialog) + nút channel header (mở RHS) + **nút "New Task" trong composer (desktop, #107)** + interactive message card + sidebar React + bảng Kanban. Bố cục: **Quick List → RHS**, **New Task → popup dialog**, **Task Detail → RHS**, **Kanban → modal gần full màn**. |
 | **Status / cột Kanban** | Cố định **4 cột**: To Do · In Progress · Done · Cancelled. |
 | **Subtask trên Kanban** | Hiện thành **thẻ riêng** (status độc lập) + vẫn lồng trong Task Detail của task cha. |
 | **Ngôn ngữ UI** | **i18n** (Tiếng Việt + Tiếng Anh) qua `registerTranslations`. |
@@ -85,6 +85,7 @@ Template `mattermost-plugin-starter-template` đã cung cấp sẵn các pattern
 |---|---|
 | RHS (Quick List + Task Detail) | `registerRightHandSidebarComponent(component, title)` |
 | Nút channel header mở RHS | `registerChannelHeaderButtonAction(icon, action, dropdownText, tooltipText)` |
+| **Nút "New Task" trong composer (desktop)** | `registerPostEditorActionComponent(component)` — render trong FormattingBar của message composer (#107); dùng class `AdvancedTextEditor__action-button` của host + tooltip `react-bootstrap` `{OverlayTrigger, Tooltip}`. Mobile không render slot này → dùng `/task new`. |
 | **Kanban (modal gần full màn)** | `registerRootComponent(component)` + mount modal lớn (gần full-screen) qua redux/modal; nút `📊 Kanban` mở modal. KHÔNG dùng custom route. |
 | Task card (render React cho post task) | `registerPostCardTypeComponent("custom_task", component)` (tuỳ chọn nâng cao; mặc định dùng message attachment) |
 | Real-time Kanban ↔ RHS | `registerWebSocketEventHandler(event, handler)` + `registerReducer` nhận sự kiện `p.API.PublishWebSocketEvent(...)` từ server |
@@ -217,7 +218,7 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 ### 5.1 Chi tiết chức năng theo nhóm thao tác
 
 #### A. Tạo task
-- **Cách gọi**: `/task add "<tiêu đề>"` (chỉ tiêu đề) → mở **New Task dialog pre-filled tiêu đề**; HOẶC nút **➕ New Task** (popup); HOẶC message action **"Tạo task từ tin nhắn"** (nội dung message → `summary` + `description`). KHÔNG parse inline `@assignee`/`due`/`desc` — mọi trường khác nhập trong dialog.
+- **Cách gọi**: `/task add "<tiêu đề>"` (chỉ tiêu đề) → mở **New Task dialog pre-filled tiêu đề**; HOẶC **`/task new`** mở dialog trống (hoặc `/task new "<tiêu đề>"` pre-fill) — điểm vào chính cho **mobile** (#107); HOẶC nút **➕ New Task** trong **composer** (desktop, `registerPostEditorActionComponent`, #107) hoặc trong RHS; HOẶC message action **"Tạo task từ tin nhắn"** (nội dung message → `summary` + `description`). KHÔNG parse inline `@assignee`/`due`/`desc` — mọi trường khác nhập trong dialog.
 - **Đầu vào** (trong dialog): `summary` (bắt buộc), `assignee` (**1** user), `due`, `description`.
 - **Scope / trigger**: mặc định **channel task** (`channel_id` = kênh hiện tại). **Task cá nhân** (`ChannelID == ""`): tạo qua **New Task dialog** chọn scope *Personal*, HOẶC `/task add` trong **DM với bot**.
 - **Hành vi**: sinh taskID = **ULID**; ghi index `assigned`/`created`/`channel`/`all` (key-per-edge); post **interactive card** vào kênh (nếu channel task); lưu `ChannelPostID`/`DMPostID`. **Rule notification**: **gửi DM thông báo tới assignee** khi được gán — **trừ khi `assignee == creator`** (không tự DM). KHÔNG dùng @mention trong kênh (ngoài scope).
@@ -296,6 +297,7 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 
 ### 5.2 Slash command đầy đủ (tham chiếu nhanh)
 ```
+/task new ["<summary>"]                                                mở New Task dialog (trống hoặc pre-fill) — điểm vào chính mobile (#107)
 /task add "<summary>"                                                  tạo task + mở dialog điền assignee/due/desc
 /task list [mine|channel|all] [status todo|in_progress|done|cancelled] [due ...]   liệt kê + lọc
 /task show <id>                                                       xem chi tiết
@@ -311,7 +313,7 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 /task search <keyword>                                              tìm task (escape hatch cho mobile/dialog)
 /task help
 ```
-Parser: `@mention` → `userId`; `due` → timestamp theo timezone user (`preference`); autocomplete cho mọi subcommand. **Ưu tiên Interactive Dialog**: `/task add "<tiêu đề>"` (chỉ cần tiêu đề, có/không quote) → mở **dialog tạo task** điền assignee/due/desc; `/task edit`/`/task remind` cũng mở dialog. Parser chỉ parse tiêu đề + mở dialog → đơn giản, cần unit test kỹ.
+Parser: `@mention` → `userId`; `due` → timestamp theo timezone user (`preference`); autocomplete cho mọi subcommand. **Ưu tiên Interactive Dialog**: `/task new` (không cần tiêu đề, mở dialog trống — điểm vào mobile #107) và `/task add "<tiêu đề>"` (chỉ cần tiêu đề, có/không quote) → mở **dialog tạo task** điền assignee/due/desc; `/task edit`/`/task remind` cũng mở dialog. Parser chỉ parse tiêu đề + mở dialog → đơn giản, cần unit test kỹ.
 
 ### 5.3 REST API (prefix `/plugins/com.mattermost.plugin-task/api/v1/`, middleware auth)
 ```
@@ -377,7 +379,7 @@ Tầng webapp chỉ tiêu thụ REST API đã xây ở server (phase 1–3).
 | View | Vị trí hiển thị | Cách mở |
 |---|---|---|
 | **Quick List** (My Tasks / Channel Tasks + lọc) | **Right Sidebar (RHS)** | nút channel header `📋 Tasks` |
-| **New Task** | **Popup dialog (modal)** | nút ➕ trong RHS, message action, hoặc `/task add` mở dialog |
+| **New Task** | **Popup dialog (modal)** | nút ➕ trong **composer** (desktop #107) hoặc RHS, `/task new` (dialog trống/pre-fill, điểm vào mobile #107), `/task add`, message action |
 | **Task Detail** | **RHS** (từ Quick List) HOẶC **panel nội bộ Kanban modal** (từ Kanban) HOẶC **Interactive Dialog** (mobile) | click 1 task trong Quick List / Kanban / `/task show` |
 | **Kanban board** | **Modal gần full màn** (overlay lớn phủ gần kín center channel) | nút `📊 Kanban` trong RHS/channel header, hoặc `/task board` |
 
@@ -386,6 +388,7 @@ Tầng webapp chỉ tiêu thụ REST API đã xây ở server (phase 1–3).
 ### 6.2 Component & đăng ký (dùng registry method chính xác)
 - `webapp/src/index.tsx`:
   - `registry.registerChannelHeaderButtonAction(icon, () => openRHS(), "Tasks", "Mở danh sách task")` — mở RHS.
+  - `registry.registerPostEditorActionComponent(NewTaskComposerButton)` — nút **➕ New Task** trong **FormattingBar của composer** (desktop, #107); dùng class `AdvancedTextEditor__action-button` của host + tooltip `react-bootstrap`. Click → dispatch `OPEN_NEW_TASK_DIALOG` với `draft.channelId`. Mobile không render slot này → dùng `/task new`.
   - `registry.registerRightHandSidebarComponent(TaskSidebar, "Tasks")` — RHS chứa `QuickList` + `TaskDetailPanel`.
   - `registry.registerRootComponent(KanbanModal)` — nút `📊 Kanban` mở **modal gần full màn** chứa `KanbanBoard`.
   - `registry.registerRootComponent(NewTaskDialog)` — popup tạo task (**desktop**); **mobile/fallback dùng Interactive Dialog** (`server/dialog.go`). Cả 2 submit cùng `POST /tasks` (không giảm duplication).
@@ -486,7 +489,7 @@ Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/
 - [ ] `server/dialog.go` — dựng **Interactive Dialog** cho Quick List & Task Detail (xem+sửa) + New Task/Assign — cross-platform (mobile) qua `OpenInteractiveDialog`
 
 **Webapp**
-- [ ] `webapp/src/index.tsx` — đăng ký: `registerChannelHeaderButtonAction`, `registerRightHandSidebarComponent` (RHS), `registerRootComponent` (Kanban modal gần full màn + NewTask dialog), `registerWebSocketEventHandler`, `registerReducer`, `registerTranslations` (i18n)
+- [ ] `webapp/src/index.tsx` — đăng ký: `registerChannelHeaderButtonAction`, `registerPostEditorActionComponent` (nút New Task trong composer #107), `registerRightHandSidebarComponent` (RHS), `registerRootComponent` (Kanban modal gần full màn + NewTask dialog), `registerWebSocketEventHandler`, `registerReducer`, `registerTranslations` (i18n)
 - [ ] `webapp/src/components/{TaskSidebar,QuickList,TaskDetailPanel,NewTaskDialog,KanbanModal,KanbanBoard,TaskCard}.tsx`
 - [ ] `webapp/src/client.ts` — wrapper gọi REST API
 - [ ] `webapp/webpack.config.js` — khai báo `externals` (react/redux/react-redux/react-router-dom)
@@ -528,7 +531,7 @@ Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/
   4. `/task remind T1 15m` → đúng `due-15m` bot DM @bob đúng 1 lần (kiểm `ReminderFired`).
   5. `/task list mine` và mở RHS sidebar → thấy task; lọc theo status/due.
   6. Tạo nhiều task đồng thời (concurrency) → không mất/sai index.
-  7. Nút `📋 Tasks` → RHS hiện **Quick List**; nút ➕ → **popup dialog** New Task; click task → **Task Detail** trong RHS.
+  7. Nút `📋 Tasks` → RHS hiện **Quick List**; nút ➕ trong **composer** (desktop) hoặc `/task new` (mobile) → **popup dialog** New Task; click task → **Task Detail** trong RHS.
   8. Mở **Kanban full-page** (scope Cá nhân/Kênh): kéo thẻ từ To Do → In Progress → Done → status & thứ tự cập nhật, `CompletedAt` set khi vào Done, header tiến độ cập nhật. Đổi scope cá nhân ↔ kênh → bảng đổi nội dung.
 - **Kiểm pagination**: tạo >100 task, duyệt `list` qua các trang.
 

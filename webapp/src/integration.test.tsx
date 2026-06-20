@@ -19,6 +19,9 @@ import reducer, {ACTION_TYPES} from 'reducer';
 import {combineReducers, createStore} from 'redux';
 import type {Store} from 'redux';
 
+// react-bootstrap is a webpack external (not installed as a package); it is
+// mapped to a passthrough mock via Jest's moduleNameMapper in package.json.
+
 // The plugin reducer is mounted under state['plugins-<pluginId>'] by the host;
 // replicate that mount here so the real reducer runs against dispatched actions.
 const PLUGIN_KEY = 'plugins-com.mattermost.plugin-task';
@@ -52,6 +55,7 @@ function recordingRegistry() {
             toggleRHSPlugin: {type: 'TOGGLE_RHS'},
         })),
         registerChannelHeaderButtonAction: jest.fn(),
+        registerPostEditorActionComponent: jest.fn(),
         registerRootComponent: jest.fn(),
         registerWebSocketEventHandler: jest.fn(),
         registerReducer: jest.fn(),

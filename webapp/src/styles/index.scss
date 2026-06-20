@@ -24,6 +24,12 @@ $bg-hover: #eef1f5;
 $radius: 4px;
 $gap: 8px;
 
+// --- New Task composer button (#107) --------------------------------------
+// No custom CSS: the button reuses the host's `AdvancedTextEditor__action-button`
+// class (the same one the attachment/emoji buttons use), so its styling — color,
+// size, hover/active — matches the composer controls and adapts to the active
+// theme automatically.
+
 // --- TaskSidebar (RHS container) -------------------------------------------
 
 .task-rhs {

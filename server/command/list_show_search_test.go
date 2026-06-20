@@ -173,6 +173,80 @@ func TestHandleAdd_CreatesImmediatelyWithoutOpener(t *testing.T) {
 	assert.Equal(t, "buy milk", svc.createInput.Summary)
 }
 
+// /task new mirrors the desktop "New Task" button: it opens the dialog even
+// with NO summary (blank dialog). This is the primary create entry point on
+// mobile (#107), where there is no header button.
+func TestHandleNew_OpensBlankDialogWithoutSummary(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc)
+	opener := &fakeNewTaskOpener{opened: true}
+	h.newTaskOpener = opener
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task new", "trig-1"))
+	require.NoError(t, err)
+
+	assert.True(t, opener.called, "opener should be invoked")
+	assert.Equal(t, "", opener.prefillSummary, "dialog opens blank with no summary")
+	assert.Equal(t, "ch1", opener.channelID, "channel scope passed through")
+	assert.Empty(t, svc.createInput.Summary, "task is NOT created — the dialog is the form")
+	assert.Empty(t, resp.Text, "no ephemeral text — the dialog is the feedback")
+}
+
+// /task new "<summary>" pre-fills the dialog, like the button opened from a
+// message (#16). It still does NOT create the task immediately.
+func TestHandleNew_PrefillsDialogWithSummary(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc)
+	opener := &fakeNewTaskOpener{opened: true}
+	h.newTaskOpener = opener
+
+	_, err := h.Handle(argsWithTrigger("u1", "/task new \"fix the bug\"", "trig-1"))
+	require.NoError(t, err)
+
+	assert.Equal(t, "fix the bug", opener.prefillSummary, "dialog is prefilled")
+	assert.Empty(t, svc.createInput.Summary, "task is NOT created until the dialog submits")
+}
+
+// When the opener fails, /task new does NOT fall back to immediate create
+// (an empty task is meaningless); it surfaces an actionable hint instead.
+func TestHandleNew_HintsInsteadOfFallingBackWhenOpenerFails(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc)
+	h.newTaskOpener = &fakeNewTaskOpener{opened: false} // opener fails
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task new \"x\"", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "/task add", "should point the user to /task add")
+	assert.Empty(t, svc.createInput.Summary, "must NOT create an immediate task")
+}
+
+// Without an opener (or no trigger id), /task new cannot open a dialog and
+// must NOT create an empty task. It returns an actionable hint.
+func TestHandleNew_HintsWhenNoOpenerOrTrigger(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc) // newTaskOpener is nil
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task new", "trig-1"))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "/task add", "should point the user to /task add")
+	assert.Empty(t, svc.createInput.Summary, "must NOT create an immediate task")
+}
+
+// With an opener wired but no trigger id (e.g. an API-driven call with no
+// interactive context), /task new cannot open a dialog either — it surfaces the
+// same /task add hint instead of creating an empty task. Covers the TriggerId
+// half of the `newTaskOpener != nil && args.TriggerId != ""` guard.
+func TestHandleNew_HintsWhenTriggerIDEmpty(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc)
+	h.newTaskOpener = &fakeNewTaskOpener{opened: true} // opener available
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task new", ""))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "/task add", "should point the user to /task add")
+	assert.Empty(t, svc.createInput.Summary, "must NOT create an immediate task")
+}
+
 func TestHandleList_EmptyReturnsNoTasks(t *testing.T) {
 	h := newTestHandler(&fakeStatusService{})
 	resp, err := h.Handle(args("u1", "/task list mine"))

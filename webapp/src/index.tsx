@@ -4,6 +4,7 @@
 // Webapp plugin entry point (issue #27). Wires the plugin into the Mattermost
 // desktop UI through the official registry methods:
 //   - channel header button → opens the RHS
+//   - composer button ("New Task") → opens the New Task dialog (#107)
 //   - Right-Hand Sidebar → TaskSidebar (Quick List + Task Detail)
 //   - root components → KanbanModal (board) and NewTaskDialog (create popup)
 //   - WebSocket event handler → real-time task updates (#32 fills the body)
@@ -14,8 +15,12 @@
 // React/Redux/ReactRouter are webpack externals (webpack.config.js), supplied
 // by the host app at runtime; they are never bundled.
 
+import {useFormatMessage} from 'i18n_utils';
 import manifest from 'manifest';
 import React from 'react';
+// eslint-disable-next-line no-restricted-imports -- plugin has no access to the host's components/overlay_trigger wrapper, so we use react-bootstrap directly (a webpack external supplied by the host at runtime), the same pattern mattermost-plugin-calls uses.
+import {OverlayTrigger, Tooltip} from 'react-bootstrap';
+import {useDispatch} from 'react-redux';
 import reducer, {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
@@ -51,6 +56,58 @@ function getTranslationsForLocale(locale: string): Record<string, string> {
     }
 }
 
+// PostEditorActionProps is the prop shape the host's PostEditorAction Pluggable
+// passes to composer toolbar buttons (see advanced_text_editor/use_plugin_items).
+// We read `draft.channelId` to open the New Task dialog scoped to the current
+// channel; getSelectedText/updateText are unused but part of the contract.
+interface PostEditorActionProps {
+    draft?: {channelId?: string; rootId?: string};
+    getSelectedText?: () => {start?: number; end?: number};
+    updateText?: (message: string) => void;
+}
+
+// NewTaskComposerButton is the "New Task" button in the message composer
+// toolbar (issue #107). Registered via registerPostEditorActionComponent, it
+// renders in the composer's additionalControls area, next to the attachment
+// and emoji buttons. It reuses the host's own `AdvancedTextEditor__action-button`
+// class so its styling — color, size, hover/active states — matches the other
+// composer buttons and adapts to the active theme automatically (no custom CSS).
+//
+// On click it dispatches OPEN_NEW_TASK_DIALOG with the draft's channelId, so
+// NewTaskDialog opens pre-scoped (scope "Channel" radio enabled). Desktop only:
+// the host does not render the composer plugin slot on the mobile app; mobile
+// uses the /task new slash command instead.
+export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Element {
+    const dispatch = useDispatch();
+    const t = useFormatMessage();
+    const onClick = () => {
+        dispatch({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            channelID: draft?.channelId,
+        });
+    };
+    return (
+        <OverlayTrigger
+            delay={{show: 300, hide: 0}}
+            placement='top'
+            overlay={
+                <Tooltip id='task-new-composer-tooltip'>
+                    {t('webapp.task.tooltip.new_task')}
+                </Tooltip>
+            }
+        >
+            <button
+                type='button'
+                className='style--none AdvancedTextEditor__action-button'
+                onClick={onClick}
+                aria-label={t('webapp.task.tooltip.new_task')}
+            >
+                <i className='icon fa fa-tasks'/>
+            </button>
+        </OverlayTrigger>
+    );
+}
+
 export default class Plugin {
     // registry is captured in initialize so the post-dropdown action and other
     // imperative callbacks can dispatch without re-deriving it.
@@ -72,6 +129,15 @@ export default class Plugin {
             'Tasks',
             'Mở danh sách task',
         );
+
+        // "New Task" composer button (issue #107). Registered via
+        // registerPostEditorActionComponent, so it renders in the message
+        // composer's additionalControls toolbar — next to the attachment and
+        // emoji buttons. It reuses the host's AdvancedTextEditor__action-button
+        // class (same as the attachment button), so styling matches the other
+        // composer controls and follows the active theme with no custom CSS.
+        // Desktop only: mobile app uses the /task new slash command instead.
+        registry.registerPostEditorActionComponent(NewTaskComposerButton);
 
         // Root components: the Kanban board and the New Task popup. Mounted once
         // and toggled via Redux/props by their consumers.

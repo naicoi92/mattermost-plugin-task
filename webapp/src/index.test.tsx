@@ -3,15 +3,41 @@
 
 // Unit tests for the plugin entry point (issue #27). Verifies that initialize
 // registers every desktop integration the issue requires: channel header button,
-// RHS component, root components (Kanban + New Task dialog), WebSocket handler,
-// reducer, translations, and the post dropdown action. Uses a fake registry +
-// store so no host app is needed.
+// channel header icon (New Task #107), RHS component, root components
+// (Kanban + New Task dialog), WebSocket handler, reducer, translations, and the
+// post dropdown action. Uses a fake registry + store so no host app is needed.
 
-import Plugin, {openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
+// Mock react-redux so the NewTaskComposerButton component (which calls
+// useDispatch and, via useFormatMessage, useSelector) can be exercised without
+// a real <Provider>. The dispatch and the locale selector are captured per-test.
+jest.mock('react-redux', () => ({
+    useDispatch: () => mockDispatch,
+    useSelector: (selector: (s: unknown) => unknown) => selector(mockState),
+}));
+
+// Mock i18n_utils so useFormatMessage returns a plain identity function and
+// activeLocaleSelector returns a stable locale without touching the store shape.
+jest.mock('i18n_utils', () => ({
+    useFormatMessage: () => (id: string) => id,
+    formatMessage: (id: string) => id,
+    activeLocaleSelector: () => 'en',
+}));
+
+// react-bootstrap is a webpack external supplied by the host at runtime, so it
+// is not installed as a package. It is mapped to a passthrough mock via Jest's
+// moduleNameMapper in package.json so importing it (OverlayTrigger/Tooltip)
+// works under Jest without a real install.
+
+import Plugin, {NewTaskComposerButton, openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
 import type {GlobalState} from '@mattermost/types/store';
+
+// Per-test dispatch + state shared with the react-redux / i18n_utils mocks
+// above. Reset at the top of each New Task icon test.
+let mockDispatch: (a: {type: string}) => void;
+let mockState: unknown;
 
 // A minimal store whose dispatch records every action, used to assert the
 // channel header button and post dropdown action dispatch the right thing.
@@ -42,6 +68,7 @@ function fakeRegistry() {
             toggleRHSPlugin: {type: 'TOGGLE_RHS'},
         })),
         registerChannelHeaderButtonAction: jest.fn(),
+        registerPostEditorActionComponent: jest.fn(),
         registerRootComponent: jest.fn(),
         registerWebSocketEventHandler: jest.fn(),
         registerReducer: jest.fn(),
@@ -63,11 +90,21 @@ describe('Plugin.initialize registrations (#27)', () => {
         expect(typeof rhsArgs[0]).toBe('function'); // TaskSidebar component
         expect(rhsArgs[1]).toBe('Tasks');
 
-        // Channel header button: icon, action, dropdown text, tooltip.
+        // Channel header button: ONE registration — "Tasks" (opens RHS).
+        // registerChannelHeaderButtonAction renders in the ChannelHeaderPlug
+        // slot, which the host also dispatches to MobileChannelHeaderButton.
         expect(registry.registerChannelHeaderButtonAction).toHaveBeenCalledTimes(1);
-        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
-        expect(headerArgs[2]).toBe('Tasks');
-        expect(headerArgs[3]).toBe('Mở danh sách task');
+        const tasksArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
+        expect(tasksArgs[2]).toBe('Tasks');
+        expect(tasksArgs[3]).toBe('Mở danh sách task');
+
+        // Composer button: ONE registration — "New Task" (#107).
+        // registerPostEditorActionComponent renders in the message composer's
+        // additionalControls toolbar, next to the attachment/emoji buttons.
+        // Desktop only; mobile uses /task new.
+        expect(registry.registerPostEditorActionComponent).toHaveBeenCalledTimes(1);
+        const composerArgs = registry.registerPostEditorActionComponent.mock.calls[0] as unknown[];
+        expect(typeof composerArgs[0]).toBe('function'); // NewTaskComposerButton component
 
         // Two root components: Kanban modal + New Task dialog.
         expect(registry.registerRootComponent).toHaveBeenCalledTimes(2);
@@ -107,7 +144,52 @@ describe('Plugin.initialize registrations (#27)', () => {
         // showRHSPlugin is the object the RHS registration returned.
         expect(actions).toContainEqual({type: 'SHOW_RHS'});
     });
+
+    test('NewTaskComposerButton dispatches OPEN_NEW_TASK_DIALOG with the draft channel id on click (#107)', () => {
+        const actions: Array<{type: string}> = [];
+        mockDispatch = (a: {type: string}) => {
+            actions.push(a);
+        };
+        mockState = {};
+
+        // Invoke the component as a function (it is a function component) with
+        // the draft prop the host's PostEditorAction Pluggable passes. The
+        // component wraps the <button> in an OverlayTrigger; the react-bootstrap
+        // mock passes children through, so the button is reachable as the
+        // OverlayTrigger element's `children` prop.
+        const button = buttonInside(NewTaskComposerButton({draft: {channelId: 'ch123'}}));
+        button.props.onClick();
+
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            channelID: 'ch123',
+        });
+    });
+
+    test('NewTaskComposerButton is nil-safe when no draft/channel is passed', () => {
+        const actions: Array<{type: string}> = [];
+        mockDispatch = (a: {type: string}) => {
+            actions.push(a);
+        };
+        mockState = {};
+
+        const button = buttonInside(NewTaskComposerButton({}));
+        button.props.onClick();
+
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+            channelID: undefined,
+        });
+    });
 });
+
+// buttonInside digs the <button> out of the OverlayTrigger wrapper the
+// react-bootstrap mock renders. The mock passes `children` through unchanged,
+// so the OverlayTrigger element's props.children is the <button> element.
+function buttonInside(element: unknown): {props: {onClick: () => void}} {
+    const props = (element as {props: {children: {props: {onClick: () => void}}}}).props;
+    return props.children;
+}
 
 describe('openNewTaskFromMessage', () => {
     // A host state shape with a post under entities.posts.posts, matching where
