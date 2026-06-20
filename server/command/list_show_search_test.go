@@ -232,6 +232,21 @@ func TestHandleNew_HintsWhenNoOpenerOrTrigger(t *testing.T) {
 	assert.Empty(t, svc.createInput.Summary, "must NOT create an immediate task")
 }
 
+// With an opener wired but no trigger id (e.g. an API-driven call with no
+// interactive context), /task new cannot open a dialog either — it surfaces the
+// same /task add hint instead of creating an empty task. Covers the TriggerId
+// half of the `newTaskOpener != nil && args.TriggerId != ""` guard.
+func TestHandleNew_HintsWhenTriggerIDEmpty(t *testing.T) {
+	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	h := newTestHandler(svc)
+	h.newTaskOpener = &fakeNewTaskOpener{opened: true} // opener available
+
+	resp, err := h.Handle(argsWithTrigger("u1", "/task new", ""))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Text, "/task add", "should point the user to /task add")
+	assert.Empty(t, svc.createInput.Summary, "must NOT create an immediate task")
+}
+
 func TestHandleList_EmptyReturnsNoTasks(t *testing.T) {
 	h := newTestHandler(&fakeStatusService{})
 	resp, err := h.Handle(args("u1", "/task list mine"))
