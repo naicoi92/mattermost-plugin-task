@@ -104,6 +104,7 @@
   "webapp.task.subtasks": "Subtask",
   "webapp.task.subtasks.progress": "Đã xong %s/%s",
   "webapp.task.comments": "Bình luận",
+  "webapp.task.comments.commented": "đã bình luận",
   "webapp.task.add_subtask": "Thêm subtask",
   "webapp.task.add_comment": "Thêm bình luận",
   "webapp.task.set_reminder": "Đặt nhắc",

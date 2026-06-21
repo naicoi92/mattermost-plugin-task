@@ -104,6 +104,7 @@
   "webapp.task.subtasks": "Subtasks",
   "webapp.task.subtasks.progress": "%s/%s done",
   "webapp.task.comments": "Comments",
+  "webapp.task.comments.commented": "commented",
   "webapp.task.add_subtask": "Add subtask",
   "webapp.task.add_comment": "Add comment",
   "webapp.task.set_reminder": "Set reminder",

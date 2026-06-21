@@ -654,34 +654,83 @@
         font-size: 13px;
     }
 
-    // Light inline header: back arrow + title, hairline bottom border.
+    // Light inline header: back arrow + check + title + delete, hairline bottom border.
     &__header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 10px 14px;
+        padding: 8px 12px;
         border-bottom: 1px solid var(--task-border);
-        gap: 8px;
+        gap: 6px;
     }
 
     &__header-left {
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
         min-width: 0;
+        flex: 1;
     }
 
     &__back {
         @extend %task-icon-btn;
     }
 
-    &__title-inline {
-        font-size: 14px;
+    &__header-check {
+        flex-shrink: 0;
+    }
+
+    // Title in the header: a heading that reads as plain text and becomes an
+    // input on click. Truncates with ellipsis when long.
+    &__header-title {
+        margin: 0;
+        font-family: var(--task-font);
+        font-size: 15px;
         font-weight: 600;
+        line-height: 1.3;
+        letter-spacing: -0.005em;
         color: var(--task-fg);
-        white-space: nowrap;
+        cursor: text;
+        padding: 4px 6px;
+        border-radius: var(--task-radius-sm);
+        transition: background 0.12s;
         overflow: hidden;
         text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+
+        &:hover {
+            background: var(--task-surface);
+        }
+
+        &--terminal {
+            color: var(--task-meta);
+            text-decoration: line-through;
+            text-decoration-color: var(--task-meta);
+        }
+    }
+
+    &__header-title-input {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--task-font);
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--task-fg);
+        background: var(--task-bg);
+        border: 1px solid var(--task-accent);
+        border-radius: var(--task-radius-sm);
+        padding: 4px 6px;
+        outline: none;
+        box-shadow: var(--task-focus-ring);
+    }
+
+    &__header-delete {
+        @extend %task-icon-btn;
+
+        &:hover {
+            color: var(--task-danger);
+        }
     }
 
     &__header-actions {
@@ -691,18 +740,6 @@
 
     &__scroll {
         padding: 4px 16px 24px;
-    }
-
-    // Title row: large check + editable summary.
-    &__title-row {
-        display: flex;
-        gap: 10px;
-        align-items: flex-start;
-        padding: 12px 0 14px;
-    }
-
-    &__title-check {
-        margin-top: 4px;
     }
 
     // Meta table: grid label/value rows with click-to-edit cells.

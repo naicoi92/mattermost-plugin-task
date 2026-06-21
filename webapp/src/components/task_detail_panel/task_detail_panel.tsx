@@ -16,6 +16,10 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import type {GlobalState} from '@mattermost/types/store';
+
+import {getChannel} from 'mattermost-redux/selectors/entities/channels';
+
 import formatDueRelative from 'components/shared/format_due_relative';
 import PriorityPill, {priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
@@ -81,6 +85,8 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     const [newComment, setNewComment] = useState('');
     const [newSubtask, setNewSubtask] = useState('');
     const [editingDescription, setEditingDescription] = useState(false);
+    const [editingTitle, setEditingTitle] = useState(false);
+    const [editingDue, setEditingDue] = useState(false);
 
     // Inline-edit buffers for summary / due / description. They mirror `full`
     // so the field renders the server value until the user starts editing,
@@ -110,6 +116,9 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                 setFull(detail);
                 setSubtasks(subs ?? []);
                 setComments(coms ?? []);
+                setEditingTitle(false);
+                setEditingDue(false);
+                setEditingDescription(false);
                 setEditSummary(detail.summary);
                 setEditDueLocal(detail.due ? dueToLocalInput(detail.due) : '');
                 setEditDescription(detail.description);
@@ -132,6 +141,30 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     // ids → labels. Hooks run before the early returns so the order is stable.
     const assigneeLabel = useResolvedUser(full?.assignee_id ?? '').label;
     const commentAuthorLabels = useResolvedUsers(comments.map((c) => c.user_id).filter(Boolean));
+
+    // Resolve the channel display name (not the raw id) for the meta-table.
+    // Called unconditionally (rules-of-hooks) before the early return; the
+    // selector returns '' when there is no channel.
+    const channelIDForSelector = full?.channel_id ?? '';
+    const channelName = useSelector((s: GlobalState) => {
+        if (!channelIDForSelector) {
+            return '';
+        }
+        const ch = getChannel(s as never, channelIDForSelector);
+        return ch?.display_name || ch?.name || '';
+    });
+
+    // Resolve the parent task's summary so the meta-table can show a readable
+    // label instead of the raw ULID. Read from the plugin cache (best-effort).
+    const parentTaskIDForSelector = full?.parent_task_id ?? '';
+    const parentSummary = useSelector((s: GlobalStateWithPlugin) => {
+        if (!parentTaskIDForSelector) {
+            return '';
+        }
+        const pluginSlice = s[PLUGIN_STATE_KEY];
+        const cached = pluginSlice && (pluginSlice as {tasks?: Record<string, {summary?: string}>}).tasks?.[parentTaskIDForSelector];
+        return cached?.summary || '';
+    });
 
     if (!taskID) {
         return null;
@@ -314,28 +347,8 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                             <BackIcon/>
                         </button>
                     )}
-                    <span className='task-detail__title-inline'>{t('webapp.task.title.detail')}</span>
-                </div>
-            </div>
-
-            <div className='task-detail__scroll'>
-                {error && <div className='task-detail__error-block'>{error}</div>}
-
-                {full.parent_task_id && (
-                    <button
-                        className='task-detail__parent-link'
-                        type='button'
-                        onClick={() => onOpenSubtask?.(full.parent_task_id)}
-                        disabled={!onOpenSubtask}
-                    >
-                        <BackIcon/>
-                        {t('webapp.task.subtasks')}
-                    </button>
-                )}
-
-                <div className='task-detail__title-row'>
                     <span
-                        className={`quick-list__check task-detail__title-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
+                        className={`quick-list__check task-detail__header-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
                         role='checkbox'
                         aria-checked={full.status === 'done' || full.status === 'cancelled'}
                         tabIndex={0}
@@ -349,21 +362,62 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     >
                         <CheckIcon/>
                     </span>
-                    <input
-                        className='task-input task-input--inline task-input--title'
-                        value={editSummary}
-                        onChange={(e) => setEditSummary(e.target.value)}
-                        onBlur={() => patchField('summary', editSummary.trim())}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                (e.target as HTMLInputElement).blur();
-                            }
-                        }}
-                        disabled={saving}
-                        aria-label={t('webapp.task.summary')}
-                    />
+                    {editingTitle ? (
+                        <input
+                            className='task-detail__header-title-input'
+                            value={editSummary}
+                            onChange={(e) => setEditSummary(e.target.value)}
+                            onBlur={() => {
+                                patchField('summary', editSummary.trim());
+                                setEditingTitle(false);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    (e.target as HTMLInputElement).blur();
+                                }
+                                if (e.key === 'Escape') {
+                                    setEditSummary(full.summary);
+                                    setEditingTitle(false);
+                                }
+                            }}
+                            autoFocus={true}
+                            disabled={saving}
+                            aria-label={t('webapp.task.summary')}
+                        />
+                    ) : (
+                        <h2
+                            className={`task-detail__header-title ${full.status === 'done' || full.status === 'cancelled' ? 'task-detail__header-title--terminal' : ''}`}
+                            onClick={() => setEditingTitle(true)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setEditingTitle(true);
+                                }
+                            }}
+                            role='button'
+                            tabIndex={0}
+                            title={t('webapp.task.summary')}
+                        >
+                            {full.summary}
+                        </h2>
+                    )}
                 </div>
+                {canDelete && (
+                    <button
+                        className='task-detail__header-delete'
+                        onClick={remove}
+                        type='button'
+                        aria-label={t('webapp.task.delete')}
+                        title={t('webapp.task.delete')}
+                    >
+                        <TrashIcon/>
+                    </button>
+                )}
+            </div>
+
+            <div className='task-detail__scroll'>
+                {error && <div className='task-detail__error-block'>{error}</div>}
 
                 <div className='task-detail__meta-table'>
                     <div className='task-detail__meta-label'>{t('webapp.task.filter.status')}</div>
@@ -388,18 +442,45 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
 
                     <div className='task-detail__meta-label'>{t('webapp.task.due')}</div>
                     <div className={`task-detail__meta-value ${isOverdue(full) ? 'task-detail__meta-value--overdue' : ''}`}>
-                        <input
-                            className='task-input task-input--inline'
-                            type='datetime-local'
-                            value={editDueLocal}
-                            onChange={(e) => setEditDueLocal(e.target.value)}
-                            onBlur={() => patchField('due', editDueLocal)}
-                            disabled={saving}
-                            aria-label={t('webapp.task.due')}
-                        />
-                        {full.due && (
-                            <span style={{color: 'var(--task-meta)', fontSize: 12}}>
-                                {formatDueRelative({dueMs: full.due, locale, isOverdue: isOverdue(full)})}
+                        {editingDue ? (
+                            <input
+                                className='task-input task-input--inline'
+                                type='datetime-local'
+                                value={editDueLocal}
+                                onChange={(e) => setEditDueLocal(e.target.value)}
+                                onBlur={() => {
+                                    patchField('due', editDueLocal);
+                                    setEditingDue(false);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        (e.target as HTMLInputElement).blur();
+                                    }
+                                    if (e.key === 'Escape') {
+                                        setEditDueLocal(full.due ? dueToLocalInput(full.due) : '');
+                                        setEditingDue(false);
+                                    }
+                                }}
+                                autoFocus={true}
+                                disabled={saving}
+                                aria-label={t('webapp.task.due')}
+                            />
+                        ) : (
+                            <span
+                                onClick={() => setEditingDue(true)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        setEditingDue(true);
+                                    }
+                                }}
+                                role='button'
+                                tabIndex={0}
+                                style={{display: 'inline-flex', alignItems: 'center', gap: 4}}
+                            >
+                                <CalendarIcon/>
+                                {full.due ? formatDueRelative({dueMs: full.due, locale, isOverdue: isOverdue(full)}) : t('webapp.task.due.pick')}
                             </span>
                         )}
                     </div>
@@ -419,7 +500,34 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         <>
                             <div className='task-detail__meta-label'>{t('webapp.task.scope.channel')}</div>
                             <div className='task-detail__meta-value'>
-                                <span style={{color: 'var(--task-muted)'}}>{'#' + full.channel_id}</span>
+                                <HashIcon/>
+                                <span style={{color: 'var(--task-accent)', fontWeight: 500}}>
+                                    {channelName || '#' + full.channel_id}
+                                </span>
+                            </div>
+                        </>
+                    )}
+
+                    {full.parent_task_id && (
+                        <>
+                            <div className='task-detail__meta-label'>{t('webapp.task.subtasks')}</div>
+                            <div className='task-detail__meta-value'>
+                                <button
+                                    type='button'
+                                    onClick={() => onOpenSubtask?.(full.parent_task_id)}
+                                    disabled={!onOpenSubtask}
+                                    style={{
+                                        border: 0,
+                                        background: 'transparent',
+                                        padding: 0,
+                                        color: 'var(--task-accent)',
+                                        fontWeight: 500,
+                                        cursor: onOpenSubtask ? 'pointer' : 'default',
+                                        textDecoration: onOpenSubtask ? 'none' : 'none',
+                                    }}
+                                >
+                                    {parentSummary || full.parent_task_id}
+                                </button>
                             </div>
                         </>
                     )}
@@ -545,28 +653,32 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                             {t('webapp.task.empty')}
                         </li>
                     )}
-                    {comments.map((c) => (
-                        <li
-                            key={c.id}
-                            className='task-detail__activity-item'
-                        >
-                            <span
-                                className='task-detail__activity-avatar'
-                                title={commentAuthorLabels[c.user_id] || c.user_id}
+                    {comments.map((c) => {
+                        const label = commentAuthorLabels[c.user_id] || c.user_id || '?';
+                        const initials = label.replace(/^@/, '').trim().slice(0, 2).toUpperCase() || '?';
+                        return (
+                            <li
+                                key={c.id}
+                                className='task-detail__activity-item'
                             >
-                                {(commentAuthorLabels[c.user_id] || c.user_id || '?').
-                                    replace(/^@/, '').trim()[0]?.toUpperCase() || '?'}
-                            </span>
-                            <div className='task-detail__activity-body'>
-                                <strong>{commentAuthorLabels[c.user_id] || t('webapp.task.comments')}</strong>
-                                {' '}
-                                <span className='task-detail__activity-time'>
-                                    {formatTimestamp(c.created_at, locale)}
+                                <span
+                                    className='task-detail__activity-avatar'
+                                    title={label}
+                                >
+                                    {initials}
                                 </span>
-                                <div className='task-detail__activity-comment'>{c.content}</div>
-                            </div>
-                        </li>
-                    ))}
+                                <div className='task-detail__activity-body'>
+                                    <strong>{label}</strong>
+                                    {' '}
+                                    {t('webapp.task.comments.commented')}
+                                    <span className='task-detail__activity-time'>
+                                        {formatTimestamp(c.created_at, locale)}
+                                    </span>
+                                    <div className='task-detail__activity-comment'>{c.content}</div>
+                                </div>
+                            </li>
+                        );
+                    })}
                 </ul>
                 <div className='task-detail__comment-input'>
                     <input
@@ -589,18 +701,6 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         {t('webapp.task.comments.post')}
                     </button>
                 </div>
-
-                {canDelete && (
-                    <div className='task-detail__actions'>
-                        <button
-                            className='task-btn task-btn--danger'
-                            onClick={remove}
-                            type='button'
-                        >
-                            {t('webapp.task.delete')}
-                        </button>
-                    </div>
-                )}
             </div>
         </div>
     );
@@ -683,6 +783,53 @@ function CheckIcon(): JSX.Element {
             aria-hidden='true'
         >
             <path d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z'/>
+        </svg>
+    );
+}
+
+// CalendarIcon is the calendar glyph used before the due value in the meta-
+// table. Stroke-based to match Mattermost's line-icon style.
+function CalendarIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round'}}
+        >
+            <rect
+                x='2.5'
+                y='3.5'
+                width='11'
+                height='10'
+                rx='1.5'
+            />
+            <path d='M2.5 6.5h11M5.5 2v3M10.5 2v3'/>
+        </svg>
+    );
+}
+
+// HashIcon is the # glyph used before the channel name in the meta-table.
+function HashIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round'}}
+        >
+            <path d='M3 5h10M3 11h10M7 2l-2 12M11 2l-2 12'/>
+        </svg>
+    );
+}
+
+// TrashIcon is the delete glyph used in the header.
+function TrashIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round'}}
+        >
+            <path d='M3 4h10M6.5 4V3a1 1 0 011-1h1a1 1 0 011 1v1M5 4l.5 9a1 1 0 001 1h3a1 1 0 001-1l.5-9'/>
         </svg>
     );
 }
