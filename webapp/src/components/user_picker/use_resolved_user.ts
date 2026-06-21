@@ -75,8 +75,12 @@ export function useResolvedUser(userID: string): {label: string; user: UserProfi
 }
 
 // useResolvedUsers resolves a set of user ids in one hook (for lists). Returns
-// a map id → label. Same store-first / fetch-fallback strategy as
-// useResolvedUser, batched per id.
+// a map id → label where a *missing* key means "still resolving" (the caller
+// should show a muted placeholder, NOT the raw id — that avoids flashing an
+// opaque value). Resolved users map to "@username". The host store is checked
+// via useSelector elsewhere when a single id is needed; this hook fetches any
+// ids it can't satisfy from the store passed through the closure-free fetch
+// path below.
 export function useResolvedUsers(userIDs: string[]): Record<string, string> {
     const [labels, setLabels] = useState<Record<string, string>>({});
 
@@ -84,16 +88,9 @@ export function useResolvedUsers(userIDs: string[]): Record<string, string> {
         let cancelled = false;
         const unique = Array.from(new Set(userIDs.filter(Boolean)));
 
-        // Default every id to itself (last-resort label); resolved labels
-        // overwrite these when the fetch lands.
-        setLabels((prev) => {
-            const merged = {...prev};
-            unique.forEach((id) => {
-                merged[id] = id;
-            });
-            return merged;
-        });
-
+        // Do NOT seed the map with raw ids — that would flash the opaque id
+        // before the name resolves. Only entries that resolve successfully are
+        // added; absent keys mean "still loading".
         Promise.all(unique.map((id) => client.getUser(id).catch(() => null))).
             then((results) => {
                 if (cancelled) {

@@ -283,8 +283,8 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                                         {task.assignee_id && (
                                             <>
                                                 <span className='quick-list__item-sep'>{'·'}</span>
-                                                <span className='quick-list__item-assignee'>
-                                                    {assigneeLabels[task.assignee_id] || task.assignee_id}
+                                                <span className={`quick-list__item-assignee ${assigneeLabels[task.assignee_id] ? '' : 'quick-list__item-assignee--loading'}`}>
+                                                    {assigneeLabels[task.assignee_id] || '…'}
                                                 </span>
                                             </>
                                         )}

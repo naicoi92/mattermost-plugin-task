@@ -447,6 +447,8 @@
     }
 
     // Assignee @username label (resolves from the id; see useResolvedUsers).
+    // While the id → username lookup is in flight the label shows a muted "…"
+    // placeholder so the row never flashes the opaque id.
     &__item-assignee {
         font-size: 12px;
         color: var(--task-muted);
@@ -454,6 +456,10 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+
+        &--loading {
+            opacity: 0.5;
+        }
     }
 
     &__avatar {
