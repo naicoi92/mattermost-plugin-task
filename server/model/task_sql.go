@@ -27,10 +27,11 @@ type TaskRow struct {
 	OrderKey string `json:"order_key" db:"order_key"`
 	// IsAllDay marks the due date as a date (no time component) for rendering.
 	IsAllDay bool `json:"is_all_day" db:"is_all_day"`
-	// Due is the due timestamp in ms UTC; nil means no due date. The db tag is
-	// "due_at" (the column name); the field/json name is "due" to match the
-	// webapp's REST contract.
-	Due *int64 `json:"due,omitempty" db:"due_at"`
+	// DueAt is the due timestamp in ms UTC; nil means no due date. The json tag
+	// is "due" to match the webapp's REST contract; the db tag is "due_at"
+	// matching the column name. The field name follows the *At convention of
+	// the sibling timestamp fields (CreatedAt, UpdatedAt, CompletedAt).
+	DueAt *int64 `json:"due,omitempty" db:"due_at"`
 	// CompletedAt is set when the task transitions to done; nil otherwise.
 	CompletedAt *int64 `json:"completed_at,omitempty" db:"completed_at"`
 	// CancelledAt is set when the task transitions to cancelled; nil otherwise.

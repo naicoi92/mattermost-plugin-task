@@ -62,7 +62,7 @@ func withParent(p string) func(*model.TaskRow) {
 }
 
 func withDue(ms int64) func(*model.TaskRow) {
-	return func(t *model.TaskRow) { t.Due = &ms }
+	return func(t *model.TaskRow) { t.DueAt = &ms }
 }
 
 func TestCreateTask_InsertsAndRoundTrips(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCreateTask_InsertsAndRoundTrips(t *testing.T) {
 	created, err := s.CreateTask(ctx, fixture("01HXYZTASK0001", "k1", func(t *model.TaskRow) {
 		t.ChannelID = "ch1"
 		t.ParentTaskID = "01HXYZPARENT0001"
-		t.Due = &due
+		t.DueAt = &due
 		t.IsAllDay = true
 	}))
 	require.NoError(t, err)
@@ -88,8 +88,8 @@ func TestCreateTask_InsertsAndRoundTrips(t *testing.T) {
 	assert.Equal(t, "01HXYZTASK0001", got.ID)
 	assert.Equal(t, "ch1", got.ChannelID)
 	assert.Equal(t, "01HXYZPARENT0001", got.ParentTaskID)
-	require.NotNil(t, got.Due)
-	assert.Equal(t, due, *got.Due)
+	require.NotNil(t, got.DueAt)
+	assert.Equal(t, due, *got.DueAt)
 	assert.True(t, got.IsAllDay)
 }
 

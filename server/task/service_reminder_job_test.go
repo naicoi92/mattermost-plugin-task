@@ -29,7 +29,7 @@ func TestReminderJob_FullCycle(t *testing.T) {
 		Summary:        "due soon",
 		CreatorID:      "u-c",
 		AssigneeID:     "u-me",
-		Due:            &due,
+		DueAt:          &due,
 		ReminderOffset: ptrInt64(120_000),
 	})
 
@@ -67,7 +67,7 @@ func TestReminderJob_UnassignedTaskSurfacesWithEmptyAssignee(t *testing.T) {
 	mustCreateTask(t, svc, CreateInput{
 		Summary:        "no assignee",
 		CreatorID:      "u-c",
-		Due:            &due,
+		DueAt:          &due,
 		ReminderOffset: ptrInt64(120_000),
 	})
 
@@ -88,7 +88,7 @@ func TestReminderJob_TerminalTaskExcluded(t *testing.T) {
 		Summary:        "done task",
 		CreatorID:      "u-c",
 		AssigneeID:     "u-me",
-		Due:            &due,
+		DueAt:          &due,
 		ReminderOffset: ptrInt64(120_000),
 	})
 	_, err := svc.SetStatus("u-c", task.ID, "done")

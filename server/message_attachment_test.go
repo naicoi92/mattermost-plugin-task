@@ -10,7 +10,7 @@ import (
 )
 
 func sampleTask(status string, due *int64) *taskmodel.Task {
-	return &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review PR", Due: due, Status: status, CreatedAt: 1_700_000_000_000}, CreatorID: "u-creator", AssigneeID: "u-bob"}
+	return &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review PR", DueAt: due, Status: status, CreatedAt: 1_700_000_000_000}, CreatorID: "u-creator", AssigneeID: "u-bob"}
 }
 
 func TestBuildTaskCard_FieldsAndTitle(t *testing.T) {

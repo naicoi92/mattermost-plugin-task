@@ -18,7 +18,6 @@ const commentsTableShort = "comments"
 // commentColumns lists every column of task_comments in scan order.
 var commentColumns = []string{"id", "task_id", "post_id", "author_id", "created_at"}
 
-// store.ErrCommentNotFound is returned by UnlinkComment callers that need to
 // distinguish "no such post mapping" from a genuine database error. LinkComment
 // and ListComments don't surface it (LinkComment is insert-only, ListComments
 // returns an empty slice for a task with no comments).

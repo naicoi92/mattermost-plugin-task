@@ -27,8 +27,8 @@ type DueReminder struct {
 	ReminderID string `json:"reminder_id" db:"id"`
 	// TaskID is the task the reminder belongs to.
 	TaskID string `json:"task_id" db:"task_id"`
-	// DueMS is the task's due_at (ms UTC), joined from task_tasks.
-	DueMS int64 `json:"due_ms" db:"due_at"`
+	// DueAt is the task's due_at (ms UTC), joined from task_tasks.
+	DueAt int64 `json:"due_at" db:"due_at"`
 	// OffsetMS is how many ms before due the reminder fires.
 	OffsetMS int64 `json:"offset_ms" db:"offset_ms"`
 	// AssigneeID is the user to DM (joined from task_members role=assignee).

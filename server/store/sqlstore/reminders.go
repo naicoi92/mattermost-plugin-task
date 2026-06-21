@@ -20,7 +20,6 @@ const remindersTableShort = "reminders"
 // reminderColumns lists every column of task_reminders in scan order.
 var reminderColumns = []string{"id", "task_id", "offset_ms", "fired_at", "created_at"}
 
-// store.ErrReminderNotFound is returned by MarkReminderFired / ClearReminder when no
 // matching reminder row exists.
 
 // SetReminder sets the reminder for a task. The MVP enforces one reminder per
@@ -167,7 +166,7 @@ func (s *SQLStore) ListDueReminders(ctx context.Context, nowMs, graceMs int64) (
 	var due []model.DueReminder
 	for rows.Next() {
 		var d model.DueReminder
-		if err := rows.Scan(&d.ReminderID, &d.TaskID, &d.OffsetMS, &d.DueMS, &d.AssigneeID); err != nil {
+		if err := rows.Scan(&d.ReminderID, &d.TaskID, &d.OffsetMS, &d.DueAt, &d.AssigneeID); err != nil {
 			return nil, fmt.Errorf("list due reminders: %w", err)
 		}
 		due = append(due, d)

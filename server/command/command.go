@@ -486,7 +486,7 @@ func (c *Handler) handleList(args *model.CommandArgs, rest []string) (*model.Com
 		UserID:    args.UserId,
 		ChannelID: channelID,
 		Status:    status,
-		Due:       due,
+		DueAt:     due,
 		Limit:     listResultLimit,
 	})
 	if err != nil {
@@ -595,8 +595,8 @@ func formatTaskDetail(t *taskmodel.Task) string {
 	if t.AssigneeID != "" {
 		fmt.Fprintf(&b, " · Assignee: %s", t.AssigneeID)
 	}
-	if t.Due != nil {
-		fmt.Fprintf(&b, " · Due: %s", time.UnixMilli(*t.Due).Format("2006-01-02 15:04"))
+	if t.DueAt != nil {
+		fmt.Fprintf(&b, " · Due: %s", time.UnixMilli(*t.DueAt).Format("2006-01-02 15:04"))
 	}
 	return b.String()
 }
@@ -854,7 +854,7 @@ func (c *Handler) handleComment(args *model.CommandArgs, rest []string) (*model.
 	if c.commentNotifier != nil {
 		c.commentNotifier.NotifyCommented(
 			TaskRef{ID: t.ID, Summary: t.Summary},
-			ev.UserID, ev.CreatorID, ev.AssigneeID,
+			ev.AuthorID, ev.CreatorID, ev.AssigneeID,
 		)
 	}
 	return ephemeral(fmt.Sprintf("💬 Comment added to **%s**.", t.Summary)), nil
@@ -963,9 +963,9 @@ func parseEditFields(tokens []string) (task.PatchInput, string) {
 			}
 			in.UpdateFields = append(in.UpdateFields, "due")
 			if ms == 0 {
-				in.Due = nil // clear
+				in.DueAt = nil // clear
 			} else {
-				in.Due = &ms
+				in.DueAt = &ms
 			}
 		default:
 			return in, tok

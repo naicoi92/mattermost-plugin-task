@@ -27,7 +27,6 @@ var taskColumns = []string{
 	"cancelled_at", "created_at", "updated_at",
 }
 
-// store.ErrTaskNotFound is returned by GetTask/UpdateTask/DeleteTask/TouchTaskUpdatedAt
 // when no row matches the given id. Service-layer code checks errors.Is to
 // translate it into the appropriate not-found response.
 
@@ -45,7 +44,7 @@ func (s *SQLStore) CreateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		Values(
 			task.ID, task.Summary, task.Description, task.ChannelID,
 			nullableString(task.ParentTaskID), task.Status, task.OrderKey,
-			task.IsAllDay, task.Due, task.CompletedAt, task.CancelledAt,
+			task.IsAllDay, task.DueAt, task.CompletedAt, task.CancelledAt,
 			task.CreatedAt, task.UpdatedAt,
 		)
 	if _, err := qb.ExecContext(ctx); err != nil {
@@ -88,7 +87,7 @@ func (s *SQLStore) UpdateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		"status":         task.Status,
 		"order_key":      task.OrderKey,
 		"is_all_day":     task.IsAllDay,
-		"due_at":         task.Due,
+		"due_at":         task.DueAt,
 		"completed_at":   task.CompletedAt,
 		"cancelled_at":   task.CancelledAt,
 		"updated_at":     task.UpdatedAt,
@@ -530,7 +529,7 @@ func scanTaskRow(r scanner) (*model.TaskRow, error) {
 	var parentTaskID sql.NullString
 	if err := r.Scan(
 		&t.ID, &t.Summary, &t.Description, &t.ChannelID, &parentTaskID,
-		&t.Status, &t.OrderKey, &t.IsAllDay, &t.Due, &t.CompletedAt,
+		&t.Status, &t.OrderKey, &t.IsAllDay, &t.DueAt, &t.CompletedAt,
 		&t.CancelledAt, &t.CreatedAt, &t.UpdatedAt,
 	); err != nil {
 		return nil, err

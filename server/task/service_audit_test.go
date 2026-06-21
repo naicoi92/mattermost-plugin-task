@@ -124,7 +124,7 @@ func TestAudit_Patch_DueChangedRecordsDueEvent(t *testing.T) {
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
 	newDue := int64(5_000_000)
 
-	_, err := svc.Patch("u-actor", task.ID, PatchInput{UpdateFields: []string{"due"}, Due: &newDue})
+	_, err := svc.Patch("u-actor", task.ID, PatchInput{UpdateFields: []string{"due"}, DueAt: &newDue})
 	require.NoError(t, err)
 
 	events := auditEvents(t, s, task.ID, model.EventDueChanged)
@@ -151,7 +151,7 @@ func TestAudit_Delete_RecordsDeletedEventBeforeCascade(t *testing.T) {
 func TestAudit_SetReminder_RecordsReminderSet(t *testing.T) {
 	svc, s := newTestService(t)
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due})
 
 	_, err := svc.SetReminder("u-actor", task.ID, 30_000)
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestAudit_SetReminder_RecordsReminderSet(t *testing.T) {
 func TestAudit_ClearReminder_RecordsReminderCleared(t *testing.T) {
 	svc, s := newTestService(t)
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
 
 	_, err := svc.ClearReminder("u-actor", task.ID)
 	require.NoError(t, err)

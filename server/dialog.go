@@ -132,8 +132,8 @@ func buildTaskDetailDialog(t *taskmodel.Task, subtaskDone, subtaskTotal int, rec
 	}
 
 	dueDefault := ""
-	if t.Due != nil {
-		dueDefault = fmt.Sprintf("%d", *t.Due)
+	if t.DueAt != nil {
+		dueDefault = fmt.Sprintf("%d", *t.DueAt)
 	}
 
 	return model.Dialog{
@@ -233,18 +233,18 @@ func parseTaskDetailSubmission(sub map[string]any, current *taskmodel.Task) (tas
 	if raw, ok := sub[dialogFieldTaskDue].(string); ok {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
-			if current.Due != nil {
+			if current.DueAt != nil {
 				out.Patch.UpdateFields = append(out.Patch.UpdateFields, "due")
-				out.Patch.Due = nil
+				out.Patch.DueAt = nil
 			}
 		} else {
 			ms, err := strconv.ParseInt(raw, 10, 64)
 			if err != nil {
 				return out, fmt.Errorf("due must be a numeric millisecond timestamp")
 			}
-			if current.Due == nil || *current.Due != ms {
+			if current.DueAt == nil || *current.DueAt != ms {
 				out.Patch.UpdateFields = append(out.Patch.UpdateFields, "due")
-				out.Patch.Due = &ms
+				out.Patch.DueAt = &ms
 			}
 		}
 	}
@@ -288,7 +288,7 @@ func (p *Plugin) openQuickListDialogFor(triggerID, userID, scope, channelID, sta
 		UserID:    userID,
 		ChannelID: channelID,
 		Status:    status,
-		Due:       due,
+		DueAt:     due,
 		Limit:     topNTasksDefault,
 	})
 	if err != nil {
@@ -626,7 +626,7 @@ func (p *Plugin) submitNewTaskDialog(w http.ResponseWriter, r *http.Request) {
 				writeDialogResponse(w, "Due must be a numeric millisecond timestamp.")
 				return
 			}
-			in.Due = &ms
+			in.DueAt = &ms
 		}
 	}
 

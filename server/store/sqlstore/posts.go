@@ -19,7 +19,6 @@ const postsTableShort = "posts"
 // postColumns lists every column of task_posts in scan order.
 var postColumns = []string{"id", "task_id", "post_id", "kind", "created_at"}
 
-// store.ErrPostNotFound is returned by GetPostByKind / DeletePost when no matching
 // tracking row exists.
 
 // AddPost records that a post renders a task's card. kind must be one of the

@@ -152,7 +152,7 @@ func TestCreate_SeedsReminderWhenDueAndOffset(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	require.Len(t, reminders, 1)
@@ -215,10 +215,10 @@ func TestPatch_PartialUpdate(t *testing.T) {
 func TestPatch_ClearDue(t *testing.T) {
 	svc, _ := newTestService(t)
 	due := int64(5_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
-	patched, err := svc.Patch("u-actor", task.ID, PatchInput{UpdateFields: []string{"due"}, Due: nil})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due})
+	patched, err := svc.Patch("u-actor", task.ID, PatchInput{UpdateFields: []string{"due"}, DueAt: nil})
 	require.NoError(t, err)
-	assert.Nil(t, patched.Due)
+	assert.Nil(t, patched.DueAt)
 }
 
 func TestPatch_NotFound(t *testing.T) {
@@ -385,7 +385,7 @@ func TestSetStatus_TerminalClearsReminder(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	require.Len(t, reminders, 1)
@@ -434,7 +434,7 @@ func TestSetReminder_BuildsRow(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due})
 	_, err := svc.SetReminder("u-actor", task.ID, 30_000)
 	require.NoError(t, err)
 	reminders, err := s.ListReminders(ctx, task.ID)
@@ -453,7 +453,7 @@ func TestSetReminder_RequiresDue(t *testing.T) {
 func TestSetReminder_InvalidOffset(t *testing.T) {
 	svc, _ := newTestService(t)
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due})
 	_, err := svc.SetReminder("u-actor", task.ID, 0)
 	require.Error(t, err)
 }
@@ -462,7 +462,7 @@ func TestClearReminder_RemovesRow(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
 	_, err := svc.ClearReminder("u-actor", task.ID)
 	require.NoError(t, err)
 	reminders, err := s.ListReminders(ctx, task.ID)
@@ -474,7 +474,7 @@ func TestFireReadyReminders_WithinWindow(t *testing.T) {
 	svc, _ := newTestService(t)
 	now := nowFunc()
 	due := now + 60_000
-	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", Due: &due, ReminderOffset: ptrInt64(120_000)})
+	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", DueAt: &due, ReminderOffset: ptrInt64(120_000)})
 	due2, err := svc.FireReadyReminders(now, 5*time.Minute)
 	require.NoError(t, err)
 	assert.NotEmpty(t, due2)
@@ -484,7 +484,7 @@ func TestFireReadyReminders_NotYetDue(t *testing.T) {
 	svc, _ := newTestService(t)
 	now := nowFunc()
 	due := now + 10_000_000
-	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", Due: &due, ReminderOffset: ptrInt64(60_000)})
+	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
 	due2, err := svc.FireReadyReminders(now, 5*time.Minute)
 	require.NoError(t, err)
 	assert.Empty(t, due2)
@@ -499,7 +499,7 @@ func TestLinkComment_PersistsAndReturnsEvent(t *testing.T) {
 	c, ev, err := svc.LinkComment(task.ID, "post-1", "u-commenter")
 	require.NoError(t, err)
 	assert.Equal(t, "post-1", c.PostID)
-	assert.Equal(t, "u-commenter", ev.UserID)
+	assert.Equal(t, "u-commenter", ev.AuthorID)
 	assert.Equal(t, "u-creator", ev.CreatorID)
 	comments, err := s.ListComments(ctx, task.ID)
 	require.NoError(t, err)

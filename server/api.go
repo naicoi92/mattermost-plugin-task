@@ -157,7 +157,7 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		ChannelID:      req.ChannelID,
 		CreatorID:      currentUserID(r),
 		AssigneeID:     req.AssigneeID,
-		Due:            req.Due,
+		DueAt:          req.Due,
 		IsAllDay:       req.IsAllDay,
 		ParentTaskID:   req.ParentTaskID,
 		ReminderOffset: req.ReminderOffset,
@@ -228,7 +228,7 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 		UserID:        currentUserID(r),
 		ChannelID:     q.Get("channel_id"),
 		Status:        q.Get("status"),
-		Due:           q.Get("due"),
+		DueAt:         q.Get("due"),
 		AfterOrderKey: q.Get("after_order_key"),
 		Limit:         limit,
 	}
@@ -288,7 +288,7 @@ func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 		UpdateFields: req.UpdateFields,
 		Summary:      req.Summary,
 		Description:  req.Description,
-		Due:          req.Due,
+		DueAt:        req.Due,
 		IsAllDay:     req.IsAllDay,
 	})
 	if err != nil {
@@ -548,7 +548,7 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 		Summary:      strings.TrimSpace(req.Summary),
 		CreatorID:    actorID,
 		AssigneeID:   req.AssigneeID,
-		Due:          req.Due,
+		DueAt:        req.Due,
 		ParentTaskID: parentID,
 	})
 	if err != nil {
@@ -681,7 +681,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	// DM the task participants (creator + assignee), excluding the commenter.
 	if p.notifier != nil {
 		p.notifier.NotifyCommented(notification.TaskSummary{ID: t.ID, Summary: t.Summary},
-			ev.UserID, ev.CreatorID, ev.AssigneeID)
+			ev.AuthorID, ev.CreatorID, ev.AssigneeID)
 	}
 
 	// Refresh the card so a "comments" indicator stays current.

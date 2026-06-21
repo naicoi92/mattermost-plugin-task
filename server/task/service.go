@@ -147,7 +147,7 @@ type CreateInput struct {
 	ChannelID      string
 	CreatorID      string
 	AssigneeID     string
-	Due            *int64
+	DueAt          *int64
 	IsAllDay       bool
 	ParentTaskID   string
 	ReminderOffset *int64
@@ -216,7 +216,7 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		Status:       model.StatusTodo,
 		OrderKey:     orderKey,
 		IsAllDay:     in.IsAllDay,
-		Due:          in.Due,
+		DueAt:        in.DueAt,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -242,7 +242,7 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		}
 
 		// Seed the reminder when created with both a due and an offset.
-		if row.Due != nil && in.ReminderOffset != nil && *in.ReminderOffset > 0 {
+		if row.DueAt != nil && in.ReminderOffset != nil && *in.ReminderOffset > 0 {
 			if _, err := tx.SetReminder(txCtx, taskutil.GenerateULID(), row.ID, *in.ReminderOffset); err != nil {
 				return err
 			}
@@ -319,7 +319,7 @@ func (s *Service) ListTaskEvents(taskID string, limit int) ([]model.TaskEvent, e
 type CommentEvent struct {
 	TaskID     string
 	CommentID  string
-	UserID     string // the commenter
+	AuthorID   string // the comment author
 	CreatorID  string
 	AssigneeID string
 }
@@ -368,7 +368,7 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 	return c, CommentEvent{
 		TaskID:     taskID,
 		CommentID:  commentID,
-		UserID:     userID,
+		AuthorID:   userID,
 		CreatorID:  creatorID,
 		AssigneeID: assigneeID,
 	}, nil
@@ -410,7 +410,7 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 		Summary:      summary,
 		CreatorID:    creatorID,
 		AssigneeID:   assigneeID,
-		Due:          due,
+		DueAt:        due,
 		ParentTaskID: parentID,
 	})
 	if err != nil {
@@ -541,7 +541,7 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 			if rErr != nil {
 				return rErr
 			}
-			if len(reminders) > 0 && row.Due != nil {
+			if len(reminders) > 0 && row.DueAt != nil {
 				if _, err := tx.SetReminder(txCtx, reminders[0].ID, id, reminders[0].OffsetMS); err != nil {
 					return err
 				}
@@ -691,7 +691,7 @@ func (s *Service) SetReminder(actorID, id string, offsetMS int64) (*model.Task, 
 	if err != nil {
 		return nil, err
 	}
-	if row.Due == nil {
+	if row.DueAt == nil {
 		return nil, ErrReminderNeedsDue
 	}
 
@@ -779,7 +779,7 @@ func (s *Service) MarkReminderFired(reminderID, taskID string) error {
 			ID:        taskutil.GenerateULID(),
 			TaskID:    taskID,
 			ActorID:   "system", // reminder job has no human actor
-			EventType: model.EventReminderSet,
+			EventType: model.EventReminderFired,
 			CreatedAt: now,
 		})
 	})
@@ -792,7 +792,7 @@ type PatchInput struct {
 	UpdateFields []string
 	Summary      *string
 	Description  *string
-	Due          *int64 // nil clears due when "due" is in UpdateFields
+	DueAt        *int64 // nil clears due when "due" is in UpdateFields
 	IsAllDay     *bool
 }
 
@@ -829,9 +829,9 @@ func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) 
 			row.Description = derefStr(in.Description)
 			changes = append(changes, fieldChange{model.EventDescriptionChanged, old, row.Description})
 		case "due":
-			oldDue := ptrStringOrEmpty(row.Due)
-			row.Due = in.Due
-			newDue := ptrStringOrEmpty(row.Due)
+			oldDue := ptrStringOrEmpty(row.DueAt)
+			row.DueAt = in.DueAt
+			newDue := ptrStringOrEmpty(row.DueAt)
 			dueChanged = true
 			changes = append(changes, fieldChange{model.EventDueChanged, oldDue, newDue})
 		case "is_all_day":
@@ -861,7 +861,7 @@ func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) 
 			if rErr != nil {
 				return rErr
 			}
-			if row.Due != nil && len(reminders) > 0 {
+			if row.DueAt != nil && len(reminders) > 0 {
 				if _, err := tx.SetReminder(txCtx, reminders[0].ID, id, reminders[0].OffsetMS); err != nil {
 					return err
 				}
@@ -942,7 +942,7 @@ type AssignEvent struct {
 }
 
 // Assign sets the task's single assignee to newAssigneeID. Because the assignee
-// is a task_members row (not a column), SwapAssignee replaces the KV store's
+// is a task_members row (not a column), SetAssignee replaces the KV store's
 // DeleteIndex+SaveIndex pair in one atomic statement; the reminder row no
 // longer needs resync because ListDueReminders JOINs the assignee at fire
 // time. An "assigned"/"unassigned" audit event is appended in the same tx.
@@ -995,7 +995,7 @@ func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, Assign
 				ToValue:   &to,
 			})
 		}
-		if err := tx.SwapAssignee(txCtx, id, oldAssigneeID, newAssigneeID); err != nil {
+		if err := tx.SetAssignee(txCtx, id, newAssigneeID); err != nil {
 			return err
 		}
 		if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
@@ -1102,7 +1102,7 @@ type ListQuery struct {
 	UserID        string // required for ScopeMine
 	ChannelID     string // required for ScopeChannel
 	Status        string // optional: "", todo, in_progress, done, cancelled
-	Due           string // optional: "", overdue, today, week
+	DueAt         string // optional: "", overdue, today, week
 	AfterOrderKey string // cursor: only tasks with OrderKey > this are returned
 	Limit         int    // page size; <=0 defaults to DefaultLimit
 }
@@ -1126,7 +1126,7 @@ func (s *Service) List(q ListQuery) ([]*model.Task, error) {
 		UserID:        q.UserID,
 		ChannelID:     q.ChannelID,
 		Status:        q.Status,
-		Due:           mapDueFilter(q.Due),
+		Due:           mapDueFilter(q.DueAt),
 		DueAsOf:       nowFunc(),
 		AfterOrderKey: q.AfterOrderKey,
 		Limit:         q.Limit,

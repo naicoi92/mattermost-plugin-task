@@ -390,7 +390,7 @@ func TestPatchTaskStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
 func TestSetReminder_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	due := int64(100_000)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", Due: &due})
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", DueAt: &due})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder", `{"offset_ms":60000}`, "u1"))
@@ -414,7 +414,7 @@ func TestSetReminder_NeedsDue(t *testing.T) {
 func TestSetReminder_InvalidOffset(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	due := int64(100_000)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", Due: &due})
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", DueAt: &due})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder", `{"offset_ms":0}`, "u1"))
@@ -431,7 +431,7 @@ func TestDeleteReminder_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	due := int64(100_000)
 	offset := int64(60_000)
-	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1", Due: &due, ReminderOffset: &offset})
+	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1", DueAt: &due, ReminderOffset: &offset})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
