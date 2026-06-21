@@ -176,6 +176,16 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// Post the interactive task card: in the originating channel (if any) and
 	// as a DM to the assignee (if any, and not the creator). Record the post
 	// ids so the card can be updated on later status changes (issue #15).
+	//
+	// Atomicity strategy (M4-2): the task is committed FIRST (service.Create
+	// is itself atomic — task + members + reminder + event in one tx). Card
+	// posts and their task_posts linkage happen AFTER. A crash between Create
+	// and the card posts leaves the task intact with no card (acceptable — the
+	// task is the source of truth; cards are rebuildable). A crash after a
+	// post but before AddPost leaves an orphan card pointing nowhere (also
+	// acceptable — it can't @mention or act). This is preferred over wrapping
+	// Create in an outer tx because CreatePost is a server RPC that can't
+	// participate in a DB transaction.
 	var channelPostID, dmPostID string
 	if created.ChannelID != "" {
 		channelPostID = p.postCard(created.ChannelID, created)
@@ -355,8 +365,7 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 	p.notifyTerminalStatus(updated, req.Status, currentUserID(r))
 
 	// Refresh the interactive card (channel + DM) to reflect the new status.
-	p.updateCard(updated.ChannelPostID, updated)
-	p.updateCard(updated.DMPostID, updated)
+	p.updateTaskCards(updated)
 
 	p.writeJSON(w, updated)
 
@@ -572,8 +581,7 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Refresh the parent's card so its subtask progress reflects the new child.
-	p.updateCard(parent.ChannelPostID, parent)
-	p.updateCard(parent.DMPostID, parent)
+	p.updateTaskCards(parent)
 
 	w.WriteHeader(http.StatusCreated)
 	p.writeJSON(w, created)
@@ -674,8 +682,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Refresh the card so a "comments" indicator stays current.
-	p.updateCard(t.ChannelPostID, t)
-	p.updateCard(t.DMPostID, t)
+	p.updateTaskCards(t)
 
 	w.WriteHeader(http.StatusCreated)
 	p.writeJSON(w, comment)
@@ -775,10 +782,10 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 			writeCardResponse(w, fmt.Sprintf("⚠️ Could not update task: %s", err.Error()))
 			return
 		}
-		// Update the source post's card in place.
+		// Update the source post's card in place, then refresh all tracked
+		// cards (channel/DM/any future location) so every copy stays current.
 		p.updateCard(req.PostId, updated)
-		p.updateCard(updated.ChannelPostID, updated)
-		p.updateCard(updated.DMPostID, updated)
+		p.updateTaskCards(updated)
 		p.notifyTerminalStatus(updated, status, req.UserId)
 		// Real-time: status changed via the interactive card (#32).
 		p.broadcastTaskUpdated(updated, []string{"status"})
