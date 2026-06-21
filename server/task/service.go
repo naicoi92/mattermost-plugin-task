@@ -304,6 +304,15 @@ func (s *Service) ListComments(taskID string) ([]model.TaskComment, error) {
 	return s.store.ListComments(ctx, taskID)
 }
 
+// ListTaskEvents returns the audit trail for a task, newest-first, capped at
+// limit (<=0 defaults to 50). Powers the GET /tasks/:id/events timeline
+// endpoint (M4-4).
+func (s *Service) ListTaskEvents(taskID string, limit int) ([]model.TaskEvent, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.ListTaskEvents(ctx, taskID, limit)
+}
+
 // CommentEvent describes the result of linking a comment so callers (REST/
 // command handlers) can fire the participant notification without re-reading
 // the task.

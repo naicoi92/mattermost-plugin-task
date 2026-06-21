@@ -75,6 +75,9 @@ func (p *Plugin) initRouter() *mux.Router {
 	tasks.HandleFunc("/{id:[^/]+}/comments", p.createComment).Methods(http.MethodPost)
 	tasks.HandleFunc("/{id:[^/]+}/comments", p.listComments).Methods(http.MethodGet)
 
+	// Audit trail / activity timeline (M4-4).
+	tasks.HandleFunc("/{id:[^/]+}/events", p.listTaskEvents).Methods(http.MethodGet)
+
 	return router
 }
 
@@ -734,6 +737,46 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 		return comments[i].ID < comments[j].ID
 	})
 	p.writeJSON(w, comments)
+}
+
+// listTaskEvents handles GET /tasks/:id/events, returning the task's audit
+// trail (activity timeline) newest-first. Permission-gated by the view rule
+// (same as comments): only a user who may view the task may read its history.
+// The ?limit query caps the page (default 50).
+func (p *Plugin) listTaskEvents(w http.ResponseWriter, r *http.Request) {
+	taskID := mux.Vars(r)["id"]
+	actorID := currentUserID(r)
+
+	t, err := p.taskService.Get(taskID)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task's events")
+		return
+	}
+
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, parseErr := strconv.Atoi(q); parseErr == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	events, err := p.taskService.ListTaskEvents(taskID, limit)
+	if err != nil {
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if events == nil {
+		events = []taskmodel.TaskEvent{}
+	}
+	p.writeJSON(w, events)
 }
 
 // channelMembership returns a permission.ChannelMembershipChecker backed by the

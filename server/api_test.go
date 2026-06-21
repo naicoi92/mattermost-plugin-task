@@ -485,6 +485,49 @@ func TestDeleteAssignee_Endpoint(t *testing.T) {
 	assert.Empty(t, got.AssigneeID)
 }
 
+func TestListTaskEvents_ReturnsAuditTrail(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// Create + status change + assign → 3+ events.
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1", AssigneeID: "u-old"})
+	_, _ = p.taskService.SetStatus("u1", created.ID, model.StatusDone)
+	_, _, _ = p.taskService.Assign("u1", created.ID, "u-new")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/events?limit=10", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var events []model.TaskEvent
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &events))
+	// created + status_changed + assigned (at minimum).
+	assert.GreaterOrEqual(t, len(events), 3, "expected created + status_changed + assigned events")
+	// Newest-first ordering across the entire slice (pairwise, ID tie-break).
+	for i := 1; i < len(events); i++ {
+		prev, cur := events[i-1], events[i]
+		assert.True(
+			t,
+			prev.CreatedAt > cur.CreatedAt ||
+				(prev.CreatedAt == cur.CreatedAt && prev.ID >= cur.ID),
+			"events not newest-first at index %d", i,
+		)
+	}
+}
+
+func TestListTaskEvents_ForbiddenForNonParticipant(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u-owner"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/events", "", "u-stranger"))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestListTaskEvents_NotFound(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/ghost/events", "", "u1"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 // TestAuthenticatedRoutes_StillRequireHeader pins the security boundary after
 // #109: endpoints reached from the browser session must keep rejecting requests
 // that lack the Mattermost-User-ID header.
