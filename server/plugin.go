@@ -49,8 +49,6 @@ type Plugin struct {
 	// router is the HTTP router for handling API requests.
 	router *mux.Router
 
-	backgroundJob *cluster.Job
-
 	// reminderJob is the cluster-scheduled job that fires due task reminders
 	// once per minute on a single node.
 	reminderJob *cluster.Job
@@ -107,17 +105,6 @@ func (p *Plugin) OnActivate() error {
 
 	p.router = p.initRouter()
 
-	job, err := cluster.Schedule(
-		p.API,
-		"BackgroundJob",
-		cluster.MakeWaitForRoundedInterval(1*time.Hour),
-		p.runJob,
-	)
-	if err != nil {
-		return errors.Wrap(err, "failed to schedule background job")
-	}
-	p.backgroundJob = job
-
 	reminderJob, err := cluster.Schedule(
 		p.API,
 		"TaskReminderJob",
@@ -125,11 +112,6 @@ func (p *Plugin) OnActivate() error {
 		p.runReminderJob,
 	)
 	if err != nil {
-		// OnActivate failed: OnDeactivate won't run, so clean up the already-
-		// scheduled backgroundJob to avoid an orphaned job.
-		if closeErr := p.backgroundJob.Close(); closeErr != nil {
-			p.API.LogError("Failed to close background job during cleanup", "err", closeErr)
-		}
 		return errors.Wrap(err, "failed to schedule reminder job")
 	}
 	p.reminderJob = reminderJob
@@ -156,7 +138,7 @@ func (p *Plugin) ensureBot() (string, error) {
 
 // OnDeactivate is invoked when the plugin is deactivated.
 func (p *Plugin) OnDeactivate() error {
-	for _, job := range []*cluster.Job{p.backgroundJob, p.reminderJob} {
+	for _, job := range []*cluster.Job{p.reminderJob} {
 		if job != nil {
 			if err := job.Close(); err != nil {
 				p.API.LogError("Failed to close job", "err", err)
