@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -223,6 +224,42 @@ func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 	if _, err := p.API.UpdatePost(post); err != nil {
 		p.API.LogError("Failed to update task card", "post_id", postID, "error", err)
 	}
+}
+
+// updateTaskCards refreshes EVERY tracked card for the task (channel, DM, and
+// any future locations) by listing task_posts rather than hard-coding two
+// columns. This is the post-migration card-refresh path: a task may be posted
+// in several places, and a status/assignee change must update them all. A
+// deleted post is skipped (defensive self-heal) so one stale card can't block
+// the rest.
+func (p *Plugin) updateTaskCards(t *taskmodel.Task) {
+	if t == nil {
+		return
+	}
+	posts := p.taskPosts(t.ID)
+	for _, tp := range posts {
+		p.updateCard(tp.PostID, t)
+	}
+}
+
+// taskPosts returns the tracked card posts for taskID, or nil on error
+// (best-effort — refreshing fewer cards beats failing the whole transition).
+//
+// p.taskStore is always set after OnActivate (the SQL store is wired before
+// the router serves), so a nil store only occurs in degenerate test setups
+// where card refresh isn't exercised. There is no fallback to the assembled
+// Task's ChannelPostID/DMPostID: the normalized task_posts table is the single
+// source of truth for card locations post-migration.
+func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
+	if p.taskStore == nil {
+		return nil
+	}
+	posts, err := p.taskStore.ListPosts(context.Background(), taskID)
+	if err != nil {
+		p.API.LogDebug("Failed to list task posts for card refresh", "task_id", taskID, "error", err)
+		return nil
+	}
+	return posts
 }
 
 // commentCount returns the number of comments on taskID, or 0 on error
