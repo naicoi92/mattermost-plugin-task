@@ -525,17 +525,6 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 	}
 	oldStatus := row.Status
 
-	// Parent-done guard: a parent can only reach done once all direct subtasks
-	// are terminal. Checked before the transition so the task isn't left
-	// half-updated.
-	if newStatus == model.StatusDone {
-		if open, err := s.openSubtasks(ctx, id); err != nil {
-			return nil, err
-		} else if len(open) > 0 {
-			return nil, ErrOpenSubtasks{Open: open}
-		}
-	}
-
 	now := nowFunc()
 	taskutil.ApplyStatus(row, newStatus, now)
 	row.Priority = ensurePriority(row.Priority)
@@ -549,8 +538,15 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 		}
 		row = &updated
 
-		// Cascade-cancel open subtasks when the parent is cancelled.
-		if newStatus == model.StatusCancelled {
+		// Cascade-cancel open subtasks when the parent reaches a terminal
+		// status (done or cancelled). Open subtasks are forced to cancelled
+		// so a parent can be completed without manually closing every child.
+		// The cascade is recursive: a cancelled subtask with its own open
+		// subtasks cascades again (cascadeCancelSubtasks calls UpdateTask on
+		// each child, which is itself a terminal transition — but it writes
+		// directly rather than going through SetStatus, so the recursion is
+		// handled by the explicit loop below).
+		if newStatus == model.StatusDone || newStatus == model.StatusCancelled {
 			if err := s.cascadeCancelSubtasks(txCtx, tx, id, actorID, now); err != nil {
 				return err
 			}
@@ -672,7 +668,9 @@ var ErrSubtaskCycle = errors.New("subtask would form a cycle or exceed the nesti
 
 // cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
 // cancelled, issuing UpdateTask per subtask inside the already-open tx. Already
-// terminal subtasks are left untouched.
+// terminal subtasks are left untouched. The cascade is recursive: each
+// cancelled subtask's own open subtasks are cancelled too, depth-first, so a
+// deep hierarchy collapses in one transition.
 func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID, actorID string, now int64) error {
 	subs, err := tx.ListSubtasks(ctx, parentID)
 	if err != nil {
@@ -701,6 +699,10 @@ func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, par
 			FromValue: &from,
 			ToValue:   &to,
 		}); err != nil {
+			return err
+		}
+		// Recurse: cancel this subtask's own open subtasks too.
+		if err := s.cascadeCancelSubtasks(ctx, tx, sub.ID, actorID, now); err != nil {
 			return err
 		}
 	}

@@ -486,15 +486,18 @@ func TestPatchTaskStatus_BadJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestPatchTaskStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
+// TestPatchTaskStatus_ParentDoneCascadesOpenSubtasks verifies that marking a
+// parent Done via the API succeeds (cascade-cancels open subtasks) rather
+// than returning 409.
+func TestPatchTaskStatus_ParentDoneCascadesOpenSubtasks(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
 	createTaskViaService(t, p, task.CreateInput{Summary: "open", CreatorID: "u1", ParentTaskID: parent.ID})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"done"}`, "u1"))
-	// Parent-done guard surfaces as 409 Conflict with the open-subtask summary.
-	assert.Equal(t, http.StatusConflict, w.Code)
+	// Done now cascades — no 409.
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestSetReminder_Endpoint(t *testing.T) {

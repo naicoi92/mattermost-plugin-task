@@ -205,27 +205,29 @@ func TestAudit_CreateSubtask_RecordsSubtaskAddedOnParent(t *testing.T) {
 // TestAudit_Rollback_EventAndChangeRollBackTogether verifies atomicity: if
 // any step inside a transition's WithTx fails, NEITHER the change NOR the
 // event persists. We trigger a failure by making the task's status invalid
-// mid-SetStatus (which fails AppendTaskEvent via an invalid event type path —
-// here we use the parent-done guard to force a rollback after the event row
-// would have been written, proving the event doesn't persist).
+// mid-transaction (here we use an invalid priority on Patch — the service
+// rejects it before the tx commits, so no audit event should persist).
 func TestAudit_Rollback_EventDoesNotPersistOnFailure(t *testing.T) {
 	svc, s := newTestService(t)
-	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
-	mustCreateTask(t, svc, CreateInput{Summary: "open sub", CreatorID: "u-c", ParentTaskID: parent.ID})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
+	ctx := context.Background()
 
-	// SetStatus(done) fails (open subtask guard). The status_changed event
-	// must NOT persist.
-	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusDone)
+	// Patch with an invalid priority — the service rejects it before the tx.
+	badPriority := "blocker"
+	_, err := svc.Patch("u-actor", task.ID, PatchInput{
+		UpdateFields: []string{"priority"},
+		Priority:     &badPriority,
+	})
 	require.Error(t, err)
 
-	events := auditEvents(t, s, parent.ID, model.EventStatusChanged)
-	assert.Empty(t, events, "rolled-back transition must leave no audit event")
+	// No priority_changed event should have persisted.
+	events := auditEvents(t, s, task.ID, model.EventPriorityChanged)
+	assert.Empty(t, events, "rejected patch must leave no audit event")
 
-	// The parent's status is unchanged.
-	ctx := context.Background()
-	row, gErr := s.GetTask(ctx, parent.ID)
+	// The task's priority is unchanged (still the default standard).
+	row, gErr := s.GetTask(ctx, task.ID)
 	require.NoError(t, gErr)
-	assert.Equal(t, model.StatusTodo, row.Status, "rolled-back status unchanged")
+	assert.Equal(t, model.PriorityStandard, row.Priority, "rejected patch leaves priority unchanged")
 }
 
 func TestAudit_ActorIDThreaded_NotSystemPlaceholder(t *testing.T) {

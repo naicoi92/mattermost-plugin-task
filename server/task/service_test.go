@@ -347,15 +347,44 @@ func TestSetStatus_TodoClearsTimestamps(t *testing.T) {
 	assert.Nil(t, got.CancelledAt)
 }
 
-func TestSetStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
-	svc, _ := newTestService(t)
+// TestSetStatus_ParentDoneCascadesOpenSubtasks verifies that marking a parent
+// Done cancels every open subtask (recursive), rather than blocking with
+// ErrOpenSubtasks.
+func TestSetStatus_ParentDoneCascadesOpenSubtasks(t *testing.T) {
+	svc, s := newTestService(t)
+	ctx := context.Background()
 	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
-	mustCreateTask(t, svc, CreateInput{Summary: "open sub", CreatorID: "u-c", ParentTaskID: parent.ID})
+	sub := mustCreateTask(t, svc, CreateInput{Summary: "open sub", CreatorID: "u-c", ParentTaskID: parent.ID})
+
+	got, err := svc.SetStatus("u-actor", parent.ID, model.StatusDone)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusDone, got.Status)
+
+	// The open subtask must be cascade-cancelled.
+	subRow, err := s.GetTask(ctx, sub.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusCancelled, subRow.Status, "open subtask should be cascade-cancelled when parent is done")
+}
+
+// TestSetStatus_ParentDoneCascadeRecursive verifies the cascade is recursive:
+// a grandchild subtask is also cancelled when the grandparent is done.
+func TestSetStatus_ParentDoneCascadeRecursive(t *testing.T) {
+	svc, s := newTestService(t)
+	ctx := context.Background()
+	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
+	child := mustCreateTask(t, svc, CreateInput{Summary: "c", CreatorID: "u-c", ParentTaskID: parent.ID})
+	grandchild := mustCreateTask(t, svc, CreateInput{Summary: "gc", CreatorID: "u-c", ParentTaskID: child.ID})
+
 	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusDone)
-	require.Error(t, err)
-	var blocked ErrOpenSubtasks
-	require.ErrorAs(t, err, &blocked)
-	assert.NotEmpty(t, blocked.Open)
+	require.NoError(t, err)
+
+	childRow, err := s.GetTask(ctx, child.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusCancelled, childRow.Status)
+
+	gcRow, err := s.GetTask(ctx, grandchild.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusCancelled, gcRow.Status, "grandchild should also be cascade-cancelled")
 }
 
 func TestSetStatus_ParentDoneAllowedWhenSubtasksTerminal(t *testing.T) {
