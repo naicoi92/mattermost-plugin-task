@@ -15,6 +15,8 @@ import React, {useCallback, useEffect, useState} from 'react';
 import {useDispatch} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import {useResolvedUsers} from 'components/user_picker/use_resolved_user';
+
 import type {ListScope, ListTasksParams, Task} from 'types/tasks';
 
 // QuickListTab enumerates the two scopes the user can switch between.
@@ -153,6 +155,10 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
     const term = search.trim().toLowerCase();
     const visible = term ? tasks.filter((x) => x.summary.toLowerCase().includes(term)) : tasks;
 
+    // Resolve assignee ids → "@username" labels for the avatars. Store-first,
+    // fetch fallback (see useResolvedUsers).
+    const assigneeLabels = useResolvedUsers(visible.map((t) => t.assignee_id).filter(Boolean));
+
     return (
         <div className='quick-list'>
             <div className='quick-list__toolbar'>
@@ -270,9 +276,9 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                                         {task.assignee_id && (
                                             <span
                                                 className='quick-list__avatar'
-                                                title={task.assignee_id}
+                                                title={assigneeLabels[task.assignee_id] || task.assignee_id}
                                             >
-                                                {initialsFromID(task.assignee_id)}
+                                                {initialsFromLabel(assigneeLabels[task.assignee_id] || task.assignee_id)}
                                             </span>
                                         )}
                                     </span>
@@ -322,10 +328,12 @@ function chipLabel(chip: ChipFilter, t: (id: string) => string): string {
     }
 }
 
-// initialsFromID derives a placeholder initial from an id when no real display
-// name is available. Mattermost user ids are opaque, so we show the first char.
-function initialsFromID(id: string): string {
-    return (id[0] || '?').toUpperCase();
+// initialsFromLabel derives an avatar initial from a resolved assignee label
+// (e.g. "@minhanh" -> "M"). Falls back to the first char of whatever label is
+// passed (raw id as a last resort).
+function initialsFromLabel(label: string): string {
+    const cleaned = label.replace(/^@/, '').trim();
+    return (cleaned[0] || '?').toUpperCase();
 }
 
 // statusLabel maps a status to its localized label.

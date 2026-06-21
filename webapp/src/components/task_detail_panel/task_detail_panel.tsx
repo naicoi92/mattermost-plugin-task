@@ -15,6 +15,7 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import {useResolvedUser, useResolvedUsers} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
 import type {Task, Comment} from 'types/tasks';
@@ -107,6 +108,13 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
             cancelled = true;
         };
     }, [taskID, dispatch]);
+
+    // Resolve the assignee id → "@username" for display, and comment author
+    // ids → labels, before the early returns below so the hooks run in a stable
+    // order every render. Empty ids yield '' (see useResolvedUser). The store
+    // is read first; a fetch fills in users the host hasn't cached.
+    const assigneeLabel = useResolvedUser(full?.assignee_id ?? '').label;
+    const commentAuthorLabels = useResolvedUsers(comments.map((c) => c.user_id).filter(Boolean));
 
     if (!taskID) {
         return null;
@@ -254,7 +262,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     {editAssignee ? (
                         <UserPicker
                             value={full.assignee_id}
-                            valueLabel={full.assignee_id || ''}
+                            valueLabel={assigneeLabel}
                             channelID={full.channel_id || channelID}
                             onSelect={(u) => setAssignee(u ? u.id : '')}
                         />
@@ -265,7 +273,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                             onClick={() => setEditAssignee(true)}
                             style={{cursor: 'pointer', textAlign: 'left'}}
                         >
-                            {full.assignee_id || t('webapp.task.assignee.placeholder')}
+                            {full.assignee_id ? assigneeLabel : t('webapp.task.assignee.placeholder')}
                         </button>
                     )}
                 </div>
@@ -361,8 +369,12 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                             key={c.id}
                             className='task-detail__comment'
                         >
-                            <span className='quick-list__avatar'>
-                                {(c.user_id[0] || '?').toUpperCase()}
+                            <span
+                                className='quick-list__avatar'
+                                title={commentAuthorLabels[c.user_id] || c.user_id}
+                            >
+                                {(commentAuthorLabels[c.user_id] || c.user_id || '?').
+                                    replace(/^@/, '').trim()[0]?.toUpperCase() || '?'}
                             </span>
                             <div className='task-detail__comment-body'>
                                 <div className='task-detail__comment-meta'>

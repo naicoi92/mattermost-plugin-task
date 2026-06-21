@@ -274,6 +274,28 @@ export async function getUserByUsername(username: string): Promise<User> {
     return JSON.parse(await res.text()) as User;
 }
 
+// getUser resolves a user id to a user via the host REST API
+// (GET /api/v4/users/<id>). Throws ClientError (404) when the id is unknown.
+// Like getUserByUsername it hits the host /api/v4 path directly and delegates
+// request options to Client4.getOptions({}) so auth/credentials/CSRF handling
+// matches the rest of the client. Prefer the host Redux store (getUser
+// selector) for already-loaded profiles; this is the fallback when the user
+// isn't cached.
+export async function getUser(userID: string): Promise<User> {
+    const url = `/api/v4/users/${encodeURIComponent(userID)}`;
+    const res = await fetch(url, Client4.getOptions({}));
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(res.status, message || res.statusText || 'request failed');
+    }
+    return JSON.parse(await res.text()) as User;
+}
+
 // UserSearchResult is the minimal slice of model.User the listing endpoints
 // return. Kept compatible with getUserByUsername's User (id + username) but
 // also carries the display name for richer picker rows.
@@ -340,5 +362,6 @@ export default {
     listComments,
     setTaskOrder,
     getUserByUsername,
+    getUser,
     searchUsers,
 };

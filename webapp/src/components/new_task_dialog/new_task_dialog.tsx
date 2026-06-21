@@ -21,6 +21,7 @@ import {ACTION_TYPES} from 'reducer';
 
 import type {Channel} from '@mattermost/types/channels';
 
+import {useResolvedUser} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
 import type {CreateTaskInput, Task} from 'types/tasks';
@@ -140,9 +141,13 @@ export default function NewTaskDialog({
     const t = useFormatMessage();
 
     const [form, setForm] = useState(emptyForm);
-    const [assigneeLabel, setAssigneeLabel] = useState('');
     const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
+
+    // Resolve the currently-selected assignee id → "@username" for the picker
+    // chip. Store-first, fetch fallback. Recomputed whenever the selection
+    // changes (open dialog, user picks from the picker, DM suggest).
+    const resolvedAssigneeLabel = useResolvedUser(form.assigneeID).label;
 
     // Reset the form whenever the dialog is opened. Derive the task scope from
     // the channel context and pre-select the suggested assignee (DM partner or
@@ -159,7 +164,6 @@ export default function NewTaskDialog({
             description: initialDescription ?? '',
             assigneeID: ctx.suggestedAssigneeID,
         });
-        setAssigneeLabel(ctx.suggestedAssigneeID ? ctx.suggestedAssigneeID : '');
         setError('');
     }, [visible, channel, channelID, currentUserID, initialSummary, initialDescription]);
 
@@ -259,12 +263,9 @@ export default function NewTaskDialog({
                     <span className='task-field__label'>{t('webapp.task.assignee')}</span>
                     <UserPicker
                         value={form.assigneeID}
-                        valueLabel={assigneeLabel}
+                        valueLabel={resolvedAssigneeLabel}
                         channelID={ctx.channelId || channelID}
-                        onSelect={(u) => {
-                            update({assigneeID: u ? u.id : ''});
-                            setAssigneeLabel(u ? u.label : '');
-                        }}
+                        onSelect={(u) => update({assigneeID: u ? u.id : ''})}
                     />
                 </label>
                 <label className='task-field'>
