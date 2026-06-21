@@ -21,8 +21,9 @@ import type {GlobalState} from '@mattermost/types/store';
 import {getChannel} from 'mattermost-redux/selectors/entities/channels';
 
 import formatDueRelative from 'components/shared/format_due_relative';
-import PriorityPill, {priorityLabel} from 'components/shared/priority_pill';
+import {PriorityDot, priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
+import {isDueSoon} from 'components/task_sidebar/quick_list';
 import {useResolvedUser, useResolvedUsers} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
@@ -433,18 +434,38 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     </div>
 
                     <div className='task-detail__meta-label'>{t('webapp.task.priority')}</div>
-                    <div className='task-detail__meta-value'>
-                        <PriorityPill
-                            priority={full.priority || 'standard'}
-                            onClick={cyclePriority}
-                        />
+                    <div
+                        className={`task-detail__meta-value task-detail__meta-value--priority-${full.priority || 'standard'}`}
+                        onClick={cyclePriority}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                cyclePriority();
+                            }
+                        }}
+                        role='button'
+                        tabIndex={0}
+                    >
+                        <PriorityDot priority={full.priority || 'standard'}/>
+                        {priorityLabel(full.priority || 'standard', t)}
                     </div>
 
                     <div className='task-detail__meta-label'>{t('webapp.task.due')}</div>
-                    <div className={`task-detail__meta-value ${isOverdue(full) ? 'task-detail__meta-value--overdue' : ''}`}>
+                    <div
+                        className={`task-detail__meta-value ${isOverdue(full) ? 'task-detail__meta-value--overdue' : ''} ${full.due && isDueSoon(full) ? 'task-detail__meta-value--soon' : ''}`}
+                        onClick={() => !editingDue && setEditingDue(true)}
+                        onKeyDown={(e) => {
+                            if (!editingDue && (e.key === 'Enter' || e.key === ' ')) {
+                                e.preventDefault();
+                                setEditingDue(true);
+                            }
+                        }}
+                        role='button'
+                        tabIndex={editingDue ? -1 : 0}
+                    >
                         {editingDue ? (
                             <input
-                                className='task-input task-input--inline'
+                                className='task-input task-input--inline task-input--meta'
                                 type='datetime-local'
                                 value={editDueLocal}
                                 onChange={(e) => setEditDueLocal(e.target.value)}
@@ -467,26 +488,15 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                                 aria-label={t('webapp.task.due')}
                             />
                         ) : (
-                            <span
-                                onClick={() => setEditingDue(true)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault();
-                                        setEditingDue(true);
-                                    }
-                                }}
-                                role='button'
-                                tabIndex={0}
-                                style={{display: 'inline-flex', alignItems: 'center', gap: 4}}
-                            >
+                            <>
                                 <CalendarIcon/>
                                 {full.due ? formatDueRelative({dueMs: full.due, locale, isOverdue: isOverdue(full)}) : t('webapp.task.due.pick')}
-                            </span>
+                            </>
                         )}
                     </div>
 
                     <div className='task-detail__meta-label'>{t('webapp.task.assignee')}</div>
-                    <div className='task-detail__meta-value'>
+                    <div className='task-detail__meta-value task-detail__meta-value--picker'>
                         <UserPicker
                             value={full.assignee_id}
                             valueLabel={assigneeLabel}

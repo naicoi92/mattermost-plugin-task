@@ -766,7 +766,7 @@
         color: var(--task-fg);
         padding: 6px 8px;
         margin: -6px -8px;
-        border-radius: var(--task-radius);
+        border-radius: var(--task-radius-sm);
         display: flex;
         align-items: center;
         gap: 6px;
@@ -781,6 +781,43 @@
             color: var(--task-danger);
             font-weight: 600;
         }
+
+        &--soon {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        // Priority value cells: the dot + label inherit the priority color so
+        // the whole cell reads as a unit (matching the design's inline dot +
+        // label rather than a bordered pill).
+        &--priority-important {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        &--priority-urgent {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
+        &--priority-standard {
+            color: var(--task-muted);
+        }
+
+        // Assignee cell wraps the UserPicker; neutralize its own background so
+        // the meta-value hover tint is the only fill.
+        &--picker {
+            &:hover {
+                background: var(--task-surface);
+            }
+        }
+    }
+
+    // Compact datetime input used inside the due meta-value cell when editing.
+    &__meta-value .task-input--meta {
+        padding: 2px 6px;
+        font-size: 13px;
+        border-radius: var(--task-radius-sm);
     }
 
     &__section-label {
