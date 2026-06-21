@@ -242,11 +242,11 @@ func (p *Plugin) getTask(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	t, err := p.taskService.Get(id)
 	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
 		p.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if t == nil {
-		p.writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 	p.writeJSON(w, t)
@@ -514,11 +514,11 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 
 	parent, err := p.taskService.Get(parentID)
 	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
 		p.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if parent == nil {
-		p.writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 	if !permission.CanUserModifyTask(actorID, parent) {
@@ -611,11 +611,11 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	// View permission gates commenting: anyone who can view may comment.
 	t, err := p.taskService.Get(taskID)
 	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
 		p.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if t == nil {
-		p.writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
@@ -628,14 +628,39 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	if strings.TrimSpace(req.Content) == "" {
+		p.writeError(w, http.StatusBadRequest, "comment content is required")
+		return
+	}
 
-	comment, ev, err := p.taskService.AddComment(taskID, actorID, req.Content)
+	// Comment-as-thread: create the reply post in the task's card thread, then
+	// link the post to the task. The post roots under the task's channel card
+	// (or DM card as fallback) so replies thread under the card.
+	rootID := t.ChannelPostID
+	if rootID == "" {
+		rootID = t.DMPostID
+	}
+	channelID := t.ChannelID
+	if channelID == "" {
+		channelID = t.AssigneeID // personal task: post in the assignee's context
+	}
+	commentPost := &mmmodel.Post{
+		UserId:    p.botUserID,
+		ChannelId: channelID,
+		RootId:    rootID,
+		Message:   req.Content,
+	}
+	created, appErr := p.API.CreatePost(commentPost)
+	if appErr != nil {
+		p.writeError(w, appErr.StatusCode, "failed to create comment post: "+appErr.Error())
+		return
+	}
+
+	comment, ev, err := p.taskService.LinkComment(taskID, created.Id, actorID)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
 			p.writeError(w, http.StatusNotFound, "task not found")
-		case errors.Is(err, task.ErrCommentContentRequired):
-			p.writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			p.writeError(w, http.StatusInternalServerError, err.Error())
 		}
@@ -675,11 +700,11 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 
 	t, err := p.taskService.Get(taskID)
 	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
 		p.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if t == nil {
-		p.writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
 	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {

@@ -62,7 +62,7 @@ func withParent(p string) func(*model.TaskRow) {
 }
 
 func withDue(ms int64) func(*model.TaskRow) {
-	return func(t *model.TaskRow) { t.DueAt = &ms }
+	return func(t *model.TaskRow) { t.Due = &ms }
 }
 
 func TestCreateTask_InsertsAndRoundTrips(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCreateTask_InsertsAndRoundTrips(t *testing.T) {
 	created, err := s.CreateTask(ctx, fixture("01HXYZTASK0001", "k1", func(t *model.TaskRow) {
 		t.ChannelID = "ch1"
 		t.ParentTaskID = "01HXYZPARENT0001"
-		t.DueAt = &due
+		t.Due = &due
 		t.IsAllDay = true
 	}))
 	require.NoError(t, err)
@@ -88,8 +88,8 @@ func TestCreateTask_InsertsAndRoundTrips(t *testing.T) {
 	assert.Equal(t, "01HXYZTASK0001", got.ID)
 	assert.Equal(t, "ch1", got.ChannelID)
 	assert.Equal(t, "01HXYZPARENT0001", got.ParentTaskID)
-	require.NotNil(t, got.DueAt)
-	assert.Equal(t, due, *got.DueAt)
+	require.NotNil(t, got.Due)
+	assert.Equal(t, due, *got.Due)
 	assert.True(t, got.IsAllDay)
 }
 
@@ -102,7 +102,7 @@ func TestCreateTask_RequiresID(t *testing.T) {
 func TestGetTask_NotFound(t *testing.T) {
 	s := tasksTestStore(t)
 	_, err := s.GetTask(context.Background(), "missing")
-	require.ErrorIs(t, err, ErrTaskNotFound)
+	require.ErrorIs(t, err, store.ErrTaskNotFound)
 }
 
 func TestUpdateTask_ReturningReflectsWrite(t *testing.T) {
@@ -132,7 +132,7 @@ func TestUpdateTask_ReturningReflectsWrite(t *testing.T) {
 func TestUpdateTask_NotFound(t *testing.T) {
 	s := tasksTestStore(t)
 	_, err := s.UpdateTask(context.Background(), model.TaskRow{ID: "ghost", OrderKey: "k1"})
-	require.ErrorIs(t, err, ErrTaskNotFound)
+	require.ErrorIs(t, err, store.ErrTaskNotFound)
 }
 
 func TestTouchTaskUpdatedAt_MonotonicAndNotFound(t *testing.T) {
@@ -156,9 +156,9 @@ func TestTouchTaskUpdatedAt_MonotonicAndNotFound(t *testing.T) {
 		assert.Equal(t, int64(5_000), got.UpdatedAt, "GREATEST must keep the higher value")
 	})
 
-	t.Run("missing task yields ErrTaskNotFound", func(t *testing.T) {
+	t.Run("missing task yields store.ErrTaskNotFound", func(t *testing.T) {
 		err := s.TouchTaskUpdatedAt(ctx, "ghost", 9_000)
-		require.ErrorIs(t, err, ErrTaskNotFound)
+		require.ErrorIs(t, err, store.ErrTaskNotFound)
 	})
 }
 
@@ -173,7 +173,7 @@ func TestDeleteTask_CascadesSubtasks(t *testing.T) {
 
 	// Parent gone.
 	_, err := s.GetTask(ctx, "01HXYZPAR000001")
-	require.ErrorIs(t, err, ErrTaskNotFound)
+	require.ErrorIs(t, err, store.ErrTaskNotFound)
 
 	// Children cascade-deleted via FK ON DELETE CASCADE.
 	subs, err := s.ListSubtasks(ctx, "01HXYZPAR000001")
@@ -184,7 +184,7 @@ func TestDeleteTask_CascadesSubtasks(t *testing.T) {
 func TestDeleteTask_NotFound(t *testing.T) {
 	s := tasksTestStore(t)
 	err := s.DeleteTask(context.Background(), "ghost")
-	require.ErrorIs(t, err, ErrTaskNotFound)
+	require.ErrorIs(t, err, store.ErrTaskNotFound)
 }
 
 func TestListTasks_ScopeChannelStatusAndPagination(t *testing.T) {

@@ -1,14 +1,15 @@
 // Package task implements the task lifecycle business logic that sits between
-// the REST/command layers and the KVStore: creating tasks (with ULID + global
-// OrderKey + all index edges), partial updates, hard-delete cascade, and the
-// scope/status/due filtered list used by GET /tasks and the slash commands.
+// the REST/command layers and the relational store. Each method composes one or
+// more store.Store calls, wrapping multi-table mutations in WithTx so they
+// commit or roll back atomically, and assembles the result into a model.Task
+// (the denormalized entity consumers see) via assembleTask.
 //
-// The service depends only on the kvstore.KVStore interface and the taskutil
-// helpers, so it is fully unit-testable against the in-memory kvstore mock or
-// pluginapi.MemoryStore.
+// The service depends only on the store.Store interface and the taskutil
+// helpers, so it is fully unit-testable against an in-memory sqlite SQLStore.
 package task
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -16,13 +17,13 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
-	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
 	"github.com/naicoi92/mattermost-plugin-task/server/taskutil"
 )
 
-// nowFunc is the time source used to stamp CreatedAt/UpdatedAt. It is a package
-// variable (rather than a struct field) so existing callers stay simple; tests
-// override it to get deterministic timestamps.
+// nowFunc is the time source used to stamp CreatedAt/UpdatedAt and to evaluate
+// due-filter windows. It is a package variable so existing callers stay simple;
+// tests override it to get deterministic timestamps.
 var nowFunc = func() int64 { return time.Now().UnixMilli() }
 
 // errorLogger is the minimal logging surface the service needs to report
@@ -35,19 +36,18 @@ type errorLogger interface {
 // Service provides the task lifecycle operations used by the REST API and slash
 // commands.
 type Service struct {
-	store  kvstore.KVStore
+	store  store.Store
 	logger errorLogger
 }
 
-// NewService returns a Service backed by the given store. An optional logger
-// surfaces non-fatal store failures (e.g. a comment's UpdatedAt touch) for
-// debugging; nil disables logging.
-func NewService(store kvstore.KVStore, logger ...errorLogger) *Service {
+// NewService returns a Service backed by the given relational store. An optional
+// logger surfaces non-fatal store failures for debugging; nil disables logging.
+func NewService(s store.Store, logger ...errorLogger) *Service {
 	var l errorLogger
 	if len(logger) > 0 {
 		l = logger[0]
 	}
-	return &Service{store: store, logger: l}
+	return &Service{store: s, logger: l}
 }
 
 // logUnexpected records a non-fatal error when a logger is configured; a no-op
@@ -59,9 +59,85 @@ func (s *Service) logUnexpected(msg string, err error) {
 	s.logger.Error(msg, "error", err)
 }
 
-// CreateInput is the validated payload for creating a task. Only Summary is
-// required; everything else is optional and mirrors the JSON contract of
-// POST /tasks.
+// ctx returns a context with a short timeout so service calls don't hang the
+// request thread indefinitely. A bounded context keeps a wedged DB from piling
+// up goroutines; callers that already hold a request context can thread it
+// through the (future) ctx-accepting overloads.
+func (s *Service) ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 10*time.Second)
+}
+
+// assembleTask denormalizes a TaskRow into the model.Task entity consumers see:
+// it joins the members (creator/assignee), posts (channel/dm card ids),
+// reminder, subtask progress, and comment count. Called on every read path so
+// the flat REST shape stays populated even though storage is fully normalized.
+//
+// Best-effort on the relation reads: a missing member/post row leaves the
+// corresponding field empty rather than failing the whole assembly, matching
+// the legacy KV store's tolerance for partially-populated tasks.
+func (s *Service) assembleTask(ctx context.Context, row *model.TaskRow) (*model.Task, error) {
+	t := &model.Task{TaskRow: *row}
+
+	// Creator + assignee (task_members). A "not found" is expected for tasks
+	// with no assignee / tasks migrated before members were written; leave the
+	// field empty rather than failing.
+	if creator, err := s.store.GetMemberByRole(ctx, row.ID, model.MemberRoleCreator); err == nil {
+		t.CreatorID = creator
+	} else if !errors.Is(err, store.ErrMemberNotFound) {
+		return nil, errors.Wrap(err, "assemble task: creator")
+	}
+	if assignee, err := s.store.GetMemberByRole(ctx, row.ID, model.MemberRoleAssignee); err == nil {
+		t.AssigneeID = assignee
+	} else if !errors.Is(err, store.ErrMemberNotFound) {
+		return nil, errors.Wrap(err, "assemble task: assignee")
+	}
+
+	// Card post ids (task_posts).
+	if ch, err := s.store.GetPostByKind(ctx, row.ID, model.PostKindChannel); err == nil {
+		t.ChannelPostID = ch
+	}
+	if dm, err := s.store.GetPostByKind(ctx, row.ID, model.PostKindDM); err == nil {
+		t.DMPostID = dm
+	}
+
+	// Reminder (task_reminders; at most one per task at MVP).
+	if reminders, err := s.store.ListReminders(ctx, row.ID); err == nil && len(reminders) > 0 {
+		t.ReminderOffset = &reminders[0].OffsetMS
+		t.ReminderFired = reminders[0].FiredAt != nil
+	}
+
+	// Subtask progress + comment count aggregates.
+	if done, total, err := s.store.SubtaskProgress(ctx, row.ID); err == nil {
+		t.SubtaskDone, t.SubtaskTotal = done, total
+	}
+	if n, err := s.store.CountComments(ctx, row.ID); err == nil {
+		t.CommentCount = n
+	}
+
+	return t, nil
+}
+
+// loadTaskRow fetches a task row and translates the store's
+// store.ErrTaskNotFound into the service's ErrNotFound sentinel. Service
+// methods call this instead of s.store.GetTask directly so not-found is a
+// single, consistent error callers can errors.Is against.
+func (s *Service) loadTaskRow(ctx context.Context, id string) (*model.TaskRow, error) {
+	row, err := s.store.GetTask(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrTaskNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if row == nil {
+		return nil, ErrNotFound
+	}
+	return row, nil
+}
+
+// CreateInput is the validated payload for creating a task. Only Summary and
+// CreatorID are required; everything else is optional and mirrors the JSON
+// contract of POST /tasks.
 type CreateInput struct {
 	Summary        string
 	Description    string
@@ -74,11 +150,14 @@ type CreateInput struct {
 	ReminderOffset *int64
 }
 
-// Create persists a new task with a fresh ULID, a global OrderKey at the end of
-// the default column, and all key-per-edge index edges (assigned/created/
-// channel/all, plus subtask membership when ParentTaskID is set).
+// Create persists a new task atomically: the task row, its creator + assignee
+// member edges, an optional reminder, and a "created" audit event all commit
+// together via WithTx. A subtask inherits its parent's channel and (as default)
+// assignee; an explicit AssigneeID overrides the inherited default.
 //
-// It returns the created task. An empty Summary is rejected.
+// It returns the assembled task. Empty Summary or CreatorID is rejected; a
+// missing parent yields ErrParentNotFound; a cyclic ParentTaskID yields
+// ErrSubtaskCycle.
 func (s *Service) Create(in CreateInput) (*model.Task, error) {
 	if in.Summary == "" {
 		return nil, errors.New("summary is required")
@@ -87,172 +166,142 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		return nil, errors.New("creator id is required")
 	}
 
-	// Subtasks inherit from their parent: a subtask must live in the parent's
-	// channel, and its default assignee is the parent's assignee (the caller may
-	// still override the assignee via CreateInput.AssigneeID). A non-existent
-	// parent is rejected so an orphan ParentTaskID can never be persisted.
+	// Resolve parent inheritance BEFORE the transaction so the tx body is a
+	// tight write sequence; reads outside the tx are safe here because the
+	// parent's channel/assignee are stable for the lifetime of the create.
 	channelID := in.ChannelID
 	assigneeID := in.AssigneeID
 	if in.ParentTaskID != "" {
-		parent, err := s.store.GetTask(in.ParentTaskID)
+		ctx, cancel := s.ctx()
+		defer cancel()
+		parentRow, err := s.loadTaskRow(ctx, in.ParentTaskID)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, ErrParentNotFound
+			}
 			return nil, errors.Wrap(err, "failed to load parent task")
 		}
-		if parent == nil {
-			return nil, ErrParentNotFound
-		}
-		// Loop guard (issue #22): a task must not be its own ancestor. The new
-		// task has a fresh ULID so it can't already be in the parent chain, but
-		// we walk the parent chain (bounded) to reject a malformed ParentTaskID
-		// that would create a cycle and to cap nesting depth.
-		if err := s.assertNoCycle(in.ParentTaskID, maxSubtaskDepth); err != nil {
+		if err := s.assertNoCycle(ctx, in.ParentTaskID, maxSubtaskDepth); err != nil {
 			return nil, err
 		}
-		channelID = parent.ChannelID
+		channelID = parentRow.ChannelID
 		if assigneeID == "" {
-			assigneeID = parent.AssigneeID
+			// Inherit the parent's assignee (best-effort; missing assignee
+			// leaves the subtask unassigned).
+			if aid, err := s.store.GetMemberByRole(ctx, in.ParentTaskID, model.MemberRoleAssignee); err == nil {
+				assigneeID = aid
+			}
 		}
 	}
 
 	now := nowFunc()
 	id := taskutil.GenerateULID()
 
-	orderKey, err := s.nextGlobalOrderKey()
-	if err != nil {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	orderKey, orderErr := s.nextGlobalOrderKey(ctx)
+	if orderErr != nil {
+		return nil, orderErr
+	}
+
+	row := model.TaskRow{
+		ID:           id,
+		Summary:      in.Summary,
+		Description:  in.Description,
+		ChannelID:    channelID,
+		ParentTaskID: in.ParentTaskID,
+		Status:       model.StatusTodo,
+		OrderKey:     orderKey,
+		IsAllDay:     in.IsAllDay,
+		Due:          in.Due,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	// Atomic write: task + members + (optional) reminder + audit event.
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	var created *model.Task
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		saved, saveErr := tx.CreateTask(txCtx, row)
+		if saveErr != nil {
+			return saveErr
+		}
+		row = saved
+
+		if err := tx.AddMember(txCtx, row.ID, in.CreatorID, model.MemberRoleCreator); err != nil {
+			return err
+		}
+		if assigneeID != "" {
+			if err := tx.AddMember(txCtx, row.ID, assigneeID, model.MemberRoleAssignee); err != nil {
+				return err
+			}
+		}
+
+		// Seed the reminder when created with both a due and an offset.
+		if row.Due != nil && in.ReminderOffset != nil && *in.ReminderOffset > 0 {
+			if _, err := tx.SetReminder(txCtx, taskutil.GenerateULID(), row.ID, *in.ReminderOffset); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    row.ID,
+			ActorID:   in.CreatorID,
+			EventType: model.EventCreated,
+			CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
-	task := model.Task{
-		ID:             id,
-		Summary:        in.Summary,
-		Description:    in.Description,
-		ChannelID:      channelID,
-		CreatorID:      in.CreatorID,
-		AssigneeID:     assigneeID,
-		Due:            in.Due,
-		IsAllDay:       in.IsAllDay,
-		Status:         model.StatusTodo,
-		OrderKey:       orderKey,
-		ParentTaskID:   in.ParentTaskID,
-		ReminderOffset: in.ReminderOffset,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	created, asmErr := s.assembleTask(ctx, &row)
+	if asmErr != nil {
+		return nil, asmErr
 	}
-
-	if err := s.store.SaveTask(task); err != nil {
-		return nil, err
-	}
-
-	if err := s.writeIndexes(task); err != nil {
-		return nil, err
-	}
-
-	// Seed the reminder index when the task is created with both a due and an
-	// offset (deferred for the common edit/assign paths via rebuildReminderIndex).
-	if err := s.rebuildReminderIndex(&task); err != nil {
-		return nil, err
-	}
-
-	return &task, nil
+	return created, nil
 }
 
 // nextGlobalOrderKey returns an OrderKey strictly greater than the current
-// global maximum so new tasks land at the end of their initial column. It scans
-// the global index, loads the tasks, and takes the max OrderKey. For the very
-// first task it returns the seed key from taskutil.
-func (s *Service) nextGlobalOrderKey() (string, error) {
-	all, err := s.store.ListAllTaskIDs()
+// global maximum so new tasks land at the end of their initial column. A single
+// SELECT MAX(order_key) replaces the KV store's ListAllTaskIDs + per-task Get
+// loop.
+func (s *Service) nextGlobalOrderKey(ctx context.Context) (string, error) {
+	maxKey, err := s.store.NextGlobalOrderKey(ctx)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to list tasks for order key")
-	}
-	if len(all) == 0 {
-		return taskutil.NextOrderKey(""), nil
-	}
-
-	maxKey := ""
-	for _, id := range all {
-		t, err := s.store.GetTask(id)
-		if err != nil {
-			return "", errors.Wrapf(err, "failed to load task %s for order key", id)
-		}
-		if t == nil {
-			continue
-		}
-		if t.OrderKey > maxKey {
-			maxKey = t.OrderKey
-		}
+		return "", errors.Wrap(err, "failed to compute next order key")
 	}
 	return taskutil.NextOrderKey(maxKey), nil
 }
 
-// writeIndexes writes every key-per-edge index for a freshly created task:
-//
-//	idx:u:{assignee}:assigned:{id}   (only when an assignee is set)
-//	idx:u:{creator}:created:{id}
-//	idx:ch:{channel}:task:{id}       (only for channel-scoped tasks)
-//	idx:all:task:{id}
-//	idx:t:{parent}:sub:{id}          (only for subtasks)
-func (s *Service) writeIndexes(task model.Task) error {
-	if task.AssigneeID != "" {
-		if err := s.store.SaveIndex(kvstore.UserAssignedKey(task.AssigneeID, task.ID)); err != nil {
-			return err
-		}
-	}
-	if err := s.store.SaveIndex(kvstore.UserCreatedKey(task.CreatorID, task.ID)); err != nil {
-		return err
-	}
-	if task.ChannelID != "" {
-		if err := s.store.SaveIndex(kvstore.ChannelTaskKey(task.ChannelID, task.ID)); err != nil {
-			return err
-		}
-	}
-	if err := s.store.SaveIndex(kvstore.AllTasksKey(task.ID)); err != nil {
-		return err
-	}
-	if task.ParentTaskID != "" {
-		if err := s.store.SaveSubtask(task.ParentTaskID, task.ID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Get returns the task with the given ID, or nil if it does not exist.
+// Get returns the assembled task with the given ID, or ErrNotFound if it does
+// not exist.
 func (s *Service) Get(id string) (*model.Task, error) {
-	return s.store.GetTask(id)
-}
-
-// ListComments returns the comments attached to taskID, sorted by ULID (creation
-// order). It is defensive: a comment whose stored JSON fails to deserialize is
-// skipped instead of failing the whole list, so one corrupt record can never
-// hide the rest of the thread. Missing tasks yield an empty list (the caller
-// usually resolves task existence separately).
-func (s *Service) ListComments(taskID string) ([]model.Comment, error) {
-	ids, err := s.store.GetCommentIDs(taskID)
+	ctx, cancel := s.ctx()
+	defer cancel()
+	row, err := s.loadTaskRow(ctx, id)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to list comment ids")
+		return nil, err
 	}
-	comments := make([]model.Comment, 0, len(ids))
-	for _, id := range ids {
-		c, err := s.store.GetComment(taskID, id)
-		if err != nil {
-			// Defensive read: a comment whose stored JSON fails to deserialize
-			// is skipped (logged) rather than failing the whole list. The id
-			// index is consistent, so this only triggers on a genuinely corrupt
-			// payload — one bad record must never hide the rest of the thread.
-			continue
-		}
-		if c == nil {
-			continue
-		}
-		comments = append(comments, *c)
-	}
-	return comments, nil
+	return s.assembleTask(ctx, row)
 }
 
-// CommentEvent describes the result of adding a comment so callers (REST/
+// ListComments returns the comment mappings attached to taskID, sorted by
+// creation time. Content lives in the Mattermost post (PostID); the caller
+// fetches it via GetPost and skips nil results defensively.
+func (s *Service) ListComments(taskID string) ([]model.TaskComment, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.ListComments(ctx, taskID)
+}
+
+// CommentEvent describes the result of linking a comment so callers (REST/
 // command handlers) can fire the participant notification without re-reading
-// the task. CreatorID and AssigneeID are the task's current participants.
+// the task.
 type CommentEvent struct {
 	TaskID     string
 	CommentID  string
@@ -261,114 +310,86 @@ type CommentEvent struct {
 	AssigneeID string
 }
 
-// AddComment persists a new comment on taskID, stamped with a fresh ULID and the
-// current time, and returns the comment plus a CommentEvent for notification.
-// Each comment is its own KV key (no CAS), so concurrent comments never
-// conflict. A non-existent task yields ErrNotFound. An empty content is
-// rejected.
-func (s *Service) AddComment(taskID, userID, content string) (model.Comment, CommentEvent, error) {
-	if strings.TrimSpace(content) == "" {
-		return model.Comment{}, CommentEvent{}, ErrCommentContentRequired
-	}
-	task, err := s.store.GetTask(taskID)
-	if err != nil {
-		return model.Comment{}, CommentEvent{}, err
-	}
-	if task == nil {
-		return model.Comment{}, CommentEvent{}, ErrNotFound
+// LinkComment records that postID is a thread reply on taskID (the
+// comment-as-thread design: content stays in the Mattermost post). It bumps the
+// task's UpdatedAt (so the WS seq advances) and appends a "commented" audit
+// event, all atomically via WithTx. A non-existent task yields ErrNotFound.
+func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment, CommentEvent, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	if _, err := s.loadTaskRow(ctx, taskID); err != nil {
+		return model.TaskComment{}, CommentEvent{}, err
 	}
 
 	now := nowFunc()
-	comment := model.Comment{
-		ID:        taskutil.GenerateULID(),
-		UserID:    userID,
-		Content:   content,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if err := s.store.SaveComment(taskID, comment); err != nil {
-		return model.Comment{}, CommentEvent{}, err
+	commentID := taskutil.GenerateULID()
+
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	var c model.TaskComment
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		var lErr error
+		c, lErr = tx.LinkComment(txCtx, commentID, taskID, postID, userID, now)
+		if lErr != nil {
+			return lErr
+		}
+		if err := tx.TouchTaskUpdatedAt(txCtx, taskID, now); err != nil {
+			return err
+		}
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    taskID,
+			ActorID:   userID,
+			EventType: model.EventCommented,
+			CreatedAt: now,
+		})
+	}); err != nil {
+		return model.TaskComment{}, CommentEvent{}, err
 	}
 
-	// Bump the task's UpdatedAt atomically so the WebSocket seq (which equals
-	// UpdatedAt) is monotonic across a comment and the webapp doesn't drop the
-	// "comment" event as stale (#32). TouchTaskUpdatedAt uses compare-and-set so
-	// a concurrent change to other fields (status/assignee/due) is preserved,
-	// and a missing task yields ErrNotFound.
-	if err := s.store.TouchTaskUpdatedAt(taskID, now); err != nil {
-		// The comment is already persisted, so a touch failure is non-fatal — it
-		// only means the seq may not advance. Log it so the unexpected store
-		// error is observable and debuggable rather than silently dropped.
-		s.logUnexpected("failed to touch task UpdatedAt after comment", err)
-	}
-
-	return comment, CommentEvent{
+	// Assemble participant ids for the notification event.
+	creatorID, _ := s.store.GetMemberByRole(ctx, taskID, model.MemberRoleCreator)
+	assigneeID, _ := s.store.GetMemberByRole(ctx, taskID, model.MemberRoleAssignee)
+	return c, CommentEvent{
 		TaskID:     taskID,
-		CommentID:  comment.ID,
+		CommentID:  commentID,
 		UserID:     userID,
-		CreatorID:  task.CreatorID,
-		AssigneeID: task.AssigneeID,
+		CreatorID:  creatorID,
+		AssigneeID: assigneeID,
 	}, nil
 }
 
-// SubtaskProgress returns (done, total) where done counts subtasks in a
-// terminal status (done/cancelled) and total is the number of subtasks. Used
-// to render the "x/y" progress on task cards. Missing subtask entities are
-// skipped defensively.
+// SubtaskProgress returns (done, total) for parentID's direct subtasks. A
+// single GROUP BY query replaces the KV store's ListSubtasks + per-task loop.
 func (s *Service) SubtaskProgress(parentID string) (done, total int, err error) {
-	ids, err := s.store.GetSubtaskIDs(parentID)
-	if err != nil {
-		return 0, 0, errors.Wrap(err, "failed to list subtasks")
-	}
-	for _, id := range ids {
-		sub, err := s.store.GetTask(id)
-		if err != nil {
-			return 0, 0, err
-		}
-		if sub == nil {
-			continue
-		}
-		total++
-		if sub.Status == model.StatusDone || sub.Status == model.StatusCancelled {
-			done++
-		}
-	}
-	return done, total, nil
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.SubtaskProgress(ctx, parentID)
 }
 
-// ListSubtasks returns the direct subtasks of parentID as full task entities,
-// sorted by ULID (creation order). Missing subtask entities are skipped
-// defensively. A missing/non-existent parent yields an empty list — callers
-// that need to distinguish a missing parent should resolve it via Get first.
-func (s *Service) ListSubtasks(parentID string) ([]model.Task, error) {
-	ids, err := s.store.GetSubtaskIDs(parentID)
+// ListSubtasks returns the direct subtasks of parentID as assembled entities,
+// sorted by creation time. A missing parent yields an empty list.
+func (s *Service) ListSubtasks(parentID string) ([]*model.Task, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	rows, err := s.store.ListSubtasks(ctx, parentID)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to list subtasks")
+		return nil, err
 	}
-	subs := make([]model.Task, 0, len(ids))
-	for _, id := range ids {
-		sub, err := s.store.GetTask(id)
+	out := make([]*model.Task, 0, len(rows))
+	for i := range rows {
+		t, err := s.assembleTask(ctx, &rows[i])
 		if err != nil {
 			return nil, err
 		}
-		if sub == nil {
-			continue
-		}
-		subs = append(subs, *sub)
+		out = append(out, t)
 	}
-	return subs, nil
+	return out, nil
 }
 
-// CreateSubtask creates a new task under parentID. The subtask inherits the
-// parent's ChannelID and (as default) the parent's assignee; an explicit
-// assigneeID overrides the inherited default. A non-existent parent is rejected
-// with ErrParentNotFound. It is a thin wrapper over Create that also re-validates
-// the parent for callers that resolved it separately.
-//
-// After creating the subtask it atomically bumps the parent's UpdatedAt (via
-// TouchTaskUpdatedAt) so the WebSocket seq (#32) advances and a client receiving
-// the parent's "subtasks changed" event doesn't drop it as stale — the same
-// root cause fixed for comments.
+// CreateSubtask creates a new task under parentID, inheriting the parent's
+// channel and (as default) assignee, then atomically bumps the parent's
+// UpdatedAt so the WebSocket seq advances. Thin wrapper over Create + a touch.
 func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*model.Task, error) {
 	created, err := s.Create(CreateInput{
 		Summary:      summary,
@@ -381,122 +402,131 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 		return nil, err
 	}
 
-	// Bump the parent's UpdatedAt so a "subtasks changed" WebSocket event for the
-	// parent isn't dropped by the client's stale-seq guard. Best-effort: a touch
-	// failure only means the parent's progress badge may lag; the subtask itself
-	// is already created.
-	if tErr := s.store.TouchTaskUpdatedAt(parentID, created.CreatedAt); tErr != nil {
-		s.logUnexpected("failed to touch parent UpdatedAt after subtask creation", tErr)
+	ctx, cancel := s.ctx()
+	defer cancel()
+	if err := s.store.TouchTaskUpdatedAt(ctx, parentID, created.CreatedAt); err != nil {
+		s.logUnexpected("failed to touch parent UpdatedAt after subtask creation", err)
 	}
-
 	return created, nil
 }
 
-// SetPostIDs records the channel/DM post ids of the task's interactive card so
-// the card can be updated when the task changes (PLAN.md section 4.2). Either
-// value may be empty to leave it unchanged. Used by the REST/dialog handlers
-// after posting a card.
+// SetPostIDs records the channel/DM card post ids for the task. Either value
+// may be empty to leave that post kind unchanged. The writes (AddPost for each
+// kind + UpdatedAt touch) commit atomically via WithTx.
 func (s *Service) SetPostIDs(id, channelPostID, dmPostID string) (*model.Task, error) {
-	t, err := s.store.GetTask(id)
-	if err != nil {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	if _, err := s.loadTaskRow(ctx, id); err != nil {
 		return nil, err
 	}
-	if t == nil {
-		return nil, ErrNotFound
-	}
-	if channelPostID != "" {
-		t.ChannelPostID = channelPostID
-	}
-	if dmPostID != "" {
-		t.DMPostID = dmPostID
-	}
-	t.UpdatedAt = nowFunc()
-	if err := s.store.SaveTask(*t); err != nil {
+
+	now := nowFunc()
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		if channelPostID != "" {
+			if err := tx.AddPost(txCtx, taskutil.GenerateULID(), id, channelPostID, model.PostKindChannel); err != nil {
+				return err
+			}
+		}
+		if dmPostID != "" {
+			if err := tx.AddPost(txCtx, taskutil.GenerateULID(), id, dmPostID, model.PostKindDM); err != nil {
+				return err
+			}
+		}
+		return tx.TouchTaskUpdatedAt(txCtx, id, now)
+	}); err != nil {
 		return nil, err
 	}
-	return t, nil
+	return s.Get(id)
 }
 
 // SetStatus transitions the task to newStatus using the canonical state machine
-// (taskutil.ApplyStatus), refreshing UpdatedAt and clearing/stamping the
-// CompletedAt/CancelledAt fields as appropriate:
+// (taskutil.ApplyStatus), and applies side effects atomically via WithTx:
 //
-//	todo / in_progress: clear CompletedAt and CancelledAt
-//	done:               set CompletedAt, clear CancelledAt
-//	cancelled:          set CancelledAt, clear CompletedAt
+//   - done:    rejected if open subtasks remain (ErrOpenSubtasks).
+//   - cancelled: cascade-cancels open subtasks.
+//   - terminal: clears any reminder.
+//   - reopen:  resets the reminder so it can fire again.
 //
-// Moving to a terminal status (done/cancelled) stops any active reminder by
-// dropping the idx:reminder:{id} edge. Cancelling a task also cascade-cancels
-// its open (todo/in_progress) subtasks. newStatus must be a valid status.
-//
-// It returns the updated task. A non-existent id yields ErrNotFound; an invalid
-// status yields ErrInvalidStatus.
+// A "status_changed" audit event is appended in the same transaction.
 var ErrInvalidStatus = errors.New("invalid status")
 
 func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 	if !model.IsValidStatus(newStatus) {
 		return nil, ErrInvalidStatus
 	}
-	task, err := s.store.GetTask(id)
+	ctx, cancel := s.ctx()
+	defer cancel()
+	row, err := s.loadTaskRow(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if task == nil {
-		return nil, ErrNotFound
+	if row.Status == newStatus {
+		return s.assembleTask(ctx, row)
 	}
 
-	// No-op if the status is unchanged.
-	if task.Status == newStatus {
-		return task, nil
-	}
-
-	// Parent-done guard (issue #22): a parent can only reach `done` once all of
-	// its direct subtasks are themselves terminal (done/cancelled). We check
-	// before applying so the task isn't left in a half-transitioned state. The
-	// open subtask summaries are attached to the error so callers can surface a
-	// clear, actionable message.
+	// Parent-done guard: a parent can only reach done once all direct subtasks
+	// are terminal. Checked before the transition so the task isn't left
+	// half-updated.
 	if newStatus == model.StatusDone {
-		if open, err := s.openSubtasks(task.ID); err != nil {
+		if open, err := s.openSubtasks(ctx, id); err != nil {
 			return nil, err
 		} else if len(open) > 0 {
 			return nil, ErrOpenSubtasks{Open: open}
 		}
 	}
 
-	taskutil.ApplyStatus(task, newStatus, nowFunc())
-	if err := s.store.SaveTask(*task); err != nil {
+	now := nowFunc()
+	taskutil.ApplyStatus(row, newStatus, now)
+
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		updated, err := tx.UpdateTask(txCtx, *row)
+		if err != nil {
+			return err
+		}
+		row = &updated
+
+		// Cascade-cancel open subtasks when the parent is cancelled.
+		if newStatus == model.StatusCancelled {
+			if err := s.cascadeCancelSubtasks(txCtx, tx, id); err != nil {
+				return err
+			}
+		}
+
+		switch newStatus {
+		case model.StatusDone, model.StatusCancelled:
+			// Terminal: clear any reminder (idempotent if none).
+			if err := tx.ClearReminder(txCtx, id); err != nil {
+				return err
+			}
+		case model.StatusTodo, model.StatusInProgress:
+			// Reopen: if the task has a due and a reminder offset, re-arm the
+			// reminder so it can fire again. ListReminders carries the offset.
+			reminders, rErr := tx.ListReminders(txCtx, id)
+			if rErr != nil {
+				return rErr
+			}
+			if len(reminders) > 0 && row.Due != nil {
+				if _, err := tx.SetReminder(txCtx, reminders[0].ID, id, reminders[0].OffsetMS); err != nil {
+					return err
+				}
+			}
+		}
+
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    id,
+			EventType: model.EventStatusChanged,
+			CreatedAt: now,
+			ToValue:   ptrString(newStatus),
+		})
+	}); err != nil {
 		return nil, err
 	}
-
-	// Side effects, ordered so none can be skipped by a failure in another.
-	//
-	// 1. Cascade-cancel open subtasks when the parent is cancelled — runs first
-	//    so a later reminder-cleanup error can never prevent it.
-	if newStatus == model.StatusCancelled {
-		if err := s.cascadeCancelSubtasks(task.ID); err != nil {
-			return nil, err
-		}
-	}
-
-	switch newStatus {
-	case model.StatusDone, model.StatusCancelled:
-		// 2. Best-effort reminder-edge cleanup on terminal statuses. FireReadyReminders
-		//    self-heals by dropping any stale edge for a terminal task, so a transient
-		//    cleanup failure cannot cause a spurious DM (it's cleaned lazily next tick).
-		_ = s.store.DeleteReminder(task.ID)
-	case model.StatusTodo, model.StatusInProgress:
-		// Reopening allows a reminder to fire again: reset the fired flag and
-		// rebuild the index if a due+offset are still set.
-		task.ReminderFired = false
-		if err := s.store.SaveTask(*task); err != nil {
-			return nil, err
-		}
-		if err := s.rebuildReminderIndex(task); err != nil {
-			return nil, err
-		}
-	}
-
-	return task, nil
+	return s.assembleTask(ctx, row)
 }
 
 // maxSubtaskDepth caps how deep a subtask chain may nest. It bounds the
@@ -508,7 +538,7 @@ const maxSubtaskDepth = 16
 // has non-terminal (todo/in_progress) subtasks. Open holds the summaries of the
 // unfinished subtasks so the caller can list them in the error message.
 type ErrOpenSubtasks struct {
-	Open []string // summaries (or ids) of the blocking subtasks
+	Open []string
 }
 
 // Error renders the blocking subtask summaries in a clear, actionable message.
@@ -524,16 +554,15 @@ func (e ErrOpenSubtasks) Error() string {
 }
 
 // openSubtasks returns the summaries of parentID's direct subtasks that are not
-// yet terminal (done/cancelled). Used by the parent-done guard. A subtask with
-// no summary falls back to its id so the count/list stays meaningful.
-func (s *Service) openSubtasks(parentID string) ([]string, error) {
-	subs, err := s.ListSubtasks(parentID)
+// yet terminal (done/cancelled). A subtask with no summary falls back to its id.
+func (s *Service) openSubtasks(ctx context.Context, parentID string) ([]string, error) {
+	subs, err := s.store.ListSubtasks(ctx, parentID)
 	if err != nil {
 		return nil, err
 	}
 	var open []string
 	for _, sub := range subs {
-		if sub.Status == model.StatusDone || sub.Status == model.StatusCancelled {
+		if model.IsTerminalStatus(sub.Status) {
 			continue
 		}
 		label := sub.Summary
@@ -545,17 +574,22 @@ func (s *Service) openSubtasks(parentID string) ([]string, error) {
 	return open, nil
 }
 
-// assertNoCycle walks the parent chain from startID up to maxSubtaskDepth
-// ancestors. It returns ErrSubtaskCycle if the chain repeats a node (a cycle,
-// which would mean the proposed parent is already a descendant), or if the
-// chain exceeds the depth cap. A nil error means attaching a child under
-// startID cannot form a loop within the bound.
-func (s *Service) assertNoCycle(startID string, maxDepth int) error {
+// assertNoCycle walks the parent chain from startID up to maxDepth ancestors via
+// GetTask, returning ErrSubtaskCycle if the chain repeats a node or exceeds the
+// depth cap. A nil error means attaching a child under startID cannot form a
+// loop within the bound.
+func (s *Service) assertNoCycle(ctx context.Context, startID string, maxDepth int) error {
 	seen := map[string]struct{}{startID: {}}
 	cur := startID
 	for range maxDepth {
-		t, err := s.store.GetTask(cur)
+		t, err := s.store.GetTask(ctx, cur)
 		if err != nil {
+			// A missing ancestor ends the chain (no cycle possible within
+			// the bound). This is expected when walking up from a task whose
+			// parent was deleted or never existed.
+			if errors.Is(err, store.ErrTaskNotFound) {
+				return nil
+			}
 			return err
 		}
 		if t == nil || t.ParentTaskID == "" {
@@ -575,209 +609,129 @@ func (s *Service) assertNoCycle(startID string, maxDepth int) error {
 var ErrSubtaskCycle = errors.New("subtask would form a cycle or exceed the nesting limit")
 
 // cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
-// cancelled. Already-terminal subtasks are left untouched.
-func (s *Service) cascadeCancelSubtasks(parentID string) error {
-	subIDs, err := s.store.GetSubtaskIDs(parentID)
+// cancelled, issuing UpdateTask per subtask inside the already-open tx. Already
+// terminal subtasks are left untouched.
+func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID string) error {
+	subs, err := tx.ListSubtasks(ctx, parentID)
 	if err != nil {
 		return errors.Wrap(err, "failed to list subtasks for cascade cancel")
 	}
-	for _, subID := range subIDs {
-		sub, err := s.store.GetTask(subID)
-		if err != nil {
-			return err
-		}
-		if sub == nil {
+	now := nowFunc()
+	for i := range subs {
+		sub := subs[i]
+		if model.IsTerminalStatus(sub.Status) {
 			continue
 		}
-		if sub.Status != model.StatusTodo && sub.Status != model.StatusInProgress {
-			continue
-		}
-		if _, err := s.SetStatus(subID, model.StatusCancelled); err != nil {
+		taskutil.ApplyStatus(&sub, model.StatusCancelled, now)
+		if _, err := tx.UpdateTask(ctx, sub); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// SetReminder sets the reminder offset (ms before due) on the task and rebuilds
-// the reminder index. The task must have a due date; offset must be > 0. It
-// resets ReminderFired so the new reminder can fire.
+// SetReminder sets the reminder offset (ms before due) on the task. The task
+// must have a due date; offset must be > 0. The reminder's fired_at is reset on
+// set (ON CONFLICT DO UPDATE in the store) so the reminder can fire fresh.
 func (s *Service) SetReminder(id string, offsetMS int64) (*model.Task, error) {
 	if offsetMS <= 0 {
 		return nil, errors.New("reminder offset must be positive")
 	}
-	task, err := s.store.GetTask(id)
+	ctx, cancel := s.ctx()
+	defer cancel()
+	row, err := s.loadTaskRow(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if task == nil {
-		return nil, ErrNotFound
-	}
-	if task.Due == nil {
+	if row.Due == nil {
 		return nil, ErrReminderNeedsDue
 	}
 
-	task.ReminderOffset = &offsetMS
-	task.ReminderFired = false
-	task.UpdatedAt = nowFunc()
-	if err := s.store.SaveTask(*task); err != nil {
+	now := nowFunc()
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		if _, err := tx.SetReminder(txCtx, taskutil.GenerateULID(), id, offsetMS); err != nil {
+			return err
+		}
+		if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
+			return err
+		}
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    id,
+			EventType: model.EventReminderSet,
+			CreatedAt: now,
+			ToValue:   ptrString("offset_ms"),
+		})
+	}); err != nil {
 		return nil, err
 	}
-	if err := s.rebuildReminderIndex(task); err != nil {
-		return nil, err
-	}
-	return task, nil
+	return s.Get(id)
 }
 
-// ClearReminder removes the reminder offset and drops the reminder index edge.
+// ClearReminder removes the reminder from the task.
 func (s *Service) ClearReminder(id string) (*model.Task, error) {
-	task, err := s.store.GetTask(id)
-	if err != nil {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	if _, err := s.loadTaskRow(ctx, id); err != nil {
 		return nil, err
 	}
-	if task == nil {
-		return nil, ErrNotFound
-	}
-	task.ReminderOffset = nil
-	task.ReminderFired = false
-	task.UpdatedAt = nowFunc()
-	if err := s.store.SaveTask(*task); err != nil {
+
+	now := nowFunc()
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		if err := tx.ClearReminder(txCtx, id); err != nil {
+			return err
+		}
+		if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
+			return err
+		}
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    id,
+			EventType: model.EventReminderCleared,
+			CreatedAt: now,
+		})
+	}); err != nil {
 		return nil, err
 	}
-	if err := s.store.DeleteReminder(task.ID); err != nil {
-		return nil, err
-	}
-	return task, nil
+	return s.Get(id)
 }
 
 // ErrReminderNeedsDue is returned when a reminder is requested on a task with
 // no due date.
 var ErrReminderNeedsDue = errors.New("reminder requires a due date")
 
-// rebuildReminderIndex synchronizes the idx:reminder:{id} edge with the task's
-// current reminder-eligibility. It writes the edge when:
-//
-//	due != nil AND status ∈ {todo, in_progress} AND ReminderOffset != nil AND !ReminderFired
-//
-// and deletes it otherwise. Call this on every update path that can affect
-// reminders. Currently wired into: create, due change (Patch), offset change
-// (SetReminder/ClearReminder), and status change (SetStatus). An assignee
-// change also flips eligibility via the stored ReminderMetadata.AssigneeID, so
-// the dedicated Assign path (added in the assignee-management issue) must call
-// this too — the trigger is listed for completeness here.
-func (s *Service) rebuildReminderIndex(task *model.Task) error {
-	if task == nil {
-		return nil
-	}
-	eligible := task.Due != nil &&
-		task.ReminderOffset != nil &&
-		(task.Status == model.StatusTodo || task.Status == model.StatusInProgress) &&
-		!task.ReminderFired
-
-	if !eligible {
-		return s.store.DeleteReminder(task.ID)
-	}
-
-	meta := model.ReminderMetadata{
-		DueMS:      *task.Due,
-		OffsetMS:   *task.ReminderOffset,
-		AssigneeID: task.AssigneeID,
-	}
-	return s.store.SaveReminder(task.ID, meta)
+// FireReadyReminders returns every pending reminder whose fire time has arrived
+// (now >= due-offset, within grace). The 3-table JOIN in store.ListDueReminders
+// replaces the KV store's ListReminderKeys + per-task Get loop. The caller DMs
+// each reminder and then calls MarkReminderFired(reminderID).
+func (s *Service) FireReadyReminders(nowMs int64, grace time.Duration) ([]model.DueReminder, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.ListDueReminders(ctx, nowMs, grace.Milliseconds())
 }
 
-// DueReminder is a reminder whose fire time has arrived. The scheduler returns
-// these so the notification layer can DM the assignee.
-type DueReminder struct {
-	TaskID     string
-	AssigneeID string
-	DueMS      int64
-}
-
-// FireReadyReminders scans the idx:reminder: index and returns every reminder
-// whose fire window is open: now >= due-offset AND now <= due+grace. Tasks whose
-// fire window has already closed past the grace period are dropped (fired once,
-// missed) and marked fired. The caller DMs each returned DueReminder and then
-// calls MarkReminderFired to drop the edge and stamp ReminderFired=true.
-//
-// now and grace are parameters so the function is deterministic in tests.
-func (s *Service) FireReadyReminders(nowMs int64, grace time.Duration) ([]DueReminder, error) {
-	keys, err := s.store.ListReminderKeys()
-	if err != nil {
-		return nil, err
-	}
-
-	var due []DueReminder
-	for _, key := range keys {
-		taskID := kvstore.TaskIDFromReminderKey(key)
-		if taskID == "" {
-			continue
+// MarkReminderFired stamps the reminder row's fired_at so it won't fire again,
+// and appends a reminder-fired audit event, atomically. Takes the reminder id
+// (not task id) because SQL reminders have their own id.
+func (s *Service) MarkReminderFired(reminderID, taskID string) error {
+	now := nowFunc()
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.WithTx(ctx, func(tx store.Store) error {
+		if err := tx.MarkReminderFired(ctx, reminderID, now); err != nil {
+			return err
 		}
-		meta, err := s.store.GetReminder(taskID)
-		if err != nil {
-			return nil, err
-		}
-		if meta == nil {
-			continue
-		}
-		// Self-heal: a reminder edge should never exist for a terminal task. If
-		// one lingers (e.g. a crash between the status update and edge cleanup,
-		// or an older code path), drop it now so we never DM about a done/
-		// cancelled task. This guards the index from ANY source of staleness,
-		// not just SetStatus.
-		t, err := s.store.GetTask(taskID)
-		if err != nil {
-			return nil, err
-		}
-		if t == nil {
-			// Task gone (orphan edge) — clean it up.
-			_ = s.store.DeleteReminder(taskID)
-			continue
-		}
-		if t.Status == model.StatusDone || t.Status == model.StatusCancelled {
-			_ = s.store.DeleteReminder(taskID)
-			continue
-		}
-		fireAt := meta.FireMS()
-		graceMS := grace.Milliseconds()
-		if nowMs < fireAt {
-			continue // not yet
-		}
-		if nowMs > meta.DueMS+graceMS {
-			// Window closed without firing (scheduler was down): mark fired and
-			// drop the edge so it never fires late.
-			if err := s.MarkReminderFired(taskID); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if meta.AssigneeID == "" {
-			continue // nothing to send without an assignee
-		}
-		due = append(due, DueReminder{
-			TaskID:     taskID,
-			AssigneeID: meta.AssigneeID,
-			DueMS:      meta.DueMS,
+		return tx.AppendTaskEvent(ctx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    taskID,
+			EventType: model.EventReminderSet,
+			CreatedAt: now,
 		})
-	}
-	return due, nil
-}
-
-// MarkReminderFired drops the reminder index edge and sets ReminderFired=true on
-// the task so it will not fire again until reset (due change / reopen).
-func (s *Service) MarkReminderFired(taskID string) error {
-	if err := s.store.DeleteReminder(taskID); err != nil {
-		return err
-	}
-	task, err := s.store.GetTask(taskID)
-	if err != nil {
-		return err
-	}
-	if task == nil {
-		return nil
-	}
-	task.ReminderFired = true
-	return s.store.SaveTask(*task)
+	})
 }
 
 // PatchInput is the partial-update payload. Only fields listed in UpdateFields
@@ -791,15 +745,15 @@ type PatchInput struct {
 	IsAllDay     *bool
 }
 
-// Patch applies a partial update to the task identified by id. UpdatedAt is
-// refreshed. Only the fields named in UpdateFields are touched.
+// Patch applies a partial update to the task identified by id. A due change
+// re-arms the reminder (resetting fired_at) if a reminder offset exists, or
+// leaves it cleared otherwise. All writes commit atomically via WithTx.
 func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
-	task, err := s.store.GetTask(id)
+	ctx, cancel := s.ctx()
+	defer cancel()
+	row, err := s.loadTaskRow(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-	if task == nil {
-		return nil, ErrNotFound
 	}
 
 	changed := false
@@ -808,45 +762,60 @@ func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
 		switch field {
 		case "summary":
 			if in.Summary != nil {
-				task.Summary = *in.Summary
+				row.Summary = *in.Summary
 				changed = true
 			}
 		case "description":
-			task.Description = derefStr(in.Description)
+			row.Description = derefStr(in.Description)
 			changed = true
 		case "due":
-			task.Due = in.Due
+			row.Due = in.Due
 			changed = true
 			dueChanged = true
 		case "is_all_day":
-			task.IsAllDay = derefBool(in.IsAllDay)
+			row.IsAllDay = derefBool(in.IsAllDay)
 			changed = true
 		}
 	}
-
 	if !changed {
-		// Nothing to do; still refresh UpdatedAt for consistency with callers
-		// that treat a successful PATCH as a state change.
-		return task, nil
+		return s.assembleTask(ctx, row)
 	}
 
-	// A due change resets the fired flag so the reminder can fire again under
-	// the new deadline, and rebuilds the index to match the new schedule.
-	if dueChanged {
-		task.ReminderFired = false
-	}
+	now := nowFunc()
+	row.UpdatedAt = now
 
-	task.UpdatedAt = nowFunc()
-	if err := s.store.SaveTask(*task); err != nil {
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		updated, err := tx.UpdateTask(txCtx, *row)
+		if err != nil {
+			return err
+		}
+		row = &updated
+
+		// A due change resets the reminder so it can fire under the new
+		// deadline (if a reminder offset exists).
+		if dueChanged {
+			reminders, rErr := tx.ListReminders(txCtx, id)
+			if rErr != nil {
+				return rErr
+			}
+			if row.Due != nil && len(reminders) > 0 {
+				if _, err := tx.SetReminder(txCtx, reminders[0].ID, id, reminders[0].OffsetMS); err != nil {
+					return err
+				}
+			}
+		}
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    id,
+			EventType: model.EventDueChanged,
+			CreatedAt: now,
+		})
+	}); err != nil {
 		return nil, err
 	}
-
-	if dueChanged {
-		if err := s.rebuildReminderIndex(task); err != nil {
-			return nil, err
-		}
-	}
-	return task, nil
+	return s.assembleTask(ctx, row)
 }
 
 func derefStr(p *string) string {
@@ -863,6 +832,10 @@ func derefBool(p *bool) bool {
 	return *p
 }
 
+// ptrString returns a pointer to s; used for TaskEvent.FromValue/ToValue which
+// are *string.
+func ptrString(s string) *string { return &s }
+
 // ErrNotFound is returned by Get/Patch/Delete when the task id does not exist.
 var ErrNotFound = errors.New("task not found")
 
@@ -870,14 +843,9 @@ var ErrNotFound = errors.New("task not found")
 // task id that does not exist.
 var ErrParentNotFound = errors.New("parent task not found")
 
-// ErrCommentContentRequired is returned by AddComment when the content is empty
-// (or whitespace). Callers should map it with errors.Is rather than substring
-// matching on the message.
-var ErrCommentContentRequired = errors.New("comment content is required")
-
-// AssignEvent describes the result of an assignee change so callers (REST/
-// command handlers) can fire the appropriate notification without re-reading
-// the task. OldAssigneeID is empty when the task had no assignee before.
+// AssignEvent describes the result of an assignee change so callers can fire
+// the notification without re-reading the task. OldAssigneeID is empty when the
+// task had no assignee before.
 type AssignEvent struct {
 	TaskID        string
 	OldAssigneeID string
@@ -885,146 +853,105 @@ type AssignEvent struct {
 	CreatorID     string
 }
 
-// Assign sets the task's single assignee to newAssigneeID, swapping the
-// idx:u:{old}:assigned:{id} and idx:u:{new}:assigned:{id} index edges and
-// refreshing UpdatedAt. It also keeps any active reminder edge consistent by
-// rebuilding the reminder index (the stored ReminderMetadata.AssigneeID tracks
-// the current assignee). An empty newAssigneeID clears the assignee.
-//
-// It returns the updated task and an AssignEvent describing the change. A
-// no-op assign (same user) returns the task without touching indexes.
+// Assign sets the task's single assignee to newAssigneeID. Because the assignee
+// is a task_members row (not a column), SwapAssignee replaces the KV store's
+// DeleteIndex+SaveIndex pair in one atomic statement; the reminder row no
+// longer needs resync because ListDueReminders JOINs the assignee at fire
+// time. An "assigned"/"unassigned" audit event is appended in the same tx.
 func (s *Service) Assign(id, newAssigneeID string) (*model.Task, AssignEvent, error) {
-	task, err := s.store.GetTask(id)
-	if err != nil {
-		return nil, AssignEvent{}, err
-	}
-	if task == nil {
-		return nil, AssignEvent{}, ErrNotFound
+	ctx, cancel := s.ctx()
+	defer cancel()
+	row, loadErr := s.loadTaskRow(ctx, id)
+	if loadErr != nil {
+		return nil, AssignEvent{}, loadErr
 	}
 
-	oldAssigneeID := task.AssigneeID
+	oldAssigneeID, _ := s.store.GetMemberByRole(ctx, id, model.MemberRoleAssignee)
 	if oldAssigneeID == newAssigneeID {
-		return task, AssignEvent{
-			TaskID:        task.ID,
+		t, asmErr := s.assembleTask(ctx, row)
+		if asmErr != nil {
+			return nil, AssignEvent{}, asmErr
+		}
+		return t, AssignEvent{
+			TaskID:        id,
 			OldAssigneeID: oldAssigneeID,
 			NewAssigneeID: newAssigneeID,
-			CreatorID:     task.CreatorID,
 		}, nil
 	}
 
-	// Swap the assigned index edges by their full known keys (no scan).
-	if oldAssigneeID != "" {
-		if err := s.store.DeleteIndex(kvstore.UserAssignedKey(oldAssigneeID, task.ID)); err != nil {
-			return nil, AssignEvent{}, err
-		}
-	}
-	if newAssigneeID != "" {
-		if err := s.store.SaveIndex(kvstore.UserAssignedKey(newAssigneeID, task.ID)); err != nil {
-			return nil, AssignEvent{}, err
-		}
+	now := nowFunc()
+	eventType := model.EventAssigned
+	if newAssigneeID == "" {
+		eventType = model.EventUnassigned
 	}
 
-	task.AssigneeID = newAssigneeID
-	task.UpdatedAt = nowFunc()
-	if err := s.store.SaveTask(*task); err != nil {
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		// Empty new assignee means "unassign": remove the assignee edge.
+		if newAssigneeID == "" {
+			return tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee)
+		}
+		if err := tx.SwapAssignee(txCtx, id, oldAssigneeID, newAssigneeID); err != nil {
+			return err
+		}
+		if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
+			return err
+		}
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    id,
+			EventType: eventType,
+			CreatedAt: now,
+			FromValue: ptrString(oldAssigneeID),
+			ToValue:   ptrString(newAssigneeID),
+		})
+	}); err != nil {
 		return nil, AssignEvent{}, err
 	}
 
-	// Keep the reminder edge's stored assignee in sync (rebuild is a no-op when
-	// the task isn't reminder-eligible).
-	if err := s.rebuildReminderIndex(task); err != nil {
+	creatorID, _ := s.store.GetMemberByRole(ctx, id, model.MemberRoleCreator)
+	t, err := s.assembleTask(ctx, row)
+	if err != nil {
 		return nil, AssignEvent{}, err
 	}
-
-	return task, AssignEvent{
-		TaskID:        task.ID,
+	return t, AssignEvent{
+		TaskID:        id,
 		OldAssigneeID: oldAssigneeID,
 		NewAssigneeID: newAssigneeID,
-		CreatorID:     task.CreatorID,
+		CreatorID:     creatorID,
 	}, nil
 }
 
-// Delete hard-deletes the task and everything attached to it, following the
-// cascade order from PLAN.md section 4.3:
-//
-//  1. Subtasks (recursively, discovered via idx:t:{id}:sub:)
-//  2. Comments (discovered via t:{id}:c:)
-//  3. Index markers — deleted by their full known keys derived from the entity
-//     (no ListKeys scan), plus the reminder edge.
-//  4. The task entity itself.
-//
-// Crashes between steps may leave a few orphan marker keys; reads tolerate
-// those defensively (ListTaskIDsByPrefix self-heals).
+// Delete hard-deletes the task and everything attached to it. The FK ON DELETE
+// CASCADE on task_members/task_reminders/task_posts/task_comments/task_events
+// and the self-FK on task_tasks (subtasks) remove all dependents in one call —
+// the KV store's manual N-step cascade is gone.
 func (s *Service) Delete(id string) error {
-	task, err := s.store.GetTask(id)
-	if err != nil {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	if err := s.store.DeleteTask(ctx, id); err != nil {
+		if errors.Is(err, store.ErrTaskNotFound) {
+			return ErrNotFound
+		}
 		return err
 	}
-	if task == nil {
-		return ErrNotFound
-	}
-
-	// 1. Subtasks (recursive).
-	subIDs, err := s.store.GetSubtaskIDs(id)
-	if err != nil {
-		return errors.Wrap(err, "failed to list subtasks for cascade delete")
-	}
-	for _, subID := range subIDs {
-		if derr := s.Delete(subID); derr != nil && !errors.Is(derr, ErrNotFound) {
-			return derr
-		}
-	}
-
-	// 2. Comments.
-	commentIDs, err := s.store.GetCommentIDs(id)
-	if err != nil {
-		return errors.Wrap(err, "failed to list comments for cascade delete")
-	}
-	for _, cid := range commentIDs {
-		if err := s.store.DeleteIndex(kvstore.CommentKey(id, cid)); err != nil {
-			return err
-		}
-	}
-
-	// 3. Index markers by their full known keys.
-	if task.AssigneeID != "" {
-		if err := s.store.DeleteIndex(kvstore.UserAssignedKey(task.AssigneeID, task.ID)); err != nil {
-			return err
-		}
-	}
-	if err := s.store.DeleteIndex(kvstore.UserCreatedKey(task.CreatorID, task.ID)); err != nil {
-		return err
-	}
-	if task.ChannelID != "" {
-		if err := s.store.DeleteIndex(kvstore.ChannelTaskKey(task.ChannelID, task.ID)); err != nil {
-			return err
-		}
-	}
-	if err := s.store.DeleteIndex(kvstore.AllTasksKey(task.ID)); err != nil {
-		return err
-	}
-	if task.ParentTaskID != "" {
-		if err := s.store.DeleteIndex(kvstore.SubtaskKey(task.ParentTaskID, task.ID)); err != nil {
-			return err
-		}
-	}
-	// Best-effort reminder edge cleanup.
-	_ = s.store.DeleteReminder(task.ID)
-
-	// 4. Entity.
-	return s.store.DeleteTask(id)
+	return nil
 }
 
-// Scope enumerates the list result scopes.
+// Scope enumerates the list result scopes. These mirror store.Scope so the
+// service layer keeps its own read-friendly names while delegating to the
+// store's enum.
 type Scope string
 
 const (
-	ScopeMine    Scope = "mine"
-	ScopeChannel Scope = "channel"
-	ScopeAll     Scope = "all"
+	ScopeMine    Scope = Scope(store.ScopeMine)
+	ScopeChannel Scope = Scope(store.ScopeChannel)
+	ScopeAll     Scope = Scope(store.ScopeAll)
 )
 
-// ListQuery is the filtered/paginated list request.
+// ListQuery is the filtered/paginated list request. It mirrors store.ListQuery;
+// the service maps its loose Due string to a store.DueFilter.
 type ListQuery struct {
 	Scope         Scope
 	UserID        string // required for ScopeMine
@@ -1038,141 +965,87 @@ type ListQuery struct {
 // DefaultLimit is the default page size for list queries.
 const DefaultLimit = 50
 
-// List returns the tasks matching the query, filtered in memory after loading
-// candidate ids from the relevant index. Results are sorted by OrderKey and
-// paged by the AfterOrderKey cursor. Missing entities are skipped defensively.
-func (s *Service) List(q ListQuery) ([]model.Task, error) {
+// List returns the tasks matching the query. The WHERE, ORDER BY, and LIMIT are
+// all pushed to the database via store.ListTasks (replacing the KV store's
+// load-all-candidates + filter-in-Go loop); the page rows are then assembled
+// into model.Task entities.
+func (s *Service) List(q ListQuery) ([]*model.Task, error) {
 	if q.Limit <= 0 {
 		q.Limit = DefaultLimit
 	}
+	ctx, cancel := s.ctx()
+	defer cancel()
 
-	ids, err := s.candidateIDs(q)
+	page, err := s.store.ListTasks(ctx, store.ListQuery{
+		Scope:         store.Scope(q.Scope),
+		UserID:        q.UserID,
+		ChannelID:     q.ChannelID,
+		Status:        q.Status,
+		Due:           mapDueFilter(q.Due),
+		DueAsOf:       nowFunc(),
+		AfterOrderKey: q.AfterOrderKey,
+		Limit:         q.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	tasks := make([]model.Task, 0, len(ids))
-	for _, id := range ids {
-		t, err := s.store.GetTask(id)
+	out := make([]*model.Task, 0, len(page.Items))
+	for _, item := range page.Items {
+		row, ok := item.(*model.TaskRow)
+		if !ok {
+			continue
+		}
+		t, err := s.assembleTask(ctx, row)
 		if err != nil {
 			return nil, err
 		}
-		if t == nil {
-			continue // self-healing: skip stale markers
-		}
-		if !matchStatus(t, q.Status) {
-			continue
-		}
-		if !matchDue(t, q.Due, nowFunc()) {
-			continue
-		}
-		if q.AfterOrderKey != "" && t.OrderKey <= q.AfterOrderKey {
-			continue
-		}
-		tasks = append(tasks, *t)
+		out = append(out, t)
 	}
-
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].OrderKey < tasks[j].OrderKey })
-
-	if len(tasks) > q.Limit {
-		tasks = tasks[:q.Limit]
-	}
-	return tasks, nil
+	// Preserve the store's order_key ASC ordering (items are already sorted);
+	// this sort is a defensive no-op if the store honoured the request.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].OrderKey < out[j].OrderKey })
+	return out, nil
 }
 
-// candidateIDs returns the raw task id candidates for the query scope.
-func (s *Service) candidateIDs(q ListQuery) ([]string, error) {
-	switch q.Scope {
-	case ScopeChannel:
-		return s.store.ListChannelTaskIDs(q.ChannelID)
-	case ScopeMine:
-		// My Tasks = tasks assigned to the user (flat: includes subtasks they
-		// own as independent tasks — PLAN.md section 5.5).
-		return s.store.ListUserAssignedTaskIDs(q.UserID)
-	default: // ScopeAll or unset
-		return s.store.ListAllTaskIDs()
-	}
-}
-
-func matchStatus(t *model.Task, status string) bool {
-	if status == "" {
-		return true
-	}
-	return t.Status == status
-}
-
-// matchDue reports whether the task's due date falls within the requested due
-// bucket. Tasks with no due date never match a specific bucket but do match the
-// empty ("any") bucket.
-func matchDue(t *model.Task, due string, nowMs int64) bool {
-	if due == "" {
-		return true
-	}
-	if t.Due == nil {
-		return false
-	}
+// mapDueFilter converts the loose Due string from the REST/command layer into a
+// store.DueFilter. Unknown values map to DueAny (no filter).
+func mapDueFilter(due string) store.DueFilter {
 	switch strings.ToLower(due) {
 	case "overdue":
-		return *t.Due < nowMs
+		return store.DueOverdue
 	case "today":
-		start, end := dayBounds(nowMs)
-		return *t.Due >= start && *t.Due <= end
+		return store.DueToday
 	case "week":
-		start := startOfDay(nowMs)
-		week := 7 * 24 * int64(time.Hour) / int64(time.Millisecond)
-		return *t.Due >= start && *t.Due < start+week
+		return store.DueWeek
 	default:
-		return true
+		return store.DueAny
 	}
-}
-
-// dayBounds returns the [start, end) millisecond range of the calendar day
-// (UTC) containing nowMs. end is the last ms of the day (inclusive) so callers
-// can test end+1ms for an exclusive upper bound.
-func dayBounds(nowMs int64) (int64, int64) {
-	const day = 24 * int64(time.Hour) / int64(time.Millisecond)
-	start := nowMs - nowMs%day
-	return start, start + day - 1
-}
-
-func startOfDay(nowMs int64) int64 {
-	const day = 24 * int64(time.Hour) / int64(time.Millisecond)
-	return nowMs - nowMs%day
 }
 
 // Search returns up to limit tasks whose Summary or Description contains
-// keyword (case-insensitive). It scans the global index; sufficient for the MVP
-// escape hatch (PLAN.md section 5.2). keyword == "" returns an empty result.
-func (s *Service) Search(keyword string, limit int) ([]model.Task, error) {
+// keyword (case-insensitive). The ILIKE/LIKE is pushed to the database via
+// store.SearchTasks, replacing the KV store's load-all + strings.Contains loop.
+func (s *Service) Search(keyword string, limit int) ([]*model.Task, error) {
 	if keyword == "" {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
-	needle := strings.ToLower(keyword)
-
-	ids, err := s.store.ListAllTaskIDs()
+	ctx, cancel := s.ctx()
+	defer cancel()
+	rows, err := s.store.SearchTasks(ctx, keyword, limit)
 	if err != nil {
 		return nil, err
 	}
-
-	results := make([]model.Task, 0, limit)
-	for _, id := range ids {
-		t, err := s.store.GetTask(id)
+	out := make([]*model.Task, 0, len(rows))
+	for i := range rows {
+		t, err := s.assembleTask(ctx, &rows[i])
 		if err != nil {
 			return nil, err
 		}
-		if t == nil {
-			continue
-		}
-		if strings.Contains(strings.ToLower(t.Summary), needle) ||
-			strings.Contains(strings.ToLower(t.Description), needle) {
-			results = append(results, *t)
-			if len(results) >= limit {
-				break
-			}
-		}
+		out = append(out, t)
 	}
-	return results, nil
+	return out, nil
 }

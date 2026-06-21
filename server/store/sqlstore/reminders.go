@@ -9,6 +9,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
+
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
@@ -18,9 +20,8 @@ const remindersTableShort = "reminders"
 // reminderColumns lists every column of task_reminders in scan order.
 var reminderColumns = []string{"id", "task_id", "offset_ms", "fired_at", "created_at"}
 
-// ErrReminderNotFound is returned by MarkReminderFired / ClearReminder when no
+// store.ErrReminderNotFound is returned by MarkReminderFired / ClearReminder when no
 // matching reminder row exists.
-var ErrReminderNotFound = errors.New("task reminder not found")
 
 // SetReminder sets the reminder for a task. The MVP enforces one reminder per
 // task, backed by the UNIQUE(task_id) constraint: the INSERT uses ON CONFLICT
@@ -196,7 +197,7 @@ func (s *SQLStore) MarkReminderFired(ctx context.Context, reminderID string, fir
 		return fmt.Errorf("mark reminder fired %s: rows affected: %w", reminderID, err)
 	}
 	if rows == 0 {
-		return ErrReminderNotFound
+		return store.ErrReminderNotFound
 	}
 	return nil
 }

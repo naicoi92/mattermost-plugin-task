@@ -52,7 +52,7 @@ func minimalSubmission(summary, scope string) map[string]any {
 }
 
 func TestSubmitNewTaskDialog_EmptySummaryRejected(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("u1", "ch1", minimalSubmission("", "channel"))
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body, "u1"))
@@ -65,7 +65,7 @@ func TestSubmitNewTaskDialog_EmptySummaryRejected(t *testing.T) {
 }
 
 func TestSubmitNewTaskDialog_InvalidDueRejected(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	sub := minimalSubmission("Review PR", "channel")
 	sub[dialogFieldTaskDue] = "abc"
@@ -80,7 +80,7 @@ func TestSubmitNewTaskDialog_InvalidDueRejected(t *testing.T) {
 func TestSubmitNewTaskDialog_DueZeroOrNegativeRejected(t *testing.T) {
 	for _, due := range []string{"0", "-1"} {
 		t.Run("due="+due, func(t *testing.T) {
-			p, _ := newTestPlugin()
+			p, _ := newTestPlugin(t)
 			w := httptest.NewRecorder()
 			sub := minimalSubmission("Review PR", "channel")
 			sub[dialogFieldTaskDue] = due
@@ -95,7 +95,7 @@ func TestSubmitNewTaskDialog_DueZeroOrNegativeRejected(t *testing.T) {
 }
 
 func TestSubmitNewTaskDialog_ChannelScopeUsesStateChannel(t *testing.T) {
-	p, store := newTestPlugin()
+	p, store := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("u1", "ch1", minimalSubmission("Review PR", "channel"))
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body, "u1"))
@@ -105,8 +105,8 @@ func TestSubmitNewTaskDialog_ChannelScopeUsesStateChannel(t *testing.T) {
 	assert.Empty(t, resp.Error, "successful submit closes the dialog with no error")
 
 	// The created task must be scoped to the channel carried in the dialog state.
-	require.Len(t, store.tasks, 1)
-	for _, tsk := range store.tasks {
+	require.Len(t, allTasks(t, store), 1)
+	for _, tsk := range allTasks(t, store) {
 		assert.Equal(t, "Review PR", tsk.Summary)
 		assert.Equal(t, "u1", tsk.CreatorID)
 		assert.Equal(t, "ch1", tsk.ChannelID, "scope=channel uses the state channel id")
@@ -114,7 +114,7 @@ func TestSubmitNewTaskDialog_ChannelScopeUsesStateChannel(t *testing.T) {
 }
 
 func TestSubmitNewTaskDialog_PersonalScopeClearsChannel(t *testing.T) {
-	p, store := newTestPlugin()
+	p, store := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	// State still carries a channel id, but scope=personal must override it.
 	body := submissionEnvelope("u1", "ch1", minimalSubmission("Personal errand", "personal"))
@@ -124,14 +124,14 @@ func TestSubmitNewTaskDialog_PersonalScopeClearsChannel(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Empty(t, resp.Error)
 
-	require.Len(t, store.tasks, 1)
-	for _, tsk := range store.tasks {
+	require.Len(t, allTasks(t, store), 1)
+	for _, tsk := range allTasks(t, store) {
 		assert.Empty(t, tsk.ChannelID, "scope=personal clears the channel id")
 	}
 }
 
 func TestSubmitNewTaskDialog_AssigneeAndDueAndDescriptionApplied(t *testing.T) {
-	p, store := newTestPlugin()
+	p, store := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	sub := minimalSubmission("Ship release", "channel")
 	sub[dialogFieldAssignee] = "u-assignee"
@@ -144,8 +144,8 @@ func TestSubmitNewTaskDialog_AssigneeAndDueAndDescriptionApplied(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Empty(t, resp.Error)
 
-	require.Len(t, store.tasks, 1)
-	for _, tsk := range store.tasks {
+	require.Len(t, allTasks(t, store), 1)
+	for _, tsk := range allTasks(t, store) {
 		assert.Equal(t, "u-assignee", tsk.AssigneeID)
 		require.NotNil(t, tsk.Due)
 		assert.Equal(t, int64(1_700_000_000_000), *tsk.Due)
@@ -156,7 +156,7 @@ func TestSubmitNewTaskDialog_AssigneeAndDueAndDescriptionApplied(t *testing.T) {
 // Personal task (no channel card, no DM) triggers the ephemeral confirmation
 // so the user gets feedback that the task was created (fix #4).
 func TestSubmitNewTaskDialog_PersonalTaskSendsEphemeralConfirmation(t *testing.T) {
-	p, store := newTestPlugin()
+	p, store := newTestPlugin(t)
 	api := p.API.(*plugintest.API)
 
 	w := httptest.NewRecorder()
@@ -167,8 +167,8 @@ func TestSubmitNewTaskDialog_PersonalTaskSendsEphemeralConfirmation(t *testing.T
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Empty(t, resp.Error)
 
-	require.Len(t, store.tasks, 1)
-	for _, tsk := range store.tasks {
+	require.Len(t, allTasks(t, store), 1)
+	for _, tsk := range allTasks(t, store) {
 		assert.Empty(t, tsk.ChannelID, "personal task has no channel card")
 	}
 	api.AssertCalled(t, "SendEphemeralPost", "u1", mock.Anything)
@@ -181,7 +181,7 @@ func TestSubmitNewTaskDialog_PersonalTaskSendsEphemeralConfirmation(t *testing.T
 // harness — a test artifact, not a code path). The personal-task test above
 // already pins the ephemeral-on-no-card contract.
 func TestSubmitNewTaskDialog_ChannelTaskCreatedWithChannelScope(t *testing.T) {
-	p, store := newTestPlugin()
+	p, store := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("u1", "ch1", minimalSubmission("Review PR", "channel"))
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body, "u1"))
@@ -190,8 +190,8 @@ func TestSubmitNewTaskDialog_ChannelTaskCreatedWithChannelScope(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Empty(t, resp.Error)
 
-	require.Len(t, store.tasks, 1)
-	for _, tsk := range store.tasks {
+	require.Len(t, allTasks(t, store), 1)
+	for _, tsk := range allTasks(t, store) {
 		assert.Equal(t, "ch1", tsk.ChannelID, "channel task has a channel card")
 	}
 }
@@ -206,7 +206,7 @@ func TestSubmitNewTaskDialog_ChannelTaskCreatedWithChannelScope(t *testing.T) {
 // WITHOUT the Mattermost-User-ID header and asserts the handler runs and
 // creates the task (instead of returning 401 as it did before #109).
 func TestSubmitNewTaskDialog_NoAuthHeaderStillRuns(t *testing.T) {
-	p, store := newTestPlugin()
+	p, store := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("u1", "ch1", minimalSubmission("Ship release", "channel"))
 	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body))
@@ -218,8 +218,8 @@ func TestSubmitNewTaskDialog_NoAuthHeaderStillRuns(t *testing.T) {
 	assert.Empty(t, resp.Error, "successful submit closes the dialog")
 
 	// The actor (req.UserId from the body, not the header) created the task.
-	require.Len(t, store.tasks, 1)
-	for _, tsk := range store.tasks {
+	require.Len(t, allTasks(t, store), 1)
+	for _, tsk := range allTasks(t, store) {
 		assert.Equal(t, "u1", tsk.CreatorID, "actor taken from body UserId")
 	}
 }
@@ -228,7 +228,7 @@ func TestSubmitNewTaskDialog_NoAuthHeaderStillRuns(t *testing.T) {
 // submit callback whose body carries no user id is rejected with 401 even
 // though the route bypasses the auth middleware.
 func TestSubmitNewTaskDialog_MissingUserIDRejected(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("", "ch1", minimalSubmission("Ship release", "channel"))
 	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/newtask", body))
@@ -240,7 +240,7 @@ func TestSubmitNewTaskDialog_MissingUserIDRejected(t *testing.T) {
 // submission WITHOUT the Mattermost-User-ID header and asserts the handler
 // runs (200 + SubmitDialogResponse) instead of 401.
 func TestSubmitQuickListDialog_NoAuthHeaderStillRuns(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("u1", "", map[string]any{
 		dialogFieldTaskPick: "t1",
@@ -256,7 +256,7 @@ func TestSubmitQuickListDialog_NoAuthHeaderStillRuns(t *testing.T) {
 // TestSubmitQuickListDialog_MissingUserIDRejected verifies the hardening for
 // the Quick List callback.
 func TestSubmitQuickListDialog_MissingUserIDRejected(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	body := submissionEnvelope("", "", map[string]any{dialogFieldTaskPick: "t1"})
 	p.ServeHTTP(nil, w, unauthedRequest(http.MethodPost, "/api/v1/dialogs/quicklist", body))
@@ -268,7 +268,7 @@ func TestSubmitQuickListDialog_MissingUserIDRejected(t *testing.T) {
 // WITHOUT the Mattermost-User-ID header and asserts the handler runs (not
 // 401). The task must exist first so the PATCH path is exercised.
 func TestSubmitTaskDetailDialog_NoAuthHeaderStillRuns(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	created, err := p.taskService.Create(task.CreateInput{Summary: "Old", CreatorID: "u1"})
 	require.NoError(t, err)
 
@@ -292,7 +292,7 @@ func TestSubmitTaskDetailDialog_NoAuthHeaderStillRuns(t *testing.T) {
 // TestSubmitTaskDetailDialog_MissingUserIDRejected verifies the hardening for
 // the Task Detail callback.
 func TestSubmitTaskDetailDialog_MissingUserIDRejected(t *testing.T) {
-	p, _ := newTestPlugin()
+	p, _ := newTestPlugin(t)
 	created, err := p.taskService.Create(task.CreateInput{Summary: "Old", CreatorID: "u1"})
 	require.NoError(t, err)
 

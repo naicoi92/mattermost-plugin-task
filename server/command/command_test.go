@@ -67,19 +67,19 @@ type fakeStatusService struct {
 	subtaskResult   *taskmodel.Task
 	subtaskErr      error
 
-	commentTaskID  string
-	commentUserID  string
-	commentContent string
-	commentResult  taskmodel.Comment
-	commentEvent   task.CommentEvent
-	commentErr     error
+	commentTaskID string
+	commentPostID string
+	commentUserID string
+	commentResult taskmodel.TaskComment
+	commentEvent  task.CommentEvent
+	commentErr    error
 
 	listQuery  task.ListQuery
-	listResult []taskmodel.Task
+	listResult []*taskmodel.Task
 	listErr    error
 
 	searchKeyword string
-	searchResult  []taskmodel.Task
+	searchResult  []*taskmodel.Task
 	searchErr     error
 
 	createInput task.CreateInput
@@ -129,19 +129,19 @@ func (f *fakeStatusService) CreateSubtask(parentID, creatorID, summary, assignee
 	return f.subtaskResult, f.subtaskErr
 }
 
-func (f *fakeStatusService) AddComment(taskID, userID, content string) (taskmodel.Comment, task.CommentEvent, error) {
+func (f *fakeStatusService) LinkComment(taskID, postID, userID string) (taskmodel.TaskComment, task.CommentEvent, error) {
 	f.commentTaskID = taskID
+	f.commentPostID = postID
 	f.commentUserID = userID
-	f.commentContent = content
 	return f.commentResult, f.commentEvent, f.commentErr
 }
 
-func (f *fakeStatusService) List(q task.ListQuery) ([]taskmodel.Task, error) {
+func (f *fakeStatusService) List(q task.ListQuery) ([]*taskmodel.Task, error) {
 	f.listQuery = q
 	return f.listResult, f.listErr
 }
 
-func (f *fakeStatusService) Search(keyword string, limit int) ([]taskmodel.Task, error) {
+func (f *fakeStatusService) Search(keyword string, limit int) ([]*taskmodel.Task, error) {
 	f.searchKeyword = keyword
 	return f.searchResult, f.searchErr
 }
@@ -177,7 +177,7 @@ func TestHelloCommand(t *testing.T) {
 func TestTaskStatus_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "Review PR"}}
+	svc := &fakeStatusService{result: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review PR"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task status T1 done"})
@@ -190,7 +190,7 @@ func TestTaskStatus_Command(t *testing.T) {
 func TestTaskDone_Shortcut(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "x"}}
+	svc := &fakeStatusService{result: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "x"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task done T1"})
@@ -216,7 +216,7 @@ func TestTaskDone_BlockedByOpenSubtask(t *testing.T) {
 func TestTaskCancel_Shortcut(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "x"}}
+	svc := &fakeStatusService{result: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "x"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task cancel T1"})
@@ -280,8 +280,8 @@ func TestTaskSubtask_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{
-		getResult:     &taskmodel.Task{ID: "P1", Summary: "parent", CreatorID: "u-me"},
-		subtaskResult: &taskmodel.Task{ID: "C1", Summary: "fix tests", ParentTaskID: "P1"},
+		getResult:     &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "P1", Summary: "parent"}, CreatorID: "u-me"},
+		subtaskResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "C1", Summary: "fix tests", ParentTaskID: "P1"}},
 	}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
@@ -298,7 +298,7 @@ func TestTaskSubtask_RequiresModifyPermission(t *testing.T) {
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	// Parent owned by u-other; actor u-stranger has no permission.
 	svc := &fakeStatusService{
-		getResult: &taskmodel.Task{ID: "P1", Summary: "parent", CreatorID: "u-other"},
+		getResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "P1", Summary: "parent"}, CreatorID: "u-other"},
 	}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
@@ -332,9 +332,12 @@ func TestTaskSubtask_Usage(t *testing.T) {
 func TestTaskComment_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
+	// Comment-as-thread: the handler creates the reply post first (via the
+	// plugin API), then links it. Stub CreatePost to return a post with an id.
+	env.api.On("CreatePost", mockAnything()).Return(&model.Post{Id: "post-1"}, nil)
 	svc := &fakeStatusService{
-		getResult:     &taskmodel.Task{ID: "T1", Summary: "task", CreatorID: "u-me"},
-		commentResult: taskmodel.Comment{ID: "C1", Content: "looks good to me"},
+		getResult:     &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "task"}, CreatorID: "u-me"},
+		commentResult: taskmodel.TaskComment{ID: "C1", PostID: "post-1"},
 		commentEvent:  task.CommentEvent{TaskID: "T1", UserID: "u-me", CreatorID: "u-me"},
 	}
 	// CommentNotifier is wired to capture the call.
@@ -345,8 +348,8 @@ func TestTaskComment_Command(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "Comment added")
 	assert.Equal(t, "T1", svc.commentTaskID)
+	assert.Equal(t, "post-1", svc.commentPostID)
 	assert.Equal(t, "u-me", svc.commentUserID)
-	assert.Equal(t, "looks good to me", svc.commentContent)
 	assert.Equal(t, "T1", notifier.taskID, "comment DM fired to participants")
 }
 
@@ -368,7 +371,7 @@ func TestTaskComment_RequiresPermission(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	svc := &fakeStatusService{
-		getResult: &taskmodel.Task{ID: "T1", Summary: "task", CreatorID: "u-owner"},
+		getResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "task"}, CreatorID: "u-owner"},
 	}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
@@ -383,10 +386,11 @@ func TestTaskComment_RequiresPermission(t *testing.T) {
 func TestTaskComment_UsesAuthorizer(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	task := &taskmodel.Task{ID: "T1", Summary: "task", CreatorID: "u-owner"}
+	env.api.On("CreatePost", mockAnything()).Return(&model.Post{Id: "post-1"}, nil)
+	task := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "task"}, CreatorID: "u-owner"}
 	svc := &fakeStatusService{
 		getResult:     task,
-		commentResult: taskmodel.Comment{ID: "C1", Content: "ok"},
+		commentResult: taskmodel.TaskComment{ID: "C1", PostID: "post-1"},
 	}
 	handler := NewCommandHandler(env.client, svc, Options{CommentAuthorizer: allowCommentAuthorizer{}})
 
@@ -439,7 +443,7 @@ func TestTaskEdit_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	env.api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
-	svc := &fakeStatusService{patchResult: &taskmodel.Task{Summary: "new"}}
+	svc := &fakeStatusService{patchResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{Summary: "new"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 summary=New title due=1700000000000"})
@@ -457,7 +461,7 @@ func TestTaskEdit_Command(t *testing.T) {
 func TestTaskEdit_ClearDue(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{patchResult: &taskmodel.Task{Summary: "x"}}
+	svc := &fakeStatusService{patchResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{Summary: "x"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 due=0"})
@@ -469,7 +473,7 @@ func TestTaskEdit_ClearDue(t *testing.T) {
 func TestTaskEdit_DescriptionAlias(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{patchResult: &taskmodel.Task{Summary: "x"}}
+	svc := &fakeStatusService{patchResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{Summary: "x"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 description=hello"})
@@ -521,7 +525,7 @@ func TestParseEditFields_UnknownKey(t *testing.T) {
 func TestTaskRemind_SetOffset(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{reminderResult: &taskmodel.Task{Summary: "x"}}
+	svc := &fakeStatusService{reminderResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{Summary: "x"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task remind T1 1h"})
@@ -535,7 +539,7 @@ func TestTaskRemind_SetOffset(t *testing.T) {
 func TestTaskRemind_Off(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{reminderResult: &taskmodel.Task{Summary: "x"}}
+	svc := &fakeStatusService{reminderResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{Summary: "x"}}}
 	handler := NewCommandHandler(env.client, svc, Options{})
 
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task remind T1 off"})
@@ -650,7 +654,7 @@ func (f *fakeNotifier) NotifyCancelled(ref TaskRef, actorID, creatorID, assignee
 func TestTaskStatus_DoneNotifies(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "Ship", CreatorID: "creator", AssigneeID: "assignee"}}
+	svc := &fakeStatusService{result: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Ship"}, CreatorID: "creator", AssigneeID: "assignee"}}
 	notif := &fakeNotifier{}
 	handler := NewCommandHandler(env.client, svc, Options{Notifier: notif})
 
@@ -665,7 +669,7 @@ func TestTaskStatus_DoneNotifies(t *testing.T) {
 func TestTaskStatus_CancelNotifies(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "Drop", CreatorID: "creator", AssigneeID: "assignee"}}
+	svc := &fakeStatusService{result: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Drop"}, CreatorID: "creator", AssigneeID: "assignee"}}
 	notif := &fakeNotifier{}
 	handler := NewCommandHandler(env.client, svc, Options{Notifier: notif})
 
@@ -678,7 +682,7 @@ func TestTaskStatus_CancelNotifies(t *testing.T) {
 func TestTaskStatus_TodoDoesNotNotify(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{result: &taskmodel.Task{ID: "T1", Summary: "x"}}
+	svc := &fakeStatusService{result: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "x"}}}
 	notif := &fakeNotifier{}
 	handler := NewCommandHandler(env.client, svc, Options{Notifier: notif})
 
@@ -700,7 +704,7 @@ func TestTaskAssign_Command(t *testing.T) {
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
 	env.api.On("LogError", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	svc := &fakeStatusService{
-		assignResult: &taskmodel.Task{ID: "T1", Summary: "Ship", CreatorID: "creator"},
+		assignResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Ship"}, CreatorID: "creator"},
 		assignEvent:  task.AssignEvent{NewAssigneeID: "u-bob", CreatorID: "creator"},
 	}
 	notif := &fakeNotifier{}
@@ -765,7 +769,7 @@ func TestTaskAssign_NotFound(t *testing.T) {
 func TestTaskUnassign_Command(t *testing.T) {
 	env := setupTest()
 	env.api.On("RegisterCommand", mockAnything()).Return(nil).Maybe()
-	svc := &fakeStatusService{assignResult: &taskmodel.Task{ID: "T1", Summary: "Ship"}}
+	svc := &fakeStatusService{assignResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Ship"}}}
 	notif := &fakeNotifier{}
 	handler := NewCommandHandler(env.client, svc, Options{AssignNotifier: notif})
 

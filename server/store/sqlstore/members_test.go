@@ -105,13 +105,13 @@ func TestGetMemberByRole(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "u1", id)
 	})
-	t.Run("missing role yields ErrMemberNotFound", func(t *testing.T) {
+	t.Run("missing role yields store.ErrMemberNotFound", func(t *testing.T) {
 		_, err := s.GetMemberByRole(ctx, "T1", model.MemberRoleFollower)
-		require.ErrorIs(t, err, ErrMemberNotFound)
+		require.ErrorIs(t, err, store.ErrMemberNotFound)
 	})
-	t.Run("missing task yields ErrMemberNotFound", func(t *testing.T) {
+	t.Run("missing task yields store.ErrMemberNotFound", func(t *testing.T) {
 		_, err := s.GetMemberByRole(ctx, "ghost", model.MemberRoleAssignee)
-		require.ErrorIs(t, err, ErrMemberNotFound)
+		require.ErrorIs(t, err, store.ErrMemberNotFound)
 	})
 }
 
@@ -124,7 +124,7 @@ func TestRemoveMember_Idempotent(t *testing.T) {
 	// Remove existing edge.
 	require.NoError(t, s.RemoveMember(ctx, "T1", "u1", model.MemberRoleCreator))
 	id, err := s.GetMemberByRole(ctx, "T1", model.MemberRoleCreator)
-	require.ErrorIs(t, err, ErrMemberNotFound)
+	require.ErrorIs(t, err, store.ErrMemberNotFound)
 	assert.Equal(t, "", id)
 
 	// Removing again is a no-op (idempotent), not an error.

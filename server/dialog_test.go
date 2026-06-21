@@ -12,9 +12,9 @@ import (
 )
 
 func TestBuildQuickListDialog_Structure(t *testing.T) {
-	tasks := []taskmodel.Task{
-		{ID: "T1", Summary: "First", Status: taskmodel.StatusTodo},
-		{ID: "T2", Summary: "Second", Status: taskmodel.StatusDone},
+	tasks := []*taskmodel.Task{
+		{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "First", Status: taskmodel.StatusTodo}},
+		{TaskRow: taskmodel.TaskRow{ID: "T2", Summary: "Second", Status: taskmodel.StatusDone}},
 	}
 	dialog := buildQuickListDialog("u1", tasks)
 
@@ -35,7 +35,7 @@ func TestBuildQuickListDialog_Structure(t *testing.T) {
 
 func TestBuildQuickListDialog_TruncatesLongSummary(t *testing.T) {
 	long := strings.Repeat("x", 120)
-	dialog := buildQuickListDialog("u1", []taskmodel.Task{{ID: "T1", Summary: long, Status: taskmodel.StatusTodo}})
+	dialog := buildQuickListDialog("u1", []*taskmodel.Task{{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: long, Status: taskmodel.StatusTodo}}})
 	opt := dialog.Elements[3].Options[0].Text
 	// Label is "<summary · status>"; the summary half is the first 59 chars + "…".
 	assert.True(t, strings.HasSuffix(strings.SplitN(opt, " · ", 2)[0], "…"),
@@ -45,10 +45,7 @@ func TestBuildQuickListDialog_TruncatesLongSummary(t *testing.T) {
 
 func TestBuildTaskDetailDialog_EditableFields(t *testing.T) {
 	due := int64(1_700_000_000_000)
-	t0 := &taskmodel.Task{
-		ID: "T1", Summary: "Review", Description: "desc", Status: taskmodel.StatusTodo,
-		AssigneeID: "u-bob", Due: &due,
-	}
+	t0 := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review", Description: "desc", Status: taskmodel.StatusTodo, Due: &due}, AssigneeID: "u-bob"}
 	dialog := buildTaskDetailDialog(t0, 1, 3, nil)
 
 	assert.Equal(t, dialogCallbackTaskDetail, dialog.CallbackId)
@@ -80,18 +77,16 @@ func TestBuildTaskDetailDialog_EditableFields(t *testing.T) {
 }
 
 func TestBuildTaskDetailDialog_RecentComments(t *testing.T) {
-	t0 := &taskmodel.Task{ID: "T1", Summary: "x", Status: taskmodel.StatusTodo}
-	dialog := buildTaskDetailDialog(t0, 0, 0, []taskmodel.Comment{
-		{ID: "c1", Content: "looks good"},
-		{ID: "c2", Content: "needs fix"},
-	})
+	t0 := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "x", Status: taskmodel.StatusTodo}}
+	// recentComments is now []string (resolved post bodies), not model.Comment.
+	dialog := buildTaskDetailDialog(t0, 0, 0, []string{"looks good", "needs fix"})
 	assert.Contains(t, dialog.IntroductionText, "Recent comments")
 	assert.Contains(t, dialog.IntroductionText, "looks good")
 	assert.Contains(t, dialog.IntroductionText, "needs fix")
 }
 
 func TestParseTaskDetailSubmission_AllChanged(t *testing.T) {
-	current := &taskmodel.Task{ID: "T1", Summary: "old", Description: "d", Status: taskmodel.StatusTodo, AssigneeID: "u-old"}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "old", Description: "d", Status: taskmodel.StatusTodo}, AssigneeID: "u-old"}
 	sub := map[string]any{
 		dialogFieldSummary:     "new",
 		dialogFieldDescription: "newdesc",
@@ -112,13 +107,13 @@ func TestParseTaskDetailSubmission_AllChanged(t *testing.T) {
 }
 
 func TestParseTaskDetailSubmission_InvalidStatus(t *testing.T) {
-	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Status: taskmodel.StatusTodo}}
 	_, err := parseTaskDetailSubmission(map[string]any{dialogFieldStatus: "bogus"}, current)
 	require.Error(t, err)
 }
 
 func TestParseTaskDetailSubmission_InvalidDue(t *testing.T) {
-	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Status: taskmodel.StatusTodo}}
 	_, err := parseTaskDetailSubmission(map[string]any{dialogFieldTaskDue: "next week"}, current)
 	require.Error(t, err)
 }
@@ -127,14 +122,14 @@ func TestParseTaskDetailSubmission_InvalidDue(t *testing.T) {
 // like "1700000000000abc" parsed as 1700000000000. strconv.ParseInt rejects it.
 // CodeRabbit review on PR #102.
 func TestParseTaskDetailSubmission_NumericPrefixSuffixRejected(t *testing.T) {
-	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Status: taskmodel.StatusTodo}}
 	_, err := parseTaskDetailSubmission(map[string]any{dialogFieldTaskDue: "1700000000000abc"}, current)
 	require.Error(t, err, "trailing non-numeric suffix must be rejected, not parsed as a prefix")
 }
 
 func TestParseTaskDetailSubmission_ClearsDue(t *testing.T) {
 	oldDue := int64(1_000)
-	current := &taskmodel.Task{ID: "T1", Status: taskmodel.StatusTodo, Due: &oldDue}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Status: taskmodel.StatusTodo, Due: &oldDue}}
 	update, err := parseTaskDetailSubmission(map[string]any{dialogFieldTaskDue: ""}, current)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"due"}, update.Patch.UpdateFields)
@@ -142,7 +137,7 @@ func TestParseTaskDetailSubmission_ClearsDue(t *testing.T) {
 }
 
 func TestParseTaskDetailSubmission_NoChanges(t *testing.T) {
-	current := &taskmodel.Task{ID: "T1", Summary: "same", Description: "d", Status: taskmodel.StatusTodo}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "same", Description: "d", Status: taskmodel.StatusTodo}}
 	update, err := parseTaskDetailSubmission(map[string]any{
 		dialogFieldSummary:     "same",
 		dialogFieldDescription: "d",
@@ -157,7 +152,7 @@ func TestParseTaskDetailSubmission_NoChanges(t *testing.T) {
 func TestParseTaskDetailSubmission_ClearsAssignee(t *testing.T) {
 	// Clearing the assignee (empty string) must be distinguishable from
 	// "unchanged" via AssigneeSet, so the dialog can unassign.
-	current := &taskmodel.Task{ID: "T1", Summary: "x", Status: taskmodel.StatusTodo, AssigneeID: "u-old"}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "x", Status: taskmodel.StatusTodo}, AssigneeID: "u-old"}
 	update, err := parseTaskDetailSubmission(map[string]any{
 		dialogFieldAssignee: "",
 	}, current)

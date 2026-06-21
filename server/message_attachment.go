@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -239,10 +240,15 @@ func (p *Plugin) commentCount(taskID string) int {
 	return len(ids)
 }
 
-// recentComments returns up to limit most-recent comments on taskID (creation
-// order), or nil on error. Used to seed the Task Detail dialog's read-only
-// comment preview (issue #25).
-func (p *Plugin) recentComments(taskID string, limit int) []taskmodel.Comment {
+// recentComments returns up to limit most-recent comment bodies on taskID
+// (creation order), or nil on error. Used to seed the Task Detail dialog's
+// read-only comment preview (issue #25).
+//
+// In the comment-as-thread design the comment body lives in the Mattermost
+// post referenced by task_comments.post_id, so this method resolves each
+// mapping to its post message via GetPost. A post that has been deleted is
+// skipped (defensive self-heal), so a stale mapping can't blank the preview.
+func (p *Plugin) recentComments(taskID string, limit int) []string {
 	if p.taskService == nil || limit <= 0 {
 		return nil
 	}
@@ -255,7 +261,17 @@ func (p *Plugin) recentComments(taskID string, limit int) []taskmodel.Comment {
 		// ListComments returns oldest-first; show the last `limit` (most recent).
 		comments = comments[len(comments)-limit:]
 	}
-	return comments
+	out := make([]string, 0, len(comments))
+	for _, c := range comments {
+		post, pErr := p.API.GetPost(c.PostID)
+		if pErr != nil || post == nil {
+			continue // post deleted or unavailable — skip
+		}
+		if msg := strings.TrimSpace(post.Message); msg != "" {
+			out = append(out, msg)
+		}
+	}
+	return out
 }
 
 // subtaskProgress returns (done, total) for the task's subtasks, or (0, 0) on

@@ -11,8 +11,31 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
+)
+
+// Sentinel errors for the "not found" outcomes of single-row lookups. They live
+// in the interface package (not sqlstore) so the service layer can check
+// errors.Is against them without importing the concrete store — this keeps the
+// dependency direction service -> store (interface), not service -> sqlstore.
+var (
+	// ErrTaskNotFound is returned by GetTask/UpdateTask/DeleteTask when no task
+	// row matches the given id.
+	ErrTaskNotFound = errors.New("task not found")
+	// ErrMemberNotFound is returned by GetMemberByRole when no membership edge
+	// matches (task, role).
+	ErrMemberNotFound = errors.New("task member not found")
+	// ErrReminderNotFound is returned by MarkReminderFired when no reminder row
+	// matches the given reminder id.
+	ErrReminderNotFound = errors.New("task reminder not found")
+	// ErrPostNotFound is returned by GetPostByKind/DeletePost when no tracked
+	// post matches.
+	ErrPostNotFound = errors.New("task post not found")
+	// ErrCommentNotFound is returned by UnlinkComment when no comment mapping
+	// matches the given post id.
+	ErrCommentNotFound = errors.New("task comment not found")
 )
 
 // Scope names a task-list "view". It selects which WHERE clause ListTasks
@@ -80,8 +103,8 @@ type ListQuery struct {
 
 // PageResult is the envelope returned by ListTasks: a page of items, the total
 // count across the whole filtered set, and whether another page follows.
-// Items is []any so the store package does not depend on model.TaskView; the
-// sqlstore layer fills it with concrete *model.TaskView values.
+// Items is []any so the store package does not depend on model.Task; the
+// sqlstore layer fills it with concrete *model.Task values.
 type PageResult struct {
 	// Items is the current page; callers type-assert to the concrete repo type.
 	Items []any
