@@ -373,19 +373,17 @@
         white-space: nowrap;
     }
 
-    // Description preview: clamp to two lines so multi-line notes stay compact
-    // in the list. Falls back gracefully when -webkit-line-clamp is unsupported
-    // (older browsers just show the first lines that fit).
+    // Description preview: text is already truncated to ~100 chars at a word
+    // boundary (see truncateDescription); this ellipsis rule is a safety net
+    // for very narrow viewports where even the truncated string overflows.
     &__item-description {
         margin-top: 2px;
         font-size: 12px;
         line-height: 1.4;
         color: var(--task-muted);
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        line-clamp: 2;
-        -webkit-box-orient: vertical;
         overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     // Meta row: a single line of small text segments separated by "·"

@@ -264,7 +264,9 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                                 <span className='quick-list__item-main'>
                                     <span className='quick-list__item-summary'>{task.summary}</span>
                                     {task.description && task.description.trim() && (
-                                        <span className='quick-list__item-description'>{task.description.trim()}</span>
+                                        <span className='quick-list__item-description'>
+                                            {truncateDescription(task.description.trim())}
+                                        </span>
                                     )}
                                     <span className='quick-list__item-meta'>
                                         <span className={`quick-list__item-status quick-list__item-status--${task.status}`}>
@@ -331,6 +333,28 @@ function chipLabel(chip: ChipFilter, t: (id: string) => string): string {
     default:
         return chip;
     }
+}
+
+// truncateDescription collapses a description into a single short preview line
+// for the list row. It squashes newlines to spaces, trims to roughly maxChars,
+// cuts at the nearest word boundary (so it never breaks mid-word), and appends
+// an ellipsis when truncation occurred. Exported for unit testing.
+const DESCRIPTION_MAX_CHARS = 100;
+
+export function truncateDescription(text: string, maxChars = DESCRIPTION_MAX_CHARS): string {
+    // Collapse all whitespace runs (including newlines) to single spaces.
+    const flat = text.replace(/\s+/g, ' ').trim();
+    if (flat.length <= maxChars) {
+        return flat;
+    }
+    const slice = flat.slice(0, maxChars);
+
+    // Cut at the last whitespace within the slice so the preview ends on a word
+    // boundary. If there is no whitespace (one long token), fall back to the
+    // hard slice.
+    const lastSpace = slice.lastIndexOf(' ');
+    const cut = lastSpace > 0 ? slice.slice(0, lastSpace) : slice;
+    return cut + '…';
 }
 
 // statusLabel maps a status to its localized label.
