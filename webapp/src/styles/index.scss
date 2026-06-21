@@ -742,13 +742,14 @@
         padding: 4px 16px 24px;
     }
 
-    // Meta table: grid label/value rows with click-to-edit cells.
+    // Meta table: grid label/value rows with click-to-edit cells. No top
+    // border — the header already carries a bottom border, so a top border
+    // here would render as a double line directly under the header.
     &__meta-table {
         display: grid;
         grid-template-columns: 96px 1fr;
         gap: 2px 12px;
         padding: 10px 0;
-        border-top: 1px solid var(--task-border-soft);
         border-bottom: 1px solid var(--task-border-soft);
         margin-bottom: 16px;
     }
