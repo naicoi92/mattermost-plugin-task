@@ -388,9 +388,6 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 			p.writeError(w, http.StatusNotFound, "task not found")
 		case errors.Is(err, task.ErrInvalidStatus):
 			p.writeError(w, http.StatusBadRequest, "invalid status")
-		case errors.As(err, &task.ErrOpenSubtasks{}):
-			// Parent-done guard: clear, actionable message listing the open subtasks.
-			p.writeError(w, http.StatusConflict, err.Error())
 		default:
 			p.API.LogError("Failed to set task status",
 				"task_id", id, "status", req.Status, "actor", currentUserID(r), "error", err.Error())

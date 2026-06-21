@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -282,35 +281,6 @@ func (p *Plugin) commentCount(taskID string) int {
 // read-only comment preview (issue #25).
 //
 // In the comment-as-thread design the comment body lives in the Mattermost
-// post referenced by task_comments.post_id, so this method resolves each
-// mapping to its post message via GetPost. A post that has been deleted is
-// skipped (defensive self-heal), so a stale mapping can't blank the preview.
-func (p *Plugin) recentComments(taskID string, limit int) []string {
-	if p.taskService == nil || limit <= 0 {
-		return nil
-	}
-	comments, err := p.taskService.ListComments(taskID)
-	if err != nil {
-		p.API.LogDebug("Failed to load recent comments", "task_id", taskID, "error", err)
-		return nil
-	}
-	if len(comments) > limit {
-		// ListComments returns oldest-first; show the last `limit` (most recent).
-		comments = comments[len(comments)-limit:]
-	}
-	out := make([]string, 0, len(comments))
-	for _, c := range comments {
-		post, pErr := p.API.GetPost(c.PostID)
-		if pErr != nil || post == nil {
-			continue // post deleted or unavailable — skip
-		}
-		if msg := strings.TrimSpace(post.Message); msg != "" {
-			out = append(out, msg)
-		}
-	}
-	return out
-}
-
 // subtaskProgress returns (done, total) for the task's subtasks, or (0, 0) on
 // error (best-effort — a card without progress is better than no card).
 func (p *Plugin) subtaskProgress(taskID string) (done, total int) {

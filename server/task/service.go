@@ -592,45 +592,7 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 // hierarchies.
 const maxSubtaskDepth = 16
 
-// ErrOpenSubtasks is returned when a parent task is marked done while it still
-// has non-terminal (todo/in_progress) subtasks. Open holds the summaries of the
-// unfinished subtasks so the caller can list them in the error message.
-type ErrOpenSubtasks struct {
-	Open []string
-}
 
-// Error renders the blocking subtask summaries in a clear, actionable message.
-func (e ErrOpenSubtasks) Error() string {
-	if len(e.Open) == 0 {
-		return "task has open subtasks"
-	}
-	quoted := make([]string, len(e.Open))
-	for i, s := range e.Open {
-		quoted[i] = "“" + s + "”"
-	}
-	return "cannot mark task done while subtasks are open: " + strings.Join(quoted, ", ")
-}
-
-// openSubtasks returns the summaries of parentID's direct subtasks that are not
-// yet terminal (done/cancelled). A subtask with no summary falls back to its id.
-func (s *Service) openSubtasks(ctx context.Context, parentID string) ([]string, error) {
-	subs, err := s.store.ListSubtasks(ctx, parentID)
-	if err != nil {
-		return nil, err
-	}
-	var open []string
-	for _, sub := range subs {
-		if model.IsTerminalStatus(sub.Status) {
-			continue
-		}
-		label := sub.Summary
-		if label == "" {
-			label = sub.ID
-		}
-		open = append(open, label)
-	}
-	return open, nil
-}
 
 // assertNoCycle walks the parent chain from startID up to maxDepth ancestors via
 // GetTask, returning ErrSubtaskCycle if the chain repeats a node or exceeds the
