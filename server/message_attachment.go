@@ -244,12 +244,13 @@ func (p *Plugin) updateTaskCards(t *taskmodel.Task) {
 
 // taskPosts returns the tracked card posts for taskID, or nil on error
 // (best-effort — refreshing fewer cards beats failing the whole transition).
+//
+// p.taskStore is always set after OnActivate (the SQL store is wired before
+// the router serves), so a nil store only occurs in degenerate test setups
+// where card refresh isn't exercised. There is no fallback to the assembled
+// Task's ChannelPostID/DMPostID: the normalized task_posts table is the single
+// source of truth for card locations post-migration.
 func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
-	if p.taskService == nil {
-		return nil
-	}
-	// ListPosts is a store method; reach it via a thin service passthrough if
-	// present, otherwise fall back to the assembled Task's known post ids.
 	if p.taskStore == nil {
 		return nil
 	}
