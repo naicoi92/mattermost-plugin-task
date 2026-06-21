@@ -26,7 +26,11 @@ func (f fakeMembershipChecker) IsChannelAdmin(userID, channelID string) bool {
 }
 
 func taskFixture(creator, assignee, channel string) *model.Task {
-	return &model.Task{CreatorID: creator, AssigneeID: assignee, ChannelID: channel}
+	return &model.Task{
+		CreatorID:  creator,
+		AssigneeID: assignee,
+		TaskRow:    model.TaskRow{ChannelID: channel},
+	}
 }
 
 func TestCanUserModifyTask(t *testing.T) {

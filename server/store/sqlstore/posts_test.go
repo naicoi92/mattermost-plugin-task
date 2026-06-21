@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
+
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
 )
 
 func TestAddPost_InsertsRow(t *testing.T) {
@@ -118,13 +120,13 @@ func TestGetPostByKind(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "dm-post", id)
 	})
-	t.Run("missing kind yields ErrPostNotFound", func(t *testing.T) {
+	t.Run("missing kind yields store.ErrPostNotFound", func(t *testing.T) {
 		_, err := s.GetPostByKind(ctx, "T1", "follower")
 		require.Error(t, err)
 	})
-	t.Run("missing task yields ErrPostNotFound", func(t *testing.T) {
+	t.Run("missing task yields store.ErrPostNotFound", func(t *testing.T) {
 		_, err := s.GetPostByKind(ctx, "ghost", model.PostKindChannel)
-		require.ErrorIs(t, err, ErrPostNotFound)
+		require.ErrorIs(t, err, store.ErrPostNotFound)
 	})
 	t.Run("invalid kind rejected before query", func(t *testing.T) {
 		_, err := s.GetPostByKind(ctx, "T1", "broadcast")
@@ -148,7 +150,7 @@ func TestDeletePost(t *testing.T) {
 func TestDeletePost_NotFound(t *testing.T) {
 	s := tasksTestStore(t)
 	err := s.DeletePost(context.Background(), "ghost")
-	require.ErrorIs(t, err, ErrPostNotFound)
+	require.ErrorIs(t, err, store.ErrPostNotFound)
 }
 
 func TestPosts_FKCascadeOnTaskDelete(t *testing.T) {

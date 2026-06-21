@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"sync"
@@ -17,7 +18,8 @@ import (
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 	"github.com/naicoi92/mattermost-plugin-task/server/permission"
-	"github.com/naicoi92/mattermost-plugin-task/server/store/kvstore"
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
+	"github.com/naicoi92/mattermost-plugin-task/server/store/sqlstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -25,8 +27,10 @@ import (
 type Plugin struct {
 	plugin.MattermostPlugin
 
-	// kvstore is the client used to read/write KV records for this plugin.
-	kvstore kvstore.KVStore
+	// taskStore is the relational store (SQLStore) backing the task lifecycle.
+	// It reuses the server's master database via pluginapi Store.GetMasterDB;
+	// the schema is provisioned by RunMigrationsClusterSafe in OnActivate.
+	taskStore store.Store
 
 	// client is the Mattermost server API client.
 	client *pluginapi.Client
@@ -34,7 +38,7 @@ type Plugin struct {
 	// commandClient is the client used to register and execute slash commands.
 	commandClient command.Command
 
-	// taskService wraps the kvstore with task lifecycle business logic
+	// taskService wraps the store with task lifecycle business logic
 	// (create/list/patch/delete cascade), shared by the REST API and slash
 	// commands.
 	taskService *task.Service
@@ -84,9 +88,30 @@ func (p *Plugin) OnActivate() error {
 	p.i18n = i18nBundle
 	p.notifier = notification.New(notifierAPI{api: p.API}, i18nBundle, p.botUserID)
 
-	p.kvstore = kvstore.NewKVStore(p.client)
+	// Wire the relational store: acquire the server's master DB, build the
+	// dialect-aware SQLStore, and run migrations under a cluster mutex so only
+	// one node provisions the schema. A short PingContext fails fast if the DB
+	// is unreachable rather than hanging every later query.
+	db, err := p.client.Store.GetMasterDB()
+	if err != nil {
+		return errors.Wrap(err, "failed to get master database")
+	}
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if pingErr := db.PingContext(pingCtx); pingErr != nil {
+		return errors.Wrap(pingErr, "plugin database unreachable on activation")
+	}
+	sqlSettings := p.client.Configuration.GetConfig().SqlSettings
+	sqlStore, err := sqlstore.NewFromConfig(db, &sqlSettings, sqlstore.DefaultTablePrefix)
+	if err != nil {
+		return errors.Wrap(err, "failed to initialize task sqlstore")
+	}
+	if migErr := sqlStore.RunMigrationsClusterSafe(p.API); migErr != nil {
+		return errors.Wrap(migErr, "failed to run task database migrations")
+	}
+	p.taskStore = sqlStore
 
-	p.taskService = task.NewService(p.kvstore, &p.client.Log)
+	p.taskService = task.NewService(p.taskStore, &p.client.Log)
 
 	p.commandClient = command.NewCommandHandler(p.client, p.taskService, command.Options{
 		Notifier:          commandNotifier{p.notifier},

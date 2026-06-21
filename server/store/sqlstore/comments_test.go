@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
+
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
 )
 
 // mustLink links a comment and fails the test on error.
@@ -130,7 +132,7 @@ func TestUnlinkComment(t *testing.T) {
 func TestUnlinkComment_NotFound(t *testing.T) {
 	s := tasksTestStore(t)
 	err := s.UnlinkComment(context.Background(), "ghostpost")
-	require.ErrorIs(t, err, ErrCommentNotFound)
+	require.ErrorIs(t, err, store.ErrCommentNotFound)
 }
 
 func TestLinkComment_FKCascadeOnTaskDelete(t *testing.T) {

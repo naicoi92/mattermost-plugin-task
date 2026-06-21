@@ -7,6 +7,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
+
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
@@ -16,11 +18,10 @@ const commentsTableShort = "comments"
 // commentColumns lists every column of task_comments in scan order.
 var commentColumns = []string{"id", "task_id", "post_id", "author_id", "created_at"}
 
-// ErrCommentNotFound is returned by UnlinkComment callers that need to
+// store.ErrCommentNotFound is returned by UnlinkComment callers that need to
 // distinguish "no such post mapping" from a genuine database error. LinkComment
 // and ListComments don't surface it (LinkComment is insert-only, ListComments
 // returns an empty slice for a task with no comments).
-var ErrCommentNotFound = errors.New("task comment not found")
 
 // LinkComment records the mapping between a task and a Mattermost thread-reply
 // post. Called by the MessageHasBeenPosted hook (M4-5) when a reply lands in a
@@ -108,9 +109,9 @@ func (s *SQLStore) CountComments(ctx context.Context, taskID string) (int, error
 }
 
 // UnlinkComment removes the mapping for a single post. Returns
-// ErrCommentNotFound when no mapping exists (a post can be deleted before its
+// store.ErrCommentNotFound when no mapping exists (a post can be deleted before its
 // mapping is recorded, or the hook may fire for a non-card reply); callers
-// that want idempotent behaviour can ignore ErrCommentNotFound.
+// that want idempotent behaviour can ignore store.ErrCommentNotFound.
 func (s *SQLStore) UnlinkComment(ctx context.Context, postID string) error {
 	if postID == "" {
 		return errors.New("unlink comment: post id is required")
@@ -127,7 +128,7 @@ func (s *SQLStore) UnlinkComment(ctx context.Context, postID string) error {
 		return fmt.Errorf("unlink comment %s: rows affected: %w", postID, err)
 	}
 	if rows == 0 {
-		return ErrCommentNotFound
+		return store.ErrCommentNotFound
 	}
 	return nil
 }

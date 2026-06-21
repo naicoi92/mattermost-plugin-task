@@ -40,7 +40,7 @@ func TestBroadcastTaskUpdated_ChannelScope(t *testing.T) {
 	p := &Plugin{}
 	p.SetAPI(api)
 
-	task := &taskmodel.Task{ID: "t1", ChannelID: "ch1", Status: taskmodel.StatusTodo, UpdatedAt: 100}
+	task := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", ChannelID: "ch1", Status: taskmodel.StatusTodo, UpdatedAt: 100}}
 	p.broadcastTaskUpdated(task, []string{"status"})
 
 	require.Len(t, *calls, 1)
@@ -63,7 +63,7 @@ func TestBroadcastTaskUpdated_PersonalScope_CreatorAndAssignee(t *testing.T) {
 	p.SetAPI(api)
 
 	// Personal task (no channel): creator + assignee are distinct.
-	task := &taskmodel.Task{ID: "t1", CreatorID: "creator", AssigneeID: "assignee", UpdatedAt: 5}
+	task := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", UpdatedAt: 5}, CreatorID: "creator", AssigneeID: "assignee"}
 	p.broadcastTaskUpdated(task, []string{"created"})
 
 	require.Len(t, *calls, 2, "personal task notifies creator and assignee")
@@ -83,7 +83,7 @@ func TestBroadcastTaskUpdated_PersonalScope_CreatorIsAssignee_Deduped(t *testing
 	p.SetAPI(api)
 
 	// Creator == assignee: only one event.
-	task := &taskmodel.Task{ID: "t1", CreatorID: "u1", AssigneeID: "u1", UpdatedAt: 5}
+	task := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", UpdatedAt: 5}, CreatorID: "u1", AssigneeID: "u1"}
 	p.broadcastTaskUpdated(task, []string{"status"})
 
 	require.Len(t, *calls, 1, "creator==assignee must dedupe to a single event")
@@ -104,7 +104,7 @@ func TestBroadcastTaskDeleted_OmitsTaskBody(t *testing.T) {
 	p := &Plugin{}
 	p.SetAPI(api)
 
-	task := &taskmodel.Task{ID: "t1", CreatorID: "u1", UpdatedAt: 9}
+	task := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", UpdatedAt: 9}, CreatorID: "u1"}
 	p.broadcastTaskDeleted(task)
 
 	require.Len(t, *calls, 1)
@@ -120,7 +120,7 @@ func TestBroadcastTaskUpdated_AssigneeOnly_NoCreator(t *testing.T) {
 	p.SetAPI(api)
 
 	// Personal task with only an assignee (creator empty — synthetic edge case).
-	task := &taskmodel.Task{ID: "t1", AssigneeID: "a1", UpdatedAt: 1}
+	task := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", UpdatedAt: 1}, AssigneeID: "a1"}
 	p.broadcastTaskUpdated(task, []string{"assignee_id"})
 
 	require.Len(t, *calls, 1)

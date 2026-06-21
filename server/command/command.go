@@ -34,15 +34,17 @@ type TaskService interface {
 	// parent's ChannelID and (as default) the parent's assignee; an explicit
 	// assigneeID overrides the default. Returns the created subtask.
 	CreateSubtask(parentID, creatorID, summary, assigneeID string, due *int64) (*taskmodel.Task, error)
-	// AddComment persists a comment on taskID by userID and returns the comment
-	// plus an event describing the task's participants for notification.
-	AddComment(taskID, userID, content string) (taskmodel.Comment, task.CommentEvent, error)
+	// LinkComment records that postID is a thread reply on taskID (the
+	// comment-as-thread design: content lives in the Mattermost post). Returns
+	// the comment mapping plus an event describing the task's participants for
+	// notification.
+	LinkComment(taskID, postID, userID string) (taskmodel.TaskComment, task.CommentEvent, error)
 	// List returns the tasks matching the given query (scope/status/due/cursor).
 	// Used by /task list (#9).
-	List(q task.ListQuery) ([]taskmodel.Task, error)
+	List(q task.ListQuery) ([]*taskmodel.Task, error)
 	// Search returns up to limit tasks whose summary or description contains
 	// keyword (case-insensitive). Used by /task search (#9).
-	Search(keyword string, limit int) ([]taskmodel.Task, error)
+	Search(keyword string, limit int) ([]*taskmodel.Task, error)
 	// Create persists a new top-level task and returns it. Used by /task add (#8)
 	// and the New Task dialog / post-dropdown action (#16).
 	Create(in task.CreateInput) (*taskmodel.Task, error)
@@ -798,7 +800,7 @@ func (c *Handler) handleComment(args *model.CommandArgs, rest []string) (*model.
 	}
 
 	// Resolve the task so the success message can name it and the notifier has
-	// the participants. The service re-checks existence on AddComment.
+	// the participants. The service re-checks existence on LinkComment.
 	t, err := c.taskService.Get(id)
 	if err != nil {
 		c.client.Log.Error("Failed to load task for comment", "task_id", id, "error", err)
@@ -818,15 +820,33 @@ func (c *Handler) handleComment(args *model.CommandArgs, rest []string) (*model.
 		return ephemeral("You do not have permission to comment on this task."), nil
 	}
 
-	_, ev, err := c.taskService.AddComment(id, args.UserId, text)
+	// Comment-as-thread: create the reply post in the task's card thread, then
+	// link the post to the task. The post root is the task's channel card so
+	// the reply threads under the card; the bot authors the post so it renders
+	// consistently.
+	rootID := t.ChannelPostID
+	if rootID == "" {
+		rootID = t.DMPostID
+	}
+	commentPost := &model.Post{
+		UserId:    c.botUserID,
+		ChannelId: args.ChannelId,
+		RootId:    rootID,
+		Message:   text,
+		Type:      model.PostTypeDefault,
+	}
+	if postErr := c.client.Post.CreatePost(commentPost); postErr != nil {
+		c.client.Log.Error("Failed to create comment post", "task_id", id, "error", postErr)
+		return ephemeral(fmt.Sprintf("Failed to comment on %s: %s", id, postErr.Error())), nil
+	}
+
+	_, ev, err := c.taskService.LinkComment(id, commentPost.Id, args.UserId)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
 			return ephemeral(fmt.Sprintf("Task %s not found.", id)), nil
-		case errors.Is(err, task.ErrCommentContentRequired):
-			return ephemeral("Comment text is required."), nil
 		default:
-			c.client.Log.Error("Failed to add comment", "task_id", id, "error", err)
+			c.client.Log.Error("Failed to link comment", "task_id", id, "error", err)
 			return ephemeral(fmt.Sprintf("Failed to comment on %s: %s", id, err.Error())), nil
 		}
 	}

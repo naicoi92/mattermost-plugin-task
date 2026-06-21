@@ -45,7 +45,7 @@ func TestWithTx_RollsBackOnError(t *testing.T) {
 	require.ErrorIs(t, err, sentinel, "WithTx must surface the fn error")
 
 	_, err = s.GetTask(ctx, "T1")
-	require.ErrorIs(t, err, ErrTaskNotFound, "rolled-back task must not be visible")
+	require.ErrorIs(t, err, store.ErrTaskNotFound, "rolled-back task must not be visible")
 }
 
 func TestWithTx_MultiTableAtomicCommit(t *testing.T) {
@@ -109,9 +109,9 @@ func TestWithTx_MultiTableAtomicRollback(t *testing.T) {
 
 	// Nothing persisted: task, member, event all absent.
 	_, err = s.GetTask(ctx, "T1")
-	require.ErrorIs(t, err, ErrTaskNotFound)
+	require.ErrorIs(t, err, store.ErrTaskNotFound)
 	_, err = s.GetMemberByRole(ctx, "T1", model.MemberRoleCreator)
-	require.ErrorIs(t, err, ErrMemberNotFound)
+	require.ErrorIs(t, err, store.ErrMemberNotFound)
 	events, err := s.ListTaskEvents(ctx, "T1", 10)
 	require.NoError(t, err)
 	assert.Empty(t, events)
@@ -132,7 +132,7 @@ func TestWithTx_RollsBackOnPanic(t *testing.T) {
 
 	// The task written before the panic must NOT have persisted.
 	_, err := s.GetTask(ctx, "T1")
-	require.ErrorIs(t, err, ErrTaskNotFound, "panic must roll back the tx")
+	require.ErrorIs(t, err, store.ErrTaskNotFound, "panic must roll back the tx")
 }
 
 func TestWithTx_NestedJoinsOuterTransaction(t *testing.T) {
@@ -158,5 +158,5 @@ func TestWithTx_NestedJoinsOuterTransaction(t *testing.T) {
 
 	// The inner write must NOT have survived the outer rollback.
 	_, err = s.GetTask(ctx, "T1")
-	require.ErrorIs(t, err, ErrTaskNotFound, "nested write must roll back with the outer tx")
+	require.ErrorIs(t, err, store.ErrTaskNotFound, "nested write must roll back with the outer tx")
 }

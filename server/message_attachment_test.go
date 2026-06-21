@@ -10,15 +10,7 @@ import (
 )
 
 func sampleTask(status string, due *int64) *taskmodel.Task {
-	return &taskmodel.Task{
-		ID:         "T1",
-		Summary:    "Review PR",
-		CreatorID:  "u-creator",
-		AssigneeID: "u-bob",
-		Due:        due,
-		Status:     status,
-		CreatedAt:  1_700_000_000_000,
-	}
+	return &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review PR", Due: due, Status: status, CreatedAt: 1_700_000_000_000}, CreatorID: "u-creator", AssigneeID: "u-bob"}
 }
 
 func TestBuildTaskCard_FieldsAndTitle(t *testing.T) {
@@ -69,10 +61,10 @@ func TestBuildTaskCard_OverdueDoneTaskNotRed(t *testing.T) {
 }
 
 func TestBuildTaskCard_StatusColors(t *testing.T) {
-	assert.Equal(t, "#4391FE", cardColor(&taskmodel.Task{Status: taskmodel.StatusTodo}, 0))
-	assert.Equal(t, "#F1A93C", cardColor(&taskmodel.Task{Status: taskmodel.StatusInProgress}, 0))
-	assert.Equal(t, "#1A7140", cardColor(&taskmodel.Task{Status: taskmodel.StatusDone}, 0))
-	assert.Equal(t, "#8A8A8A", cardColor(&taskmodel.Task{Status: taskmodel.StatusCancelled}, 0))
+	assert.Equal(t, "#4391FE", cardColor(&taskmodel.Task{TaskRow: taskmodel.TaskRow{Status: taskmodel.StatusTodo}}, 0))
+	assert.Equal(t, "#F1A93C", cardColor(&taskmodel.Task{TaskRow: taskmodel.TaskRow{Status: taskmodel.StatusInProgress}}, 0))
+	assert.Equal(t, "#1A7140", cardColor(&taskmodel.Task{TaskRow: taskmodel.TaskRow{Status: taskmodel.StatusDone}}, 0))
+	assert.Equal(t, "#8A8A8A", cardColor(&taskmodel.Task{TaskRow: taskmodel.TaskRow{Status: taskmodel.StatusCancelled}}, 0))
 }
 
 func TestTaskCardActions_AllFivePresent(t *testing.T) {

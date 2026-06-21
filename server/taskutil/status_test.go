@@ -26,7 +26,7 @@ func TestApplyStatus_StateMachine(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Start from a task where both timestamps are already set, so we
 			// can assert they get cleared (not just left zero).
-			task := &model.Task{
+			task := &model.TaskRow{
 				Status:      model.StatusDone,
 				CompletedAt: &old,
 				CancelledAt: &old,
@@ -51,9 +51,9 @@ func TestApplyStatus_ReStampsUpdatedAt(t *testing.T) {
 	// "done -> done" re-confirmation re-stamps the completion time).
 	const now int64 = 999
 	old := int64(100) // var, not const: we take its address below
-	task := &model.Task{Status: model.StatusDone, CompletedAt: &old, UpdatedAt: old}
+	row := &model.TaskRow{Status: model.StatusDone, CompletedAt: &old, UpdatedAt: old}
 
-	got := ApplyStatus(task, model.StatusDone, now)
+	got := ApplyStatus(row, model.StatusDone, now)
 
 	if got.UpdatedAt != now {
 		t.Errorf("UpdatedAt = %d, want %d", got.UpdatedAt, now)
@@ -64,9 +64,9 @@ func TestApplyStatus_ReStampsUpdatedAt(t *testing.T) {
 }
 
 func TestApplyStatus_ReturnsSamePointer(t *testing.T) {
-	task := &model.Task{Status: model.StatusTodo}
-	if ApplyStatus(task, model.StatusDone, 1) != task {
-		t.Error("ApplyStatus did not return the same task pointer")
+	row := &model.TaskRow{Status: model.StatusTodo}
+	if ApplyStatus(row, model.StatusDone, 1) != row {
+		t.Error("ApplyStatus did not return the same row pointer")
 	}
 }
 

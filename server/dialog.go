@@ -43,7 +43,7 @@ const topNTasksDefault = 20
 // one opens the Task Detail dialog.
 //
 // state carries the user id so the submit handler can resolve "mine".
-func buildQuickListDialog(userID string, tasks []taskmodel.Task) model.Dialog {
+func buildQuickListDialog(userID string, tasks []*taskmodel.Task) model.Dialog {
 	taskOptions := make([]*model.PostActionOptions, 0, len(tasks))
 	for _, t := range tasks {
 		label := t.Summary
@@ -114,7 +114,7 @@ func buildQuickListDialog(userID string, tasks []taskmodel.Task) model.Dialog {
 // introduction text. Submit performs a PATCH.
 //
 // state carries the task id.
-func buildTaskDetailDialog(t *taskmodel.Task, subtaskDone, subtaskTotal int, recentComments []taskmodel.Comment) model.Dialog {
+func buildTaskDetailDialog(t *taskmodel.Task, subtaskDone, subtaskTotal int, recentComments []string) model.Dialog {
 	intro := fmt.Sprintf("**Status:** %s", statusLabel(t.Status))
 	if subtaskTotal > 0 {
 		intro += fmt.Sprintf("  ·  **Subtasks:** %d/%d", subtaskDone, subtaskTotal)
@@ -122,8 +122,7 @@ func buildTaskDetailDialog(t *taskmodel.Task, subtaskDone, subtaskTotal int, rec
 	if len(recentComments) > 0 {
 		parts := make([]string, 0, len(recentComments)+1)
 		parts = append(parts, "", "**Recent comments:**")
-		for _, c := range recentComments {
-			line := c.Content
+		for _, line := range recentComments {
 			if len(line) > 80 {
 				line = line[:79] + "…"
 			}

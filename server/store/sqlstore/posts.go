@@ -8,6 +8,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
+
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
@@ -17,9 +19,8 @@ const postsTableShort = "posts"
 // postColumns lists every column of task_posts in scan order.
 var postColumns = []string{"id", "task_id", "post_id", "kind", "created_at"}
 
-// ErrPostNotFound is returned by GetPostByKind / DeletePost when no matching
+// store.ErrPostNotFound is returned by GetPostByKind / DeletePost when no matching
 // tracking row exists.
-var ErrPostNotFound = errors.New("task post not found")
 
 // AddPost records that a post renders a task's card. kind must be one of the
 // PostKind* constants; the store rejects anything else so the kind namespace
@@ -78,7 +79,7 @@ func (s *SQLStore) ListPosts(ctx context.Context, taskID string) ([]model.TaskPo
 }
 
 // GetPostByKind returns the post_id of the single tracked card of `kind` for
-// `taskID` (e.g. the channel card or the DM card). Returns ErrPostNotFound
+// `taskID` (e.g. the channel card or the DM card). Returns store.ErrPostNotFound
 // when no such row exists. LIMIT 1 keeps it cheap even if a future kind allows
 // multiples.
 func (s *SQLStore) GetPostByKind(ctx context.Context, taskID, kind string) (string, error) {
@@ -101,7 +102,7 @@ func (s *SQLStore) GetPostByKind(ctx context.Context, taskID, kind string) (stri
 		Scan(&postID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrPostNotFound
+			return "", store.ErrPostNotFound
 		}
 		return "", fmt.Errorf("get post by kind %s/%s: %w", taskID, kind, err)
 	}
@@ -109,7 +110,7 @@ func (s *SQLStore) GetPostByKind(ctx context.Context, taskID, kind string) (stri
 }
 
 // DeletePost removes the tracking row for a single post. Idempotent: returns
-// ErrPostNotFound when no tracking row exists (the post may already have been
+// store.ErrPostNotFound when no tracking row exists (the post may already have been
 // untracked, or was never a card); callers wanting idempotency ignore that
 // error. The Mattermost post itself is not deleted here — that's a separate
 // p.API.DeletePost concern at the service layer.
@@ -129,7 +130,7 @@ func (s *SQLStore) DeletePost(ctx context.Context, postID string) error {
 		return fmt.Errorf("delete post %s: rows affected: %w", postID, err)
 	}
 	if rows == 0 {
-		return ErrPostNotFound
+		return store.ErrPostNotFound
 	}
 	return nil
 }

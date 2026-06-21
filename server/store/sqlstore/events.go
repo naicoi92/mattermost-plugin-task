@@ -14,6 +14,11 @@ import (
 // eventsTableShort is the short (unprefixed) name of the task_events table.
 const eventsTableShort = "events"
 
+// actorSystem is the recorded ActorID for transitions whose acting user is not
+// known at the store layer (system-initiated or pre-audit-hook). M3-3 replaces
+// these with the real acting user.
+const actorSystem = "system"
+
 // eventColumns lists every column of task_events in scan order.
 var eventColumns = []string{"id", "task_id", "actor_id", "event_type", "from_value", "to_value", "created_at"}
 
@@ -31,8 +36,14 @@ func (s *SQLStore) AppendTaskEvent(ctx context.Context, e model.TaskEvent) error
 	if e.TaskID == "" {
 		return errors.New("append event: task id is required")
 	}
+	// ActorID is optional: the service layer's transition methods (SetStatus,
+	// Patch, Assign, ...) don't yet thread the acting user through (M3-3 adds
+	// audit hooks with proper actors). Until then, a system-initiated transition
+	// records ActorID as "system" so the audit row still lands and the
+	// transition can't be blocked by a missing actor. Callers that DO know the
+	// actor pass it explicitly and it is preserved.
 	if e.ActorID == "" {
-		return errors.New("append event: actor id is required")
+		e.ActorID = actorSystem
 	}
 	if !model.IsValidEventType(e.EventType) {
 		return fmt.Errorf("append event: invalid event type %q", e.EventType)

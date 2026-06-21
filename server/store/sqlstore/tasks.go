@@ -27,10 +27,9 @@ var taskColumns = []string{
 	"cancelled_at", "created_at", "updated_at",
 }
 
-// ErrTaskNotFound is returned by GetTask/UpdateTask/DeleteTask/TouchTaskUpdatedAt
+// store.ErrTaskNotFound is returned by GetTask/UpdateTask/DeleteTask/TouchTaskUpdatedAt
 // when no row matches the given id. Service-layer code checks errors.Is to
 // translate it into the appropriate not-found response.
-var ErrTaskNotFound = errors.New("task not found")
 
 // CreateTask inserts a task row and returns the stored row. The caller is
 // responsible for assigning the ULID id and the initial order_key; the store
@@ -46,7 +45,7 @@ func (s *SQLStore) CreateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		Values(
 			task.ID, task.Summary, task.Description, task.ChannelID,
 			nullableString(task.ParentTaskID), task.Status, task.OrderKey,
-			task.IsAllDay, task.DueAt, task.CompletedAt, task.CancelledAt,
+			task.IsAllDay, task.Due, task.CompletedAt, task.CancelledAt,
 			task.CreatedAt, task.UpdatedAt,
 		)
 	if _, err := qb.ExecContext(ctx); err != nil {
@@ -55,7 +54,7 @@ func (s *SQLStore) CreateTask(ctx context.Context, task model.TaskRow) (model.Ta
 	return task, nil
 }
 
-// GetTask selects a single task by id. Returns ErrTaskNotFound when the row is
+// GetTask selects a single task by id. Returns store.ErrTaskNotFound when the row is
 // absent so callers can distinguish "missing" from a genuine database error.
 func (s *SQLStore) GetTask(ctx context.Context, id string) (*model.TaskRow, error) {
 	qb := s.builder().
@@ -66,7 +65,7 @@ func (s *SQLStore) GetTask(ctx context.Context, id string) (*model.TaskRow, erro
 	tr, err := scanTaskRow(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrTaskNotFound
+			return nil, store.ErrTaskNotFound
 		}
 		return nil, fmt.Errorf("get task %s: %w", id, err)
 	}
@@ -89,7 +88,7 @@ func (s *SQLStore) UpdateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		"status":         task.Status,
 		"order_key":      task.OrderKey,
 		"is_all_day":     task.IsAllDay,
-		"due_at":         task.DueAt,
+		"due_at":         task.Due,
 		"completed_at":   task.CompletedAt,
 		"cancelled_at":   task.CancelledAt,
 		"updated_at":     task.UpdatedAt,
@@ -109,7 +108,7 @@ func (s *SQLStore) UpdateTask(ctx context.Context, task model.TaskRow) (model.Ta
 	updated, err := scanTaskRow(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return model.TaskRow{}, ErrTaskNotFound
+			return model.TaskRow{}, store.ErrTaskNotFound
 		}
 		return model.TaskRow{}, fmt.Errorf("update task %s: %w", task.ID, err)
 	}
@@ -145,7 +144,7 @@ func (s *SQLStore) TouchTaskUpdatedAt(ctx context.Context, id string, ts int64) 
 		return fmt.Errorf("touch updated_at %s: rows affected: %w", id, err)
 	}
 	if rows == 0 {
-		return ErrTaskNotFound
+		return store.ErrTaskNotFound
 	}
 	return nil
 }
@@ -169,7 +168,7 @@ func (s *SQLStore) DeleteTask(ctx context.Context, id string) error {
 		return fmt.Errorf("delete task %s: rows affected: %w", id, err)
 	}
 	if rows == 0 {
-		return ErrTaskNotFound
+		return store.ErrTaskNotFound
 	}
 	return nil
 }
@@ -226,8 +225,8 @@ func (s *SQLStore) ListTasks(ctx context.Context, q store.ListQuery) (store.Page
 
 	items := make([]any, 0, len(tasks))
 	for i := range tasks {
-		// ListTasks returns TaskRow values; TaskView assembly (creator/
-		// assignee/posts/reminder) is a separate GetTaskView call to keep the
+		// ListTasks returns TaskRow values; Task assembly (creator/
+		// assignee/posts/reminder) is a separate assembleTask call to keep the
 		// hot list path a single join-free query.
 		items = append(items, &tasks[i])
 	}
@@ -531,7 +530,7 @@ func scanTaskRow(r scanner) (*model.TaskRow, error) {
 	var parentTaskID sql.NullString
 	if err := r.Scan(
 		&t.ID, &t.Summary, &t.Description, &t.ChannelID, &parentTaskID,
-		&t.Status, &t.OrderKey, &t.IsAllDay, &t.DueAt, &t.CompletedAt,
+		&t.Status, &t.OrderKey, &t.IsAllDay, &t.Due, &t.CompletedAt,
 		&t.CancelledAt, &t.CreatedAt, &t.UpdatedAt,
 	); err != nil {
 		return nil, err

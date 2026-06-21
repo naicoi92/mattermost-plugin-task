@@ -6,8 +6,8 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/pkg/errors"
 
+	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
-	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
 // runJob is the generic starter-template background job placeholder, kept
@@ -44,8 +44,10 @@ func (p *Plugin) runReminderJob() {
 			continue
 		}
 		// Mark fired only after a successful DM send so a transient failure
-		// retries on the next tick (within the grace window).
-		if err := p.taskService.MarkReminderFired(r.TaskID); err != nil {
+		// retries on the next tick (within the grace window). Takes the
+		// reminder id (SQL reminders have their own id) plus the task id for
+		// the audit-event append.
+		if err := p.taskService.MarkReminderFired(r.ReminderID, r.TaskID); err != nil {
 			p.API.LogError("Reminder job failed to mark fired",
 				"task_id", r.TaskID, "error", err)
 		}
@@ -62,7 +64,7 @@ func (p *Plugin) runReminderJob() {
 // an error when delivery failed (so the caller does NOT mark the reminder fired
 // and retries on the next tick). Prefers the localized notifier; falls back to a
 // plain DM when the notifier isn't initialized (e.g. activation races).
-func (p *Plugin) fireReminderDM(r task.DueReminder) error {
+func (p *Plugin) fireReminderDM(r taskmodel.DueReminder) error {
 	if p.notifier != nil {
 		t, _ := p.taskService.Get(r.TaskID)
 		summary := notification.TaskSummary{ID: r.TaskID}

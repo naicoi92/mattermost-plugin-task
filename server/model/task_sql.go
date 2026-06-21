@@ -1,17 +1,14 @@
 package model
 
-// This file holds the SQL-store data types introduced by the KV → SQL
-// migration (milestone 12). They are intentionally separate from the legacy
-// KV-backed model.Task / model.Comment / model.ReminderMetadata until M5-1
-// removes the KV layer: the legacy types stay usable for the live service,
-// while the SQL repositories operate on the normalized rows below. M3-2 swaps
-// the service over to these types and M5-1 deletes the legacy ones.
-
-// TaskRow is the normalized row of the task_tasks table. It carries only the
-// core 1:1 attributes; relations (members, reminders, posts, comments, events)
-// live in their own tables and are assembled into TaskView by GetTaskView.
+// TaskRow is one row of the task_tasks table: the core 1:1 attributes only.
+// Relations (members, reminders, posts, comments, events) live in their own
+// tables and are assembled into a Task by the service's assembleTask helper.
 //
-// Field order is not load-bearing — repositories select columns by name.
+// The field set is exactly the task_tasks columns; CreateTask accepts a
+// TaskRow (not a Task) so a caller can't accidentally pass AssigneeID /
+// ChannelPostID expecting them to be persisted — those require their own
+// AddMember / AddPost calls. Field order is not load-bearing; repositories
+// select columns by name.
 type TaskRow struct {
 	// ID is the ULID primary key.
 	ID string `json:"id" db:"id"`
@@ -28,10 +25,12 @@ type TaskRow struct {
 	Status string `json:"status" db:"status"`
 	// OrderKey is the global fractional-index rank used for Kanban ordering.
 	OrderKey string `json:"order_key" db:"order_key"`
-	// IsAllDay marks due_at as a date (no time component) for rendering.
+	// IsAllDay marks the due date as a date (no time component) for rendering.
 	IsAllDay bool `json:"is_all_day" db:"is_all_day"`
-	// DueAt is the due timestamp in ms UTC; nil means no due date.
-	DueAt *int64 `json:"due_at,omitempty" db:"due_at"`
+	// Due is the due timestamp in ms UTC; nil means no due date. The db tag is
+	// "due_at" (the column name); the field/json name is "due" to match the
+	// webapp's REST contract.
+	Due *int64 `json:"due,omitempty" db:"due_at"`
 	// CompletedAt is set when the task transitions to done; nil otherwise.
 	CompletedAt *int64 `json:"completed_at,omitempty" db:"completed_at"`
 	// CancelledAt is set when the task transitions to cancelled; nil otherwise.
@@ -43,12 +42,16 @@ type TaskRow struct {
 	UpdatedAt int64 `json:"updated_at" db:"updated_at"`
 }
 
-// TaskView is the assembled DTO returned by REST/WS. It embeds the core
-// TaskRow and denormalizes the relations back into the flat shape the webapp
-// and legacy REST contract expect (creator_id, assignee_id, post ids,
-// reminder fields). This keeps the JSON response stable across the migration
-// while the storage layer is fully normalized underneath.
-type TaskView struct {
+// Task is the task entity returned to REST/WS consumers. It embeds the core
+// TaskRow (id, summary, status, due, ...) and denormalizes the relations back
+// into the flat JSON shape the webapp expects: creator_id and assignee_id
+// (from task_members), the card post ids (from task_posts), the reminder state
+// (from task_reminders), plus subtask progress and comment count aggregates.
+//
+// The storage layer is fully normalized (6 tables); Task is the assembled
+// projection consumers see. It is built by assembleTask at read time, never
+// written directly — writes go through the repository methods on each table.
+type Task struct {
 	TaskRow
 	// CreatorID is the user who created the task (task_members role=creator).
 	CreatorID string `json:"creator_id"`
@@ -68,10 +71,10 @@ type TaskView struct {
 	// task_reminders.fired_at.
 	ReminderFired bool `json:"reminder_fired"`
 	// SubtaskDone / SubtaskTotal give Kanban progress (e.g. "5/12 done").
-	// Populated by GetTaskView; zero/zero when the task has no subtasks.
-	SubtaskDone  int `json:"subtask_done"`
+	// Zero/zero when the task has no subtasks.
+	SubtaskDone int `json:"subtask_done"`
+	// SubtaskTotal is the count of direct subtasks.
 	SubtaskTotal int `json:"subtask_total"`
 	// CommentCount is the number of thread replies linked to this task.
-	// Populated by GetTaskView.
 	CommentCount int `json:"comment_count"`
 }

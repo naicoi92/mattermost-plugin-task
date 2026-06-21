@@ -9,6 +9,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 
+	"github.com/naicoi92/mattermost-plugin-task/server/store"
+
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
@@ -18,9 +20,8 @@ const membersTableShort = "members"
 // membersColumns lists every column of task_members in scan order.
 var membersColumns = []string{"task_id", "user_id", "role", "created_at"}
 
-// ErrMemberNotFound is returned by GetMemberByRole / RemoveMember when no
+// store.ErrMemberNotFound is returned by GetMemberByRole / RemoveMember when no
 // matching membership edge exists.
-var ErrMemberNotFound = errors.New("task member not found")
 
 // AddMember records a (task, user, role) edge. The composite primary key makes
 // it idempotent: re-adding an existing edge is a no-op rather than an error,
@@ -75,7 +76,7 @@ func (s *SQLStore) RemoveMember(ctx context.Context, taskID, userID, role string
 }
 
 // ListMembers returns every membership edge of a task, ordered by created_at
-// then role so the result is stable. Used to populate the TaskView relations
+// then role so the result is stable. Used to populate the Task relations
 // and by permission checks.
 func (s *SQLStore) ListMembers(ctx context.Context, taskID string) ([]model.TaskMember, error) {
 	if taskID == "" {
@@ -107,7 +108,7 @@ func (s *SQLStore) ListMembers(ctx context.Context, taskID string) ([]model.Task
 }
 
 // GetMemberByRole returns the user_id of the single member holding `role` on
-// `taskID` (e.g. the assignee or creator). Returns ErrMemberNotFound when no
+// `taskID` (e.g. the assignee or creator). Returns store.ErrMemberNotFound when no
 // such edge exists.
 //
 // The schema (PK task_id+user_id+role) deliberately allows several users in
@@ -124,7 +125,7 @@ func (s *SQLStore) GetMemberByRole(ctx context.Context, taskID, role string) (st
 		return "", errors.New("get member by role: role is required")
 	}
 	// Validate role so a typo like "assginee" fails loudly here rather than
-	// being masked as ErrMemberNotFound.
+	// being masked as store.ErrMemberNotFound.
 	if !model.IsValidMemberRole(role) {
 		return "", fmt.Errorf("get member by role: invalid role %q", role)
 	}
@@ -138,7 +139,7 @@ func (s *SQLStore) GetMemberByRole(ctx context.Context, taskID, role string) (st
 		Scan(&userID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrMemberNotFound
+			return "", store.ErrMemberNotFound
 		}
 		return "", fmt.Errorf("get member by role %s/%s: %w", taskID, role, err)
 	}

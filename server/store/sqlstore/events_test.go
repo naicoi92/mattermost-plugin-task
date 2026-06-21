@@ -51,6 +51,29 @@ func TestAppendTaskEvent_InsertsRow(t *testing.T) {
 	assert.Nil(t, got[0].FromValue, "from_value should be nil when not set")
 }
 
+func TestAppendTaskEvent_EmptyActorDefaultsToSystem(t *testing.T) {
+	// Until M3-3 threads the acting user through the service transitions, a
+	// system-initiated event records ActorID="system" so the audit row still
+	// lands. An explicit actor is preserved unchanged.
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+
+	mustAppend(t, s, ctx, eventFixture("E1", "T1", model.EventStatusChanged, func(e *model.TaskEvent) {
+		e.ActorID = "" // system-initiated: defaults to "system"
+	}))
+	mustAppend(t, s, ctx, eventFixture("E2", "T1", model.EventCommented, func(e *model.TaskEvent) {
+		e.ActorID = "u-real"
+	}))
+
+	got, err := s.ListTaskEvents(ctx, "T1", 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	// Newest first: E2 (explicit actor), E1 (defaulted).
+	assert.Equal(t, "u-real", got[0].ActorID)
+	assert.Equal(t, "system", got[1].ActorID, "empty actor defaults to system")
+}
+
 func TestAppendTaskEvent_ValidatesRequiredFields(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
@@ -62,7 +85,6 @@ func TestAppendTaskEvent_ValidatesRequiredFields(t *testing.T) {
 	}{
 		{"missing id", func(e *model.TaskEvent) { e.ID = "" }},
 		{"missing task id", func(e *model.TaskEvent) { e.TaskID = "" }},
-		{"missing actor id", func(e *model.TaskEvent) { e.ActorID = "" }},
 		{"invalid event type", func(e *model.TaskEvent) { e.EventType = "frobulated" }},
 	}
 	for _, tc := range cases {

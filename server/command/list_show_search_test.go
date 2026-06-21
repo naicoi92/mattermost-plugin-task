@@ -33,7 +33,7 @@ func TestHandleAdd_RequiresSummary(t *testing.T) {
 }
 
 func TestHandleAdd_CreatesTaskInChannel(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1", Summary: "buy milk"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "buy milk"}}}
 	h := newTestHandler(svc)
 	resp, err := h.Handle(args("u1", "/task add \"buy milk\""))
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestHandleAdd_CreatesTaskInChannel(t *testing.T) {
 }
 
 func TestHandleAdd_StripsSurroundingQuotes(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc)
 	_, err := h.Handle(args("u1", "/task add 'write docs'"))
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestHandleAdd_DefaultsToChannelScope(t *testing.T) {
 	// would panic on a nil client, so we leave botUserID empty (isBotDM returns
 	// false early) and confirm the channel-scope default. The personal-scope
 	// branch (bot DM) is exercised in the integration/E2E path.
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc) // botUserID empty → isBotDM short-circuits
 	_, err := h.Handle(args("u1", "/task add personal task"))
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func (f *fakeTaskDetailOpener) OpenTaskDetail(triggerID, taskID string) bool {
 // the New Task dialog prefilled with the summary instead of creating the task
 // immediately (#95).
 func TestHandleAdd_OpensDialogWhenTriggerAndOpener(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc)
 	opener := &fakeNewTaskOpener{opened: true}
 	h.newTaskOpener = opener
@@ -151,7 +151,7 @@ func TestHandleAdd_OpensDialogWhenTriggerAndOpener(t *testing.T) {
 // command falls back to creating the task immediately so the flow never
 // dead-ends (#95).
 func TestHandleAdd_FallsBackToCreateWhenOpenerFails(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1", Summary: "buy milk"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "buy milk"}}}
 	h := newTestHandler(svc)
 	h.newTaskOpener = &fakeNewTaskOpener{opened: false} // opener fails
 
@@ -164,7 +164,7 @@ func TestHandleAdd_FallsBackToCreateWhenOpenerFails(t *testing.T) {
 // Without an opener wired (bare handler, e.g. unit tests), /task add always
 // creates immediately even when a trigger id is present.
 func TestHandleAdd_CreatesImmediatelyWithoutOpener(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1", Summary: "buy milk"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "buy milk"}}}
 	h := newTestHandler(svc) // newTaskOpener is nil
 
 	resp, err := h.Handle(argsWithTrigger("u1", "/task add \"buy milk\"", "trig-1"))
@@ -177,7 +177,7 @@ func TestHandleAdd_CreatesImmediatelyWithoutOpener(t *testing.T) {
 // with NO summary (blank dialog). This is the primary create entry point on
 // mobile (#107), where there is no header button.
 func TestHandleNew_OpensBlankDialogWithoutSummary(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc)
 	opener := &fakeNewTaskOpener{opened: true}
 	h.newTaskOpener = opener
@@ -195,7 +195,7 @@ func TestHandleNew_OpensBlankDialogWithoutSummary(t *testing.T) {
 // /task new "<summary>" pre-fills the dialog, like the button opened from a
 // message (#16). It still does NOT create the task immediately.
 func TestHandleNew_PrefillsDialogWithSummary(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc)
 	opener := &fakeNewTaskOpener{opened: true}
 	h.newTaskOpener = opener
@@ -210,7 +210,7 @@ func TestHandleNew_PrefillsDialogWithSummary(t *testing.T) {
 // When the opener fails, /task new does NOT fall back to immediate create
 // (an empty task is meaningless); it surfaces an actionable hint instead.
 func TestHandleNew_HintsInsteadOfFallingBackWhenOpenerFails(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc)
 	h.newTaskOpener = &fakeNewTaskOpener{opened: false} // opener fails
 
@@ -223,7 +223,7 @@ func TestHandleNew_HintsInsteadOfFallingBackWhenOpenerFails(t *testing.T) {
 // Without an opener (or no trigger id), /task new cannot open a dialog and
 // must NOT create an empty task. It returns an actionable hint.
 func TestHandleNew_HintsWhenNoOpenerOrTrigger(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc) // newTaskOpener is nil
 
 	resp, err := h.Handle(argsWithTrigger("u1", "/task new", "trig-1"))
@@ -237,7 +237,7 @@ func TestHandleNew_HintsWhenNoOpenerOrTrigger(t *testing.T) {
 // same /task add hint instead of creating an empty task. Covers the TriggerId
 // half of the `newTaskOpener != nil && args.TriggerId != ""` guard.
 func TestHandleNew_HintsWhenTriggerIDEmpty(t *testing.T) {
-	svc := &fakeStatusService{createTask: &taskmodel.Task{ID: "t1"}}
+	svc := &fakeStatusService{createTask: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1"}}}
 	h := newTestHandler(svc)
 	h.newTaskOpener = &fakeNewTaskOpener{opened: true} // opener available
 
@@ -255,9 +255,9 @@ func TestHandleList_EmptyReturnsNoTasks(t *testing.T) {
 }
 
 func TestHandleList_ReturnsTasks(t *testing.T) {
-	svc := &fakeStatusService{listResult: []taskmodel.Task{
-		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
-		{ID: "t2", Summary: "second", Status: taskmodel.StatusDone},
+	svc := &fakeStatusService{listResult: []*taskmodel.Task{
+		{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo}},
+		{TaskRow: taskmodel.TaskRow{ID: "t2", Summary: "second", Status: taskmodel.StatusDone}},
 	}}
 	h := newTestHandler(svc)
 	resp, err := h.Handle(args("u1", "/task list"))
@@ -268,7 +268,7 @@ func TestHandleList_ReturnsTasks(t *testing.T) {
 }
 
 func TestHandleList_ParsesScopeAndStatusFilters(t *testing.T) {
-	svc := &fakeStatusService{listResult: []taskmodel.Task{}}
+	svc := &fakeStatusService{listResult: []*taskmodel.Task{}}
 	h := newTestHandler(svc)
 	_, err := h.Handle(args("u1", "/task list channel done"))
 	require.NoError(t, err)
@@ -281,8 +281,8 @@ func TestHandleList_ParsesScopeAndStatusFilters(t *testing.T) {
 // /task list opens the Interactive Dialog instead of returning the text list
 // (#97). Scope/status/due filters pass through to the opener.
 func TestHandleList_OpensDialogWhenTriggerAndOpener(t *testing.T) {
-	svc := &fakeStatusService{listResult: []taskmodel.Task{
-		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
+	svc := &fakeStatusService{listResult: []*taskmodel.Task{
+		{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo}},
 	}}
 	h := newTestHandler(svc)
 	opener := &fakeQuickListOpener{opened: true}
@@ -316,8 +316,8 @@ func TestHandleList_ChannelScopePassesChannelID(t *testing.T) {
 
 // When the opener reports failure, /task list falls back to the text list.
 func TestHandleList_FallsBackToTextWhenOpenerFails(t *testing.T) {
-	svc := &fakeStatusService{listResult: []taskmodel.Task{
-		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
+	svc := &fakeStatusService{listResult: []*taskmodel.Task{
+		{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo}},
 	}}
 	h := newTestHandler(svc)
 	h.quickListOpener = &fakeQuickListOpener{opened: false} // opener fails
@@ -330,8 +330,8 @@ func TestHandleList_FallsBackToTextWhenOpenerFails(t *testing.T) {
 // Without an opener wired, /task list always returns the text list even with a
 // trigger id.
 func TestHandleList_ReturnsTextWithoutOpener(t *testing.T) {
-	svc := &fakeStatusService{listResult: []taskmodel.Task{
-		{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo},
+	svc := &fakeStatusService{listResult: []*taskmodel.Task{
+		{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "first", Status: taskmodel.StatusTodo}},
 	}}
 	h := newTestHandler(svc) // quickListOpener is nil
 
@@ -358,8 +358,11 @@ func TestHandleShow_TaskNotFound(t *testing.T) {
 func TestHandleShow_RendersDetail(t *testing.T) {
 	due := int64(1700000000000)
 	svc := &fakeStatusService{getResult: &taskmodel.Task{
-		ID: "t1", Summary: "Review", Status: taskmodel.StatusInProgress,
-		Description: "needs review", AssigneeID: "u2", Due: &due,
+		TaskRow: taskmodel.TaskRow{
+			ID: "t1", Summary: "Review", Status: taskmodel.StatusInProgress,
+			Description: "needs review", Due: &due,
+		},
+		AssigneeID: "u2",
 	}}
 	h := newTestHandler(svc)
 	resp, err := h.Handle(args("u1", "/task show t1"))
@@ -374,7 +377,7 @@ func TestHandleShow_RendersDetail(t *testing.T) {
 // /task show opens the Interactive Dialog instead of returning the text card
 // (#97). The task id passes through to the opener.
 func TestHandleShow_OpensDialogWhenTriggerAndOpener(t *testing.T) {
-	svc := &fakeStatusService{getResult: &taskmodel.Task{ID: "t1", Summary: "Review"}}
+	svc := &fakeStatusService{getResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "Review"}}}
 	h := newTestHandler(svc)
 	opener := &fakeTaskDetailOpener{opened: true}
 	h.taskDetailOpener = opener
@@ -390,7 +393,7 @@ func TestHandleShow_OpensDialogWhenTriggerAndOpener(t *testing.T) {
 
 // When the opener reports failure, /task show falls back to the text card.
 func TestHandleShow_FallsBackToTextWhenOpenerFails(t *testing.T) {
-	svc := &fakeStatusService{getResult: &taskmodel.Task{ID: "t1", Summary: "Review"}}
+	svc := &fakeStatusService{getResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "Review"}}}
 	h := newTestHandler(svc)
 	h.taskDetailOpener = &fakeTaskDetailOpener{opened: false} // opener fails
 
@@ -402,7 +405,7 @@ func TestHandleShow_FallsBackToTextWhenOpenerFails(t *testing.T) {
 // Without an opener wired, /task show always returns the text card even with a
 // trigger id.
 func TestHandleShow_ReturnsTextWithoutOpener(t *testing.T) {
-	svc := &fakeStatusService{getResult: &taskmodel.Task{ID: "t1", Summary: "Review"}}
+	svc := &fakeStatusService{getResult: &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "Review"}}}
 	h := newTestHandler(svc) // taskDetailOpener is nil
 
 	resp, err := h.Handle(argsWithTrigger("u1", "/task show t1", "trig-1"))
@@ -427,8 +430,8 @@ func TestHandleSearch_NoMatches(t *testing.T) {
 }
 
 func TestHandleSearch_ReturnsMatches(t *testing.T) {
-	svc := &fakeStatusService{searchResult: []taskmodel.Task{
-		{ID: "t1", Summary: "buy milk", Status: taskmodel.StatusTodo},
+	svc := &fakeStatusService{searchResult: []*taskmodel.Task{
+		{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "buy milk", Status: taskmodel.StatusTodo}},
 	}}
 	h := newTestHandler(svc)
 	resp, err := h.Handle(args("u1", "/task search milk"))
@@ -445,15 +448,18 @@ func TestStatusGlyph(t *testing.T) {
 
 func TestFormatTaskDetail(t *testing.T) {
 	t.Run("minimal task", func(t *testing.T) {
-		s := formatTaskDetail(&taskmodel.Task{ID: "t1", Summary: "x", Status: taskmodel.StatusTodo})
+		s := formatTaskDetail(&taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "t1", Summary: "x", Status: taskmodel.StatusTodo}})
 		assert.Contains(t, s, "x")
 		assert.Contains(t, s, "todo")
 	})
 	t.Run("full task", func(t *testing.T) {
 		due := int64(0)
 		s := formatTaskDetail(&taskmodel.Task{
-			ID: "t1", Summary: "x", Status: taskmodel.StatusTodo,
-			Description: "desc", AssigneeID: "u2", Due: &due,
+			TaskRow: taskmodel.TaskRow{
+				ID: "t1", Summary: "x", Status: taskmodel.StatusTodo,
+				Description: "desc", Due: &due,
+			},
+			AssigneeID: "u2",
 		})
 		assert.Contains(t, s, "desc")
 		assert.Contains(t, s, "u2")
