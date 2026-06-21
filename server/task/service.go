@@ -514,7 +514,7 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 
 		// Cascade-cancel open subtasks when the parent is cancelled.
 		if newStatus == model.StatusCancelled {
-			if err := s.cascadeCancelSubtasks(txCtx, tx, id); err != nil {
+			if err := s.cascadeCancelSubtasks(txCtx, tx, id, actorID, now); err != nil {
 				return err
 			}
 		}
@@ -636,19 +636,33 @@ var ErrSubtaskCycle = errors.New("subtask would form a cycle or exceed the nesti
 // cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
 // cancelled, issuing UpdateTask per subtask inside the already-open tx. Already
 // terminal subtasks are left untouched.
-func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID string) error {
+func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID, actorID string, now int64) error {
 	subs, err := tx.ListSubtasks(ctx, parentID)
 	if err != nil {
 		return errors.Wrap(err, "failed to list subtasks for cascade cancel")
 	}
-	now := nowFunc()
 	for i := range subs {
 		sub := subs[i]
 		if model.IsTerminalStatus(sub.Status) {
 			continue
 		}
+		oldStatus := sub.Status
 		taskutil.ApplyStatus(&sub, model.StatusCancelled, now)
 		if _, err := tx.UpdateTask(ctx, sub); err != nil {
+			return err
+		}
+		// Audit each cascade-cancelled subtask so the trail records the
+		// system-initiated cancellation (from open -> cancelled).
+		from, to := oldStatus, model.StatusCancelled
+		if err := tx.AppendTaskEvent(ctx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    sub.ID,
+			ActorID:   actorID,
+			EventType: model.EventStatusChanged,
+			CreatedAt: now,
+			FromValue: &from,
+			ToValue:   &to,
+		}); err != nil {
 			return err
 		}
 	}

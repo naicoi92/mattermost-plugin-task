@@ -755,6 +755,10 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 	action, _ := req.Context["action"].(string)
 	taskID, _ := req.Context["task_id"].(string)
 	actorID := req.UserId
+	if actorID == "" {
+		p.writeError(w, http.StatusUnauthorized, "not authorized")
+		return
+	}
 	if taskID == "" || action == "" {
 		p.writeError(w, http.StatusBadRequest, "missing action or task_id")
 		return

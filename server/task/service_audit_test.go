@@ -243,3 +243,23 @@ func TestAudit_ActorIDThreaded_NotSystemPlaceholder(t *testing.T) {
 
 // strPtr is a test helper for PatchInput.Description (a *string field).
 func strPtr(s string) *string { return &s }
+
+func TestAudit_CascadeCancel_RecordsEventPerSubtask(t *testing.T) {
+	// Cancelling a parent cascade-cancels its open subtasks; each subtask must
+	// get its own status_changed audit event (from open -> cancelled).
+	svc, s := newTestService(t)
+	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
+	sub := mustCreateTask(t, svc, CreateInput{Summary: "open sub", CreatorID: "u-c", ParentTaskID: parent.ID})
+
+	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusCancelled)
+	require.NoError(t, err)
+
+	// The subtask must have a status_changed event from todo -> cancelled.
+	events := auditEvents(t, s, sub.ID, model.EventStatusChanged)
+	require.Len(t, events, 1)
+	assert.Equal(t, "u-actor", events[0].ActorID, "cascade event carries the parent's actor")
+	require.NotNil(t, events[0].FromValue)
+	assert.Equal(t, model.StatusTodo, *events[0].FromValue)
+	require.NotNil(t, events[0].ToValue)
+	assert.Equal(t, model.StatusCancelled, *events[0].ToValue)
+}
