@@ -72,7 +72,6 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     const [error, setError] = useState<string>('');
     const [newComment, setNewComment] = useState('');
     const [newSubtask, setNewSubtask] = useState('');
-    const [editAssignee, setEditAssignee] = useState(false);
 
     // Load the task + subtasks + comments whenever the selected id changes.
     useEffect(() => {
@@ -147,7 +146,6 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     };
 
     const setAssignee = async (userID: string) => {
-        setEditAssignee(false);
         try {
             if (userID) {
                 const updated = await client.setTaskAssignee(full.id, userID);
@@ -259,23 +257,12 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
             <div className='task-fields-row'>
                 <div className='task-field'>
                     <span className='task-field__label'>{t('webapp.task.assignee')}</span>
-                    {editAssignee ? (
-                        <UserPicker
-                            value={full.assignee_id}
-                            valueLabel={assigneeLabel}
-                            channelID={full.channel_id || channelID}
-                            onSelect={(u) => setAssignee(u ? u.id : '')}
-                        />
-                    ) : (
-                        <button
-                            type='button'
-                            className='task-input'
-                            onClick={() => setEditAssignee(true)}
-                            style={{cursor: 'pointer', textAlign: 'left'}}
-                        >
-                            {full.assignee_id ? assigneeLabel : t('webapp.task.assignee.placeholder')}
-                        </button>
-                    )}
+                    <UserPicker
+                        value={full.assignee_id}
+                        valueLabel={assigneeLabel}
+                        channelID={full.channel_id || channelID}
+                        onSelect={(u) => setAssignee(u ? u.id : '')}
+                    />
                 </div>
                 <div className='task-field'>
                     <span className='task-field__label'>{t('webapp.task.due')}</span>

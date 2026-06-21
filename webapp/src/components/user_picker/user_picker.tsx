@@ -93,8 +93,14 @@ export default function UserPicker({value, valueLabel, channelID, onSelect, plac
         return () => window.clearTimeout(handle);
     }, [open, query, channelID]);
 
-    const selectedLabel = valueLabel || value;
+    const selectedLabel = valueLabel || '';
     const ph = placeholder || t('webapp.task.assignee.placeholder');
+
+    // resolved reports whether the currently-selected user has a real display
+    // label yet. Until the store/fetch resolves the id to a name we show a
+    // muted loading hint instead of the raw id, so the field never flashes
+    // an opaque value.
+    const resolved = Boolean(value) && selectedLabel.length > 0 && selectedLabel !== value;
 
     const choose = (u: UserSearchResult) => {
         onSelect({id: u.id, label: userLabel(u)});
@@ -109,12 +115,12 @@ export default function UserPicker({value, valueLabel, channelID, onSelect, plac
         >
             <button
                 type='button'
-                className={`task-input user-picker__trigger ${value ? '' : 'user-picker__trigger--placeholder'}`}
+                className={`task-input user-picker__trigger ${resolved ? '' : 'user-picker__trigger--placeholder'}`}
                 onClick={() => setOpen((v) => !v)}
                 aria-haspopup='listbox'
                 aria-expanded={open}
             >
-                {value ? (
+                {value && resolved ? (
                     <span className='user-picker__selected'>
                         {selectedLabel}
                         <span
@@ -138,7 +144,13 @@ export default function UserPicker({value, valueLabel, channelID, onSelect, plac
                         </span>
                     </span>
                 ) : (
-                    <span>{ph}</span>
+
+                    // Either nothing is selected, or a selection exists but its
+                    // name hasn't resolved yet. Show a muted hint (never the
+                    // raw id) so the field doesn't flash an opaque value.
+                    <span className='user-picker__trigger--placeholder'>
+                        {value ? '…' : ph}
+                    </span>
                 )}
             </button>
 
