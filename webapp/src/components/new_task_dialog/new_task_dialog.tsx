@@ -20,7 +20,7 @@ import type {Channel} from '@mattermost/types/channels';
 import {useResolvedUser} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
-import type {CreateTaskInput, Task, TaskPriority, TaskStatus} from 'types/tasks';
+import type {CreateTaskInput, Task, TaskPriority} from 'types/tasks';
 
 // ChannelType values: 'D' (direct), 'G' (group), 'O' (public), 'P' (private).
 // A DM's partner is encoded in the channel name as "<uid1>__<uid2>".
@@ -110,12 +110,15 @@ export interface NewTaskDialogProps {
 type QuickDue = '' | 'today' | 'tomorrow' | 'weekend' | 'next_week';
 
 // emptyForm is the reset state used when the dialog opens and after a submit.
+// Note: status is not included — the server always creates tasks in "todo" and
+// does not accept a status on POST /tasks. The form exposes priority + due +
+// assignee + description only; if the user wants a different status they set
+// it from the Task Detail after creation.
 const emptyForm = {
     summary: '',
     assigneeID: '',
     dueLocal: '',
     description: '',
-    status: 'todo' as TaskStatus,
     priority: 'standard' as TaskPriority,
 };
 
@@ -274,33 +277,18 @@ export default function NewTaskDialog({
                     />
                 </label>
 
-                <div className='task-fields-row'>
-                    <label className='task-field'>
-                        <span className='task-field__label task-field__label--upper'>{t('webapp.task.filter.status')}</span>
-                        <select
-                            className='task-select'
-                            value={form.status}
-                            onChange={(e) => update({status: e.target.value as TaskStatus})}
-                        >
-                            <option value='todo'>{t('webapp.task.status.todo')}</option>
-                            <option value='in_progress'>{t('webapp.task.status.in_progress')}</option>
-                            <option value='done'>{t('webapp.task.status.done')}</option>
-                            <option value='cancelled'>{t('webapp.task.status.cancelled')}</option>
-                        </select>
-                    </label>
-                    <label className='task-field'>
-                        <span className='task-field__label task-field__label--upper'>{t('webapp.task.priority')}</span>
-                        <select
-                            className='task-select'
-                            value={form.priority}
-                            onChange={(e) => update({priority: e.target.value as TaskPriority})}
-                        >
-                            <option value='standard'>{t('webapp.task.priority.standard')}</option>
-                            <option value='important'>{t('webapp.task.priority.important')}</option>
-                            <option value='urgent'>{t('webapp.task.priority.urgent')}</option>
-                        </select>
-                    </label>
-                </div>
+                <label className='task-field'>
+                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.priority')}</span>
+                    <select
+                        className='task-select'
+                        value={form.priority}
+                        onChange={(e) => update({priority: e.target.value as TaskPriority})}
+                    >
+                        <option value='standard'>{t('webapp.task.priority.standard')}</option>
+                        <option value='important'>{t('webapp.task.priority.important')}</option>
+                        <option value='urgent'>{t('webapp.task.priority.urgent')}</option>
+                    </select>
+                </label>
 
                 <div className='task-fields-row task-fields-row--due'>
                     <label className='task-field'>
@@ -308,6 +296,7 @@ export default function NewTaskDialog({
                         <select
                             className='task-select'
                             value={quickDue}
+                            aria-label={t('webapp.task.due')}
                             onChange={(e) => applyQuickDue(e.target.value as QuickDue)}
                         >
                             <option value=''>{t('webapp.task.due.pick')}</option>
@@ -323,6 +312,7 @@ export default function NewTaskDialog({
                             className='task-input'
                             type='datetime-local'
                             value={form.dueLocal}
+                            aria-label={t('webapp.task.due')}
                             onChange={(e) => {
                                 update({dueLocal: e.target.value});
                                 setQuickDue('');

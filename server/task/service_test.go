@@ -253,14 +253,18 @@ func TestDelete_NotFound(t *testing.T) {
 
 func TestList_ScopeDirectReturnsSharedTasks(t *testing.T) {
 	svc, _ := newTestService(t)
-	// u-me + u-partner are the DM pair. Tasks where either is a member are
-	// returned; a task whose only member is a third user is hidden.
-	mustCreateTask(t, svc, CreateInput{Summary: "shared1", CreatorID: "u-c", AssigneeID: "u-me"})
-	mustCreateTask(t, svc, CreateInput{Summary: "shared2", CreatorID: "u-c", AssigneeID: "u-partner"})
+	// u-me + u-partner are the DM pair. Only tasks where BOTH are members are
+	// returned (mutual-membership). A task created by u-c and assigned to u-me
+	// has u-c + u-me as members — neither u-me+u-partner both — so it's hidden.
+	// We construct a task where u-me is the creator and u-partner the assignee.
+	t1 := mustCreateTask(t, svc, CreateInput{Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
+	_ = t1
+	// Unrelated task: neither u-me nor u-partner is a member.
 	mustCreateTask(t, svc, CreateInput{Summary: "other", CreatorID: "u-c", AssigneeID: "u-third"})
 	got, err := svc.List(ListQuery{Scope: ScopeDirect, UserID: "u-me", PartnerID: "u-partner", Limit: 50})
 	require.NoError(t, err)
-	assert.Len(t, got, 2)
+	require.Len(t, got, 1)
+	assert.Equal(t, "shared", got[0].Summary)
 }
 
 func TestList_StatusFilter(t *testing.T) {

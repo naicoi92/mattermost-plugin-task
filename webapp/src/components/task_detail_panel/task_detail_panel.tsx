@@ -337,7 +337,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     <span
                         className={`quick-list__check task-detail__title-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
                         role='checkbox'
-                        aria-checked={full.status === 'done'}
+                        aria-checked={full.status === 'done' || full.status === 'cancelled'}
                         tabIndex={0}
                         onClick={cycleStatus}
                         onKeyDown={(e) => {
@@ -444,6 +444,12 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     <div
                         className={`task-detail__description ${full.description ? '' : 'task-detail__description--empty'}`}
                         onClick={() => setEditingDescription(true)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                setEditingDescription(true);
+                            }
+                        }}
                         role='button'
                         tabIndex={0}
                     >

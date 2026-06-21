@@ -409,21 +409,34 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 		}
 		b = b.Where(sq.Eq{"t.channel_id": q.ChannelID})
 	case store.ScopeDirect:
-		// "DM" = tasks shared between two users: every task on which either
-		// UserID or PartnerID holds the assignee or creator role. JOINs
-		// task_members on (user_id IN (me, partner) AND role IN (...)); a task
-		// both users relate to appears twice in the join and is collapsed by
-		// DISTINCT. The members_user_idx (user_id, role) index serves the JOIN
-		// and the IN list as two index scans the planner can merge.
+		// "DM" = tasks shared between exactly two users: every task on which
+		// BOTH UserID AND PartnerID hold the assignee or creator role. The
+		// mutual-membership requirement is what makes this a DM scope: a caller
+		// can't enumerate a third user's tasks by guessing partner_id — only
+		// tasks the caller is themselves a member of are returned.
+		//
+		// Implemented as two EXISTS subqueries (one per user) rather than a
+		// single `user_id IN (me, partner)` union predicate, because the union
+		// form would match tasks where only ONE of the two users is a member
+		// (leaking the partner's tasks to an unrelated caller). Both EXISTS
+		// subqueries use the members_user_idx (user_id, role) index.
 		if q.UserID == "" || q.PartnerID == "" {
 			return b, errors.New("list tasks: scope=direct requires UserID and PartnerID")
 		}
-		b = b.Join(s.tableName(membersTableShort) + " AS m ON m.task_id = t.id").
-			Where(sq.And{
-				sq.Eq{"m.user_id": []string{q.UserID, q.PartnerID}},
-				sq.Eq{"m.role": []string{model.MemberRoleAssignee, model.MemberRoleCreator}},
-			}).
-			Distinct()
+		membersTable := s.tableName(membersTableShort)
+		roles := "('assignee','creator')"
+		b = b.Where(sq.And{
+			sq.Expr(
+				"EXISTS (SELECT 1 FROM "+membersTable+
+					" AS mm WHERE mm.task_id = t.id AND mm.user_id = ? AND mm.role IN "+roles+")",
+				q.UserID,
+			),
+			sq.Expr(
+				"EXISTS (SELECT 1 FROM "+membersTable+
+					" AS mp WHERE mp.task_id = t.id AND mp.user_id = ? AND mp.role IN "+roles+")",
+				q.PartnerID,
+			),
+		})
 	default:
 		return b, fmt.Errorf("list tasks: unknown scope %q", q.Scope)
 	}
@@ -460,17 +473,13 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 }
 
 // countTasks returns the filtered total. It rebuilds the same WHERE (minus
-// order_key cursor / limit) so the total matches the page set. For ScopeDirect
-// the JOIN multiplies rows that both DM users relate to, so the count uses
-// COUNT(DISTINCT t.id) to match the DISTINCT the list query applies.
+// order_key cursor / limit) so the total matches the page set. Both scopes use
+// plain COUNT(*): ScopeChannel is a single-table filter, and ScopeDirect uses
+// EXISTS subqueries (no JOIN row multiplication), so no DISTINCT is needed.
 func (s *SQLStore) countTasks(ctx context.Context, q store.ListQuery) (int, error) {
 	countQuery := q
 	countQuery.AfterOrderKey = ""
-	projection := "COUNT(*)"
-	if countQuery.Scope == store.ScopeDirect {
-		projection = "COUNT(DISTINCT t.id)"
-	}
-	b, err := s.applyTaskFilters(countQuery, projection)
+	b, err := s.applyTaskFilters(countQuery, "COUNT(*)")
 	if err != nil {
 		return 0, err
 	}

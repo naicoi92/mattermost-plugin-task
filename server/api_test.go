@@ -311,12 +311,16 @@ func TestListTasks_BadStatus(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestListTasks_ReturnsDirectScope verifies the DM scope returns only tasks
+// where BOTH the caller and the partner are members (mutual-membership). A
+// task created by u-me and assigned to u-partner has both as members → returned.
+// A task created by u-third and assigned to u-other has neither → hidden.
 func TestListTasks_ReturnsDirectScope(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	// DM u-me + u-partner. Both shared tasks returned; third-party task hidden.
-	createTaskViaService(t, p, task.CreateInput{Summary: "shared-mine", CreatorID: "u1", AssigneeID: "u-me"})
-	createTaskViaService(t, p, task.CreateInput{Summary: "shared-partner", CreatorID: "u1", AssigneeID: "u-partner"})
-	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u1", AssigneeID: "u-third"})
+	// Shared task: u-me is creator, u-partner is assignee → both are members.
+	createTaskViaService(t, p, task.CreateInput{Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
+	// Unrelated task: neither u-me nor u-partner is a member.
+	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u-third", AssigneeID: "u-other"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-partner", "", "u-me"))
@@ -324,9 +328,25 @@ func TestListTasks_ReturnsDirectScope(t *testing.T) {
 
 	var got []model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	require.Len(t, got, 2)
-	summaries := []string{got[0].Summary, got[1].Summary}
-	assert.ElementsMatch(t, []string{"shared-mine", "shared-partner"}, summaries)
+	require.Len(t, got, 1)
+	assert.Equal(t, "shared", got[0].Summary)
+}
+
+// TestListTasks_DirectScopePreventsPartnerEnumeration verifies the security
+// invariant: u-me cannot see u-third's tasks by passing partner_id=u-third,
+// because u-me is not a member of any task u-third relates to.
+func TestListTasks_DirectScopePreventsPartnerEnumeration(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// u-third created a task assigned to u-other; u-me is not involved.
+	createTaskViaService(t, p, task.CreateInput{Summary: "private", CreatorID: "u-third", AssigneeID: "u-other"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-third", "", "u-me"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Empty(t, got, "u-me cannot enumerate u-third's tasks by guessing partner_id")
 }
 
 func TestListTasks_DirectScopeRequiresPartnerID(t *testing.T) {
@@ -387,6 +407,32 @@ func TestPatchTask_InvalidPriorityRejected(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID, string(body), "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestCreateTask_InvalidPriorityRejected verifies that POST /tasks with an
+// unknown priority value returns 400 (not 500).
+func TestCreateTask_InvalidPriorityRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"x","creator_id":"u1","priority":"blocker"}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestListTasks_InvalidScopeRejected verifies that an unknown/empty scope is
+// rejected at the API boundary with 400 (not 500 from the store layer).
+func TestListTasks_InvalidScopeRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine", "", "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestListTasks_EmptyScopeRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks", "", "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 

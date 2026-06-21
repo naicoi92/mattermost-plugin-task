@@ -99,13 +99,19 @@ export interface CreateTaskInput {
 
 // PatchTaskInput is the JSON body for PATCH /tasks/:id. Only fields named in
 // update_fields are modified; a field present in update_fields with a null
-// pointer clears that field. Matches server PatchInput (server/task/service.go).
+// pointer clears that field (for fields that support clearing). Matches server
+// PatchInput (server/task/service.go).
 export interface PatchTaskInput {
     update_fields: Array<'summary' | 'description' | 'due' | 'is_all_day' | 'priority'>;
     summary?: string;
     description?: string | null;
     due?: number | null;
     is_all_day?: boolean;
+
+    // priority is NOT nullable like due/description: the server treats a nil
+    // pointer as a no-op (priority always has a value — the default 'standard').
+    // Send a non-null TaskPriority to change it. The `| null` in the union is
+    // kept only to satisfy generic PATCH encoders; callers should not send null.
     priority?: TaskPriority | null;
 }
 

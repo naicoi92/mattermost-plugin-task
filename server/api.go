@@ -150,6 +150,9 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(err.Error(), "required"):
 			p.writeError(w, http.StatusBadRequest, err.Error())
+		case strings.Contains(err.Error(), "invalid priority"):
+			// An invalid priority value is a client error, not a server error.
+			p.writeError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, task.ErrParentNotFound):
 			// A missing parent is a client error (bad parent_task_id), not a
 			// server error.
@@ -222,6 +225,13 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 	channelID := q.Get("channel_id")
 	partnerID := q.Get("partner_id")
 	userID := currentUserID(r)
+
+	// Validate scope at the API boundary: empty or unknown scopes are client
+	// errors (400), not 500s from the deeper store layer.
+	if scope != task.ScopeChannel && scope != task.ScopeDirect {
+		p.writeError(w, http.StatusBadRequest, "scope must be 'channel' or 'direct'")
+		return
+	}
 
 	// Membership defense for scope=channel.
 	if scope == task.ScopeChannel && channelID != "" {

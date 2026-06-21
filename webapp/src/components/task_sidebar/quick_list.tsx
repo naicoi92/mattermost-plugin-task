@@ -123,12 +123,23 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
         if (!afterOrderKey || loading) {
             return;
         }
+
+        // Capture the tab at request start; if the user switches tabs while
+        // this fetch is in flight, drop the stale response (same guard pattern
+        // as loadFirst).
+        const myRequest = ++latestRequestRef.current;
+        const activeTab = tab;
         setLoading(true);
         try {
-            const page = await client.listTasks(buildParams(tab, channelID, isDM, afterOrderKey));
+            const page = await client.listTasks(buildParams(activeTab, channelID, isDM, afterOrderKey));
+            if (myRequest !== latestRequestRef.current) {
+                return;
+            }
             const list = page ?? [];
-            const merged = [...tasks, ...list];
-            setTasks(merged);
+
+            // Use the functional updater so we merge against the latest state,
+            // not the closure-captured `tasks`.
+            setTasks((cur) => [...cur, ...list]);
             setAfterOrderKey(list.length > 0 ? list[list.length - 1].order_key : '');
             setHasMore(list.length >= pageLimit);
         } catch (err) {
@@ -224,10 +235,19 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                     key={task.id}
                                     className={`quick-list__item quick-list__item--${task.status}`}
                                 >
-                                    <button
-                                        type='button'
+                                    <div
                                         className='quick-list__item-row'
                                         onClick={() => select(task.id)}
+                                        onKeyDown={(e) => {
+                                            // Activate the row on Enter; Space is left for
+                                            // the nested checkbox (which has its own handler).
+                                            if (e.key === 'Enter' && e.target === e.currentTarget) {
+                                                e.preventDefault();
+                                                select(task.id);
+                                            }
+                                        }}
+                                        role='button'
+                                        tabIndex={0}
                                         aria-label={task.summary}
                                     >
                                         <span
@@ -274,7 +294,7 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                                 )}
                                             </span>
                                         </span>
-                                    </button>
+                                    </div>
                                 </li>
                             );
                         })}
