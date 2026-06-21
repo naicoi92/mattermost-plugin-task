@@ -206,7 +206,7 @@ func TestPatch_PartialUpdate(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "orig", Description: "d", CreatorID: "u-c"})
 	newSummary := "renamed"
-	patched, err := svc.Patch(task.ID, PatchInput{UpdateFields: []string{"summary"}, Summary: &newSummary})
+	patched, err := svc.Patch("u-actor", task.ID, PatchInput{UpdateFields: []string{"summary"}, Summary: &newSummary})
 	require.NoError(t, err)
 	assert.Equal(t, "renamed", patched.Summary)
 	assert.Equal(t, "d", patched.Description)
@@ -216,14 +216,14 @@ func TestPatch_ClearDue(t *testing.T) {
 	svc, _ := newTestService(t)
 	due := int64(5_000_000)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
-	patched, err := svc.Patch(task.ID, PatchInput{UpdateFields: []string{"due"}, Due: nil})
+	patched, err := svc.Patch("u-actor", task.ID, PatchInput{UpdateFields: []string{"due"}, Due: nil})
 	require.NoError(t, err)
 	assert.Nil(t, patched.Due)
 }
 
 func TestPatch_NotFound(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.Patch("ghost", PatchInput{})
+	_, err := svc.Patch("u-actor", "ghost", PatchInput{})
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -234,7 +234,7 @@ func TestDelete_CascadeRemovesDependents(t *testing.T) {
 	ctx := context.Background()
 	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
 	sub := mustCreateTask(t, svc, CreateInput{Summary: "s", CreatorID: "u-c", ParentTaskID: parent.ID})
-	require.NoError(t, svc.Delete(parent.ID))
+	require.NoError(t, svc.Delete("u-actor", parent.ID))
 	_, err := svc.Get(parent.ID)
 	require.ErrorIs(t, err, ErrNotFound)
 	_, err = s.GetTask(ctx, sub.ID)
@@ -245,7 +245,7 @@ func TestDelete_CascadeRemovesDependents(t *testing.T) {
 
 func TestDelete_NotFound(t *testing.T) {
 	svc, _ := newTestService(t)
-	err := svc.Delete("ghost")
+	err := svc.Delete("u-actor", "ghost")
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -265,7 +265,7 @@ func TestList_StatusFilter(t *testing.T) {
 	svc, _ := newTestService(t)
 	mustCreateTask(t, svc, CreateInput{Summary: "todo", CreatorID: "u-c"})
 	t2 := mustCreateTask(t, svc, CreateInput{Summary: "done", CreatorID: "u-c"})
-	_, _ = svc.SetStatus(t2.ID, model.StatusDone)
+	_, _ = svc.SetStatus("u-actor", t2.ID, model.StatusDone)
 	got, err := svc.List(ListQuery{Scope: ScopeAll, Status: model.StatusDone, Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -303,20 +303,20 @@ func TestSearch_MatchesSummaryOrDescription(t *testing.T) {
 func TestSetStatus_InvalidStatus(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	_, err := svc.SetStatus(task.ID, "paused")
+	_, err := svc.SetStatus("u-actor", task.ID, "paused")
 	require.ErrorIs(t, err, ErrInvalidStatus)
 }
 
 func TestSetStatus_NotFound(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.SetStatus("ghost", model.StatusDone)
+	_, err := svc.SetStatus("u-actor", "ghost", model.StatusDone)
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestSetStatus_DoneStampsCompletedAt(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	got, err := svc.SetStatus(task.ID, model.StatusDone)
+	got, err := svc.SetStatus("u-actor", task.ID, model.StatusDone)
 	require.NoError(t, err)
 	require.NotNil(t, got.CompletedAt)
 	assert.Nil(t, got.CancelledAt)
@@ -325,7 +325,7 @@ func TestSetStatus_DoneStampsCompletedAt(t *testing.T) {
 func TestSetStatus_CancelStampsCancelledAt(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	got, err := svc.SetStatus(task.ID, model.StatusCancelled)
+	got, err := svc.SetStatus("u-actor", task.ID, model.StatusCancelled)
 	require.NoError(t, err)
 	require.NotNil(t, got.CancelledAt)
 	assert.Nil(t, got.CompletedAt)
@@ -334,8 +334,8 @@ func TestSetStatus_CancelStampsCancelledAt(t *testing.T) {
 func TestSetStatus_TodoClearsTimestamps(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	_, _ = svc.SetStatus(task.ID, model.StatusDone)
-	got, err := svc.SetStatus(task.ID, model.StatusTodo)
+	_, _ = svc.SetStatus("u-actor", task.ID, model.StatusDone)
+	got, err := svc.SetStatus("u-actor", task.ID, model.StatusTodo)
 	require.NoError(t, err)
 	assert.Nil(t, got.CompletedAt)
 	assert.Nil(t, got.CancelledAt)
@@ -345,7 +345,7 @@ func TestSetStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
 	svc, _ := newTestService(t)
 	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
 	mustCreateTask(t, svc, CreateInput{Summary: "open sub", CreatorID: "u-c", ParentTaskID: parent.ID})
-	_, err := svc.SetStatus(parent.ID, model.StatusDone)
+	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusDone)
 	require.Error(t, err)
 	var blocked ErrOpenSubtasks
 	require.ErrorAs(t, err, &blocked)
@@ -356,8 +356,8 @@ func TestSetStatus_ParentDoneAllowedWhenSubtasksTerminal(t *testing.T) {
 	svc, _ := newTestService(t)
 	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
 	sub := mustCreateTask(t, svc, CreateInput{Summary: "s", CreatorID: "u-c", ParentTaskID: parent.ID})
-	_, _ = svc.SetStatus(sub.ID, model.StatusDone)
-	_, err := svc.SetStatus(parent.ID, model.StatusDone)
+	_, _ = svc.SetStatus("u-actor", sub.ID, model.StatusDone)
+	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusDone)
 	require.NoError(t, err)
 }
 
@@ -366,7 +366,7 @@ func TestSetStatus_CancelCascadesToOpenSubtasks(t *testing.T) {
 	ctx := context.Background()
 	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
 	sub := mustCreateTask(t, svc, CreateInput{Summary: "s", CreatorID: "u-c", ParentTaskID: parent.ID})
-	_, err := svc.SetStatus(parent.ID, model.StatusCancelled)
+	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusCancelled)
 	require.NoError(t, err)
 	subRow, err := s.GetTask(ctx, sub.ID)
 	require.NoError(t, err)
@@ -376,7 +376,7 @@ func TestSetStatus_CancelCascadesToOpenSubtasks(t *testing.T) {
 func TestSetStatus_NoOpWhenUnchanged(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	got, err := svc.SetStatus(task.ID, model.StatusTodo)
+	got, err := svc.SetStatus("u-actor", task.ID, model.StatusTodo)
 	require.NoError(t, err)
 	assert.Equal(t, model.StatusTodo, got.Status)
 }
@@ -389,7 +389,7 @@ func TestSetStatus_TerminalClearsReminder(t *testing.T) {
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	require.Len(t, reminders, 1)
-	_, _ = svc.SetStatus(task.ID, model.StatusDone)
+	_, _ = svc.SetStatus("u-actor", task.ID, model.StatusDone)
 	reminders, err = s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	assert.Empty(t, reminders)
@@ -400,7 +400,7 @@ func TestSetStatus_TerminalClearsReminder(t *testing.T) {
 func TestAssign_SwapsAssignee(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-old"})
-	got, ev, err := svc.Assign(task.ID, "u-new")
+	got, ev, err := svc.Assign("u-actor", task.ID, "u-new")
 	require.NoError(t, err)
 	assert.Equal(t, "u-new", got.AssigneeID)
 	assert.Equal(t, "u-old", ev.OldAssigneeID)
@@ -409,7 +409,7 @@ func TestAssign_SwapsAssignee(t *testing.T) {
 func TestAssign_FromUnassigned(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	got, _, err := svc.Assign(task.ID, "u-new")
+	got, _, err := svc.Assign("u-actor", task.ID, "u-new")
 	require.NoError(t, err)
 	assert.Equal(t, "u-new", got.AssigneeID)
 }
@@ -417,14 +417,14 @@ func TestAssign_FromUnassigned(t *testing.T) {
 func TestAssign_NoOpSameAssignee(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-same"})
-	got, _, err := svc.Assign(task.ID, "u-same")
+	got, _, err := svc.Assign("u-actor", task.ID, "u-same")
 	require.NoError(t, err)
 	assert.Equal(t, "u-same", got.AssigneeID)
 }
 
 func TestAssign_NotFound(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, _, err := svc.Assign("ghost", "u-x")
+	_, _, err := svc.Assign("u-actor", "ghost", "u-x")
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -435,7 +435,7 @@ func TestSetReminder_BuildsRow(t *testing.T) {
 	ctx := context.Background()
 	due := int64(2_000_000)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
-	_, err := svc.SetReminder(task.ID, 30_000)
+	_, err := svc.SetReminder("u-actor", task.ID, 30_000)
 	require.NoError(t, err)
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
@@ -446,7 +446,7 @@ func TestSetReminder_BuildsRow(t *testing.T) {
 func TestSetReminder_RequiresDue(t *testing.T) {
 	svc, _ := newTestService(t)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
-	_, err := svc.SetReminder(task.ID, 30_000)
+	_, err := svc.SetReminder("u-actor", task.ID, 30_000)
 	require.ErrorIs(t, err, ErrReminderNeedsDue)
 }
 
@@ -454,7 +454,7 @@ func TestSetReminder_InvalidOffset(t *testing.T) {
 	svc, _ := newTestService(t)
 	due := int64(2_000_000)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due})
-	_, err := svc.SetReminder(task.ID, 0)
+	_, err := svc.SetReminder("u-actor", task.ID, 0)
 	require.Error(t, err)
 }
 
@@ -463,7 +463,7 @@ func TestClearReminder_RemovesRow(t *testing.T) {
 	ctx := context.Background()
 	due := int64(2_000_000)
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", Due: &due, ReminderOffset: ptrInt64(60_000)})
-	_, err := svc.ClearReminder(task.ID)
+	_, err := svc.ClearReminder("u-actor", task.ID)
 	require.NoError(t, err)
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
@@ -528,8 +528,8 @@ func TestSubtaskProgress(t *testing.T) {
 	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
 	s1 := mustCreateTask(t, svc, CreateInput{Summary: "s1", CreatorID: "u-c", ParentTaskID: parent.ID})
 	s2 := mustCreateTask(t, svc, CreateInput{Summary: "s2", CreatorID: "u-c", ParentTaskID: parent.ID})
-	_, _ = svc.SetStatus(s1.ID, model.StatusDone)
-	_, _ = svc.SetStatus(s2.ID, model.StatusDone)
+	_, _ = svc.SetStatus("u-actor", s1.ID, model.StatusDone)
+	_, _ = svc.SetStatus("u-actor", s2.ID, model.StatusDone)
 	done, total, err := svc.SubtaskProgress(parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, done)

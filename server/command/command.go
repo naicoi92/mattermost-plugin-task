@@ -21,13 +21,13 @@ const taskCommandTrigger = "task"
 // an interface so the handler is testable with a fake and each command scope
 // (status, edit, assignee, ...) can be added without changing this file's shape.
 type TaskService interface {
-	SetStatus(id, status string) (*taskmodel.Task, error)
-	Patch(id string, in task.PatchInput) (*taskmodel.Task, error)
-	SetReminder(id string, offsetMS int64) (*taskmodel.Task, error)
-	ClearReminder(id string) (*taskmodel.Task, error)
+	SetStatus(actorID, id, status string) (*taskmodel.Task, error)
+	Patch(actorID, id string, in task.PatchInput) (*taskmodel.Task, error)
+	SetReminder(actorID, id string, offsetMS int64) (*taskmodel.Task, error)
+	ClearReminder(actorID, id string) (*taskmodel.Task, error)
 	// Assign changes a task's single assignee; newAssigneeID == "" clears it.
 	// It returns the updated task plus an AssignEvent describing the change.
-	Assign(id, newAssigneeID string) (*taskmodel.Task, task.AssignEvent, error)
+	Assign(actorID, id, newAssigneeID string) (*taskmodel.Task, task.AssignEvent, error)
 	// Get returns the task with the given id, or nil if it does not exist.
 	Get(id string) (*taskmodel.Task, error)
 	// CreateSubtask creates a new task under parentID. The subtask inherits the
@@ -635,7 +635,7 @@ func (c *Handler) handleRemind(args *model.CommandArgs, rest []string) (*model.C
 	id, token := rest[0], rest[1]
 
 	if token == "off" {
-		t, err := c.taskService.ClearReminder(id)
+		t, err := c.taskService.ClearReminder(args.UserId, id)
 		if err != nil {
 			return formatReminderError(c, id, err, "clear reminder")
 		}
@@ -647,7 +647,7 @@ func (c *Handler) handleRemind(args *model.CommandArgs, rest []string) (*model.C
 		return ephemeral(fmt.Sprintf("Unknown reminder %q. Use 15m, 1h, 1d, or off.", token)), nil
 	}
 
-	t, err := c.taskService.SetReminder(id, offsetMS)
+	t, err := c.taskService.SetReminder(args.UserId, id, offsetMS)
 	if err != nil {
 		return formatReminderError(c, id, err, "set reminder")
 	}
@@ -713,7 +713,7 @@ func (c *Handler) handleAssign(args *model.CommandArgs, rest []string) (*model.C
 		return ephemeral(fmt.Sprintf("User @%s not found.", username)), nil
 	}
 
-	t, ev, err := c.taskService.Assign(id, userID)
+	t, ev, err := c.taskService.Assign(args.UserId, id, userID)
 	if err != nil {
 		return formatAssignError(c, id, err)
 	}
@@ -732,7 +732,7 @@ func (c *Handler) handleUnassign(args *model.CommandArgs, rest []string) (*model
 	}
 	id := rest[0]
 
-	t, _, err := c.taskService.Assign(id, "")
+	t, _, err := c.taskService.Assign(args.UserId, id, "")
 	if err != nil {
 		return formatAssignError(c, id, err)
 	}
@@ -862,7 +862,7 @@ func (c *Handler) handleComment(args *model.CommandArgs, rest []string) (*model.
 
 // setStatus calls the service and formats the result for the user.
 func (c *Handler) setStatus(args *model.CommandArgs, id, status string) (*model.CommandResponse, error) {
-	t, err := c.taskService.SetStatus(id, status)
+	t, err := c.taskService.SetStatus(args.UserId, id, status)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
@@ -916,7 +916,7 @@ func (c *Handler) handleEdit(args *model.CommandArgs, rest []string) (*model.Com
 		return ephemeral(fmt.Sprintf("Could not parse %q. Expected key=value (summary, due, desc).", bad)), nil
 	}
 
-	t, err := c.taskService.Patch(id, in)
+	t, err := c.taskService.Patch(args.UserId, id, in)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
