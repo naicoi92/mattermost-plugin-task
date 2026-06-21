@@ -434,6 +434,18 @@ func TestAssign_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestAssign_UnassignWhenAlreadyUnassigned verifies that unassigning a task
+// that has no assignee is a no-op (not a 500). Previously RemoveMember was
+// called with an empty userID → "user id is required" error → 500.
+func TestAssign_UnassignWhenAlreadyUnassigned(t *testing.T) {
+	svc, _ := newTestService(t)
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})
+	// No prior assignee edge. Unassign should be a no-op.
+	got, _, err := svc.Assign("u-actor", task.ID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "", got.AssigneeID)
+}
+
 // --- Reminders ---
 
 func TestSetReminder_BuildsRow(t *testing.T) {

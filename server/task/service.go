@@ -1010,10 +1010,16 @@ func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, Assign
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
 	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
-		// Empty new assignee means "unassign": remove the assignee edge.
+		// Empty new assignee means "unassign": remove the assignee edge. Skip
+		// the RemoveMember call when there is no current assignee — otherwise
+		// RemoveMember("", ...) returns "user id is required" and the whole
+		// assign call fails with a 500. An unassign on an already-unassigned
+		// task is a no-op (still record the touch + event for auditability).
 		if newAssigneeID == "" {
-			if err := tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee); err != nil {
-				return err
+			if oldAssigneeID != "" {
+				if err := tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee); err != nil {
+					return err
+				}
 			}
 			if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
 				return err
