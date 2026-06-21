@@ -95,7 +95,7 @@ Thiết kế **từ chức năng**, không bê cấu trúc KV. Phân tích 10 ch
 >
 > Lý do áp dụng cho plugin này:
 > 1. **Tính toán thời gian bằng toán số nguyên**: `now >= due_at - offset_ms` không cần `EXTRACT(EPOCH FROM ...)` hay cast — query reminder phụ thuộc điều này
-> 2. **Consistent với model hiện tại**: `model.Task.Due`, `model.ReminderMetadata.DueMS` đã là `int64` ms; đổi sang TIMESTAMP buộc convert ở mỗi boundary API/DB → bug-prone
+> 2. **Consistent với model hiện tại**: `model.Task.Due`, `model.ReminderMetadata (deleted)` đã là `int64` ms; đổi sang TIMESTAMP buộc convert ở mỗi boundary API/DB → bug-prone
 > 3. **Cross-dialect đơn giản**: `BIGINT` giống nhau ở postgres/mysql/sqlite; `TIMESTAMPTZ` là postgres-only (mysql `DATETIME`, sqlite `INTEGER`/`TEXT`) → migration phải dialect-specific phức tạp hơn
 > 4. **Go marshal đơn giản**: `int64` ↔ JSON number, không cần custom `MarshalJSON` cho time
 > 5. **Timezone handled at render**: server lưu ms UTC, client tự hiển thị theo timezone preference (giống Lark/PLAN đã chốt)
@@ -363,12 +363,12 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
     - Filter theo status, due (overdue/today/week) — push xuống SQL clause
     - Pagination cursor `after_order_key` + `LIMIT n+1` để tính `has_more`
     - Song song chạy `SELECT COUNT(*)` (cùng WHERE) cho `total`
-    - Return `PageResult{items []TaskView, total, has_more}`
+    - Return `PageResult{items []Task, total, has_more}`
   - `CountTasksByStatus(ctx, q ListQuery) (map[string]int, error)` — `GROUP BY status` cho Kanban progress
   - `SearchTasks(ctx, keyword string, limit int) ([]Task, error)` — ILIKE trên summary/description
   - `ListSubtasks(ctx, parentID string) ([]Task, error)` — WHERE parent_task_id=? ORDER BY created_at
   - `SubtaskProgress(ctx, parentID string) (done, total int, err error)` — `GROUP BY status` 1 query
-  - `GetTaskView(ctx, id string) (*TaskView, error)` — JOIN task_members + task_reminders + task_posts để build DTO
+  - `GetTask(ctx, id string) (*Task, error)` — JOIN task_members + task_reminders + task_posts để build DTO
   - `nextGlobalOrderKey(ctx)` — `SELECT MAX(order_key) FROM task_tasks` (helper)
 - `ListQuery` struct: `{Scope, UserID, ChannelID, Status, Due, AfterOrderKey, Limit}`
 - `PageResult[T]` generic struct: `{Items []T, Total int, HasMore bool}` (hoặc non-generic cho MVP)
@@ -377,7 +377,7 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
 - `server/store/store.go` (mới — interface, được build-up qua các issue)
 - `server/store/sqlstore/tasks.go` (mới)
 - `server/store/sqlstore/tasks_test.go` (mới — sqlite in-memory)
-- `server/model/task.go` (sửa — bỏ `CreatorID`, `AssigneeID`, `ChannelPostID`, `DMPostID`, `ReminderOffset`, `ReminderFired`, đổi `Due` → `DueAt`; thêm `model.TaskView`)
+- `server/model/task.go` (sửa — bỏ `CreatorID`, `AssigneeID`, `ChannelPostID`, `DMPostID`, `ReminderOffset`, `ReminderFired`, đổi `Due` → `DueAt` (đã thực hiện trong PR #154); thêm `model.Task`)
 - `server/store/sqlstore/migrations/000001_init.up.sql` (điền schema task_tasks + indexes)
 
 **Dependencies:** M1-1, M1-2, M1-3
@@ -395,9 +395,9 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
   - `RemoveMember(ctx, taskID, userID, role string) error` — DELETE
   - `ListMembers(ctx, taskID string) ([]TaskMember, error)` — SELECT by task
   - `GetMemberByRole(ctx, taskID, role string) (userID string, err error)` — SELECT user_id WHERE task_id=? AND role=? LIMIT 1 (cho 'creator'/'assignee')
-  - `SwapAssignee(ctx, taskID, oldID, newID string) error` — DELETE old + INSERT new trong 1 tx-friendly operation (atomic qua WithTx ở service layer)
+  - `SetAssignee(ctx, taskID, newAssigneeID string) error` — UPDATE in-place, fall back to INSERT if no edge exists
 - Model `model.TaskMember`: `{TaskID, UserID, Role, CreatedAt}`
-- Helper: `GetTaskView` (M2-1) JOIN task_members để lấy creator_id + assignee_id cho DTO
+- Helper: `GetTask` (M2-1) JOIN task_members để lấy creator_id + assignee_id cho DTO
 
 **Files:**
 - `server/store/sqlstore/members.go` (mới)
@@ -405,7 +405,7 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
 - `server/model/task_member.go` (mới)
 - `server/store/sqlstore/migrations/000002_members.up.sql` (mới)
 
-**Dependencies:** M2-1 (gần M2-3/M2-5 để test JOIN trong GetTaskView)
+**Dependencies:** M2-1 (gần M2-3/M2-5 để test JOIN trong GetTask)
 
 ---
 
@@ -419,11 +419,11 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
   - `SetReminder(ctx, taskID string, offsetMS int64) (TaskReminder, error)` — MVP enforce 1/task (UPSERT: delete existing + insert)
   - `ClearReminder(ctx, taskID string) error` — DELETE WHERE task_id=?
   - `ListReminders(ctx, taskID string) ([]TaskReminder, error)` — SELECT by task
-  - `ListDueReminders(ctx, nowMs, graceMs int64) ([]DueReminder, error)` — JOIN query (xem §3.3 fire query) trả `[]DueReminder{ReminderID, TaskID, DueMS, OffsetMS, AssigneeID}`
+  - `ListDueReminders(ctx, nowMs, graceMs int64) ([]DueReminder, error)` — JOIN query (xem §3.3 fire query) trả `[]DueReminder{ReminderID, TaskID, DueAt, OffsetMS, AssigneeID}`
   - `MarkReminderFired(ctx, reminderID string, firedAt int64) error` — UPDATE fired_at
 - Model `model.TaskReminder`: `{ID, TaskID, OffsetMS, FiredAt, CreatedAt}` — thay `model.ReminderMetadata`
-- `model.DueReminder`: `{ReminderID, TaskID, DueMS, OffsetMS, AssigneeID}`
-- Helper: `GetTaskView` JOIN task_reminders để tính `reminder_offset` + `reminder_fired` cho DTO
+- `model.DueReminder: {ReminderID, TaskID, DueAt, OffsetMS, AssigneeID}`
+- Helper: `GetTask` JOIN task_reminders để tính `reminder_offset` + `reminder_fired` cho DTO
 
 **Files:**
 - `server/store/sqlstore/reminders.go` (mới)
@@ -447,7 +447,7 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
   - `GetPostByKind(ctx, taskID, kind string) (postID string, err error)` — SELECT post_id WHERE task_id=? AND kind=? LIMIT 1
   - `DeletePost(ctx, postID string) error` — DELETE (rare — vd khi post bị xóa trên server)
 - Model `model.TaskPost`: `{ID, TaskID, PostID, Kind, CreatedAt}`
-- Helper: `GetTaskView` JOIN task_posts để tính `channel_post_id` + `dm_post_id` cho DTO
+- Helper: `GetTask` JOIN task_posts để tính `channel_post_id` + `dm_post_id` cho DTO
 
 **Files:**
 - `server/store/sqlstore/posts.go` (mới)
@@ -547,7 +547,7 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
 - `Patch`: cập nhật field + `UpdateTask` (RETURNING) + event per field (`summary_changed`/`due_changed`/`description_changed`).
 - `AddComment`: insert comment + event `commented` + bump UpdatedAt.
 - `SetReminder`/`ClearReminder`: update reminder + event.
-- **REST contract ổn định**: service vẫn trả `model.TaskView` (qua GetTaskView) để JSON response giữ shape cũ.
+- **REST contract ổn định**: service vẫn trả `model.Task` (qua GetTask) để JSON response giữ shape cũ.
 
 **Files:**
 - `server/task/service.go` (rewrite lớn)
@@ -708,7 +708,7 @@ CREATE INDEX idx_events_task ON {{prefix}}task_events (task_id, created_at DESC)
 - `server/hooks.go` (mới — `MessageHasBeenPosted`)
 - `server/plugin.go` (Plugin struct đã embed `plugin.MattermostPlugin`, hook auto-wired)
 
-**Dependencies:** M2-1 (GetTaskView), M2-4 (task_posts lookup), M2-5 (LinkComment), M2-6 (events)
+**Dependencies:** M2-1 (GetTask), M2-4 (task_posts lookup), M2-5 (LinkComment), M2-6 (events)
 
 ---
 
@@ -840,7 +840,7 @@ type Store interface {
     // Task (M2-1)
     CreateTask(ctx context.Context, task Task) (Task, error)
     GetTask(ctx context.Context, id string) (*Task, error)
-    GetTaskView(ctx context.Context, id string) (*TaskView, error)
+    GetTask(ctx context.Context, id string) (*Task, error)
     UpdateTask(ctx context.Context, task Task) (Task, error)
     TouchTaskUpdatedAt(ctx context.Context, id string, ts int64) error
     DeleteTask(ctx context.Context, id string) error
@@ -902,7 +902,7 @@ type Store interface {
 
 ## 7. Phạm vi KHÔNG thay đổi (giữ rủi ro thấp)
 
-- **REST routes + JSON shape của Task/Comment** (qua `TaskView` DTO) — không đổi, webapp không phải sửa
+- **REST routes + JSON shape của Task/Comment** (qua `Task` DTO) — không đổi, webapp không phải sửa
 - **Webapp (`webapp/`)** — không đụng
 - **Slash command, dialog, notification rules, permission rules** — không đụng
 - **`cluster.Schedule` reminder job** — giữ; chỉ internals `FireReadyReminders` đổi

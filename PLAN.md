@@ -124,7 +124,7 @@ Lưu trữ dùng **DB chính của server Mattermost** (không tạo DB riêng),
 
 | Bảng | Mục đích | Cột chính |
 |---|---|---|
-| `task_tasks` | Entity task core (1:1) | id, summary, description, channel_id, parent_task_id (self-FK CASCADE), status, order_key, due, is_all_day, completed_at, cancelled_at, created_at, updated_at |
+| `task_tasks` | Entity task core (1:1) | id, summary, description, channel_id, parent_task_id (self-FK CASCADE), status, order_key, due_at, is_all_day, completed_at, cancelled_at, created_at, updated_at |
 | `task_members` | Quan hệ task↔user (creator/assignee/follower) | task_id FK CASCADE, user_id, role, created_at. PK (task_id, user_id, role) — future-proof cho multi-assignee. |
 | `task_reminders` | Reminder state (multi-ready) | id, task_id FK CASCADE, offset_ms CHECK(>=0), fired_at (NULL=pending), created_at. UNIQUE(task_id) tại MVP. |
 | `task_posts` | Card-post tracking (channel/DM/future) | id, task_id FK CASCADE, post_id UNIQUE, kind, created_at. UNIQUE(task_id, kind). |
@@ -172,7 +172,7 @@ type Task struct {
     AssigneeID     string   // MVP: **chỉ 1 assignee**; multi-assignee + completion_mode hoãn
     ChannelPostID  string   // post_id của task card trong channel (update card khi đổi status)
     DMPostID       string   // post_id của card DM gửi assignee (nếu có)
-    Due            *int64   // timestamp ms, nil = không có hạn
+    DueAt          *int64   // timestamp ms, nil = không có hạn
     IsAllDay       bool
     Status         string   // "todo" | "in_progress" | "done" | "cancelled"; done ⇔ CompletedAt != nil
     OrderKey       string   // fractional index (midpoint string) — **toàn cục** (rank chung, không theo cột); sắp xếp Kanban theo OrderKey
