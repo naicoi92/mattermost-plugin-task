@@ -592,8 +592,6 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 // hierarchies.
 const maxSubtaskDepth = 16
 
-
-
 // assertNoCycle walks the parent chain from startID up to maxDepth ancestors via
 // GetTask, returning ErrSubtaskCycle if the chain repeats a node or exceeds the
 // depth cap. A nil error means attaching a child under startID cannot form a
