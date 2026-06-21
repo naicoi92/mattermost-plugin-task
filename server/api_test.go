@@ -667,3 +667,18 @@ func TestAuthenticatedRoutes_StillRequireHeader(t *testing.T) {
 }
 
 var _ = sort.Slice
+
+func TestPatchTaskStatus_ReopenFromDoneToInProgress(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
+
+	// Mark Done first.
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"done"}`, "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Now reopen → In Progress.
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(nil, w2, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"in_progress"}`, "u1"))
+	assert.Equal(t, http.StatusOK, w2.Code, "reopen from done to in_progress must not 500")
+}

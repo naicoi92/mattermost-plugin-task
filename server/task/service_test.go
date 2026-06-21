@@ -600,3 +600,22 @@ func TestAssertNoCycle_DetectsLoop(t *testing.T) {
 }
 
 var _ = errors.New
+
+func TestSetStatus_ReopenFromDone_NoError(t *testing.T) {
+	svc, s := newTestService(t)
+	ctx := context.Background()
+	parent := mustCreateTask(t, svc, CreateInput{Summary: "p", CreatorID: "u-c"})
+	sub := mustCreateTask(t, svc, CreateInput{Summary: "s", CreatorID: "u-c", ParentTaskID: parent.ID})
+
+	// Mark parent Done → subtask cascade-cancelled.
+	_, err := svc.SetStatus("u-actor", parent.ID, model.StatusDone)
+	require.NoError(t, err)
+
+	subRow, _ := s.GetTask(ctx, sub.ID)
+	t.Logf("sub status after parent done: %s", subRow.Status)
+
+	// Now reopen parent → In Progress. This must NOT error.
+	got, err := svc.SetStatus("u-actor", parent.ID, model.StatusInProgress)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusInProgress, got.Status)
+}
