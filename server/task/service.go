@@ -151,6 +151,9 @@ type CreateInput struct {
 	IsAllDay       bool
 	ParentTaskID   string
 	ReminderOffset *int64
+	// Priority is one of the model.Priority* constants. Empty defaults to
+	// standard; an invalid value is rejected.
+	Priority string
 }
 
 // Create persists a new task atomically: the task row, its creator + assignee
@@ -167,6 +170,17 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 	}
 	if in.CreatorID == "" {
 		return nil, errors.New("creator id is required")
+	}
+
+	// Normalize + validate priority. Empty defaults to standard (the implicit
+	// default in the column); an explicit value must be one of the recognized
+	// constants so the UI can always render it.
+	priority := in.Priority
+	if priority == "" {
+		priority = model.PriorityStandard
+	}
+	if !model.IsValidPriority(priority) {
+		return nil, errors.New("invalid priority")
 	}
 
 	// Resolve parent inheritance BEFORE the transaction so the tx body is a
@@ -214,6 +228,7 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		ChannelID:    channelID,
 		ParentTaskID: in.ParentTaskID,
 		Status:       model.StatusTodo,
+		Priority:     priority,
 		OrderKey:     orderKey,
 		IsAllDay:     in.IsAllDay,
 		DueAt:        in.DueAt,
@@ -794,6 +809,10 @@ type PatchInput struct {
 	Description  *string
 	DueAt        *int64 // nil clears due when "due" is in UpdateFields
 	IsAllDay     *bool
+	// Priority, when "priority" is in UpdateFields. The pointer is non-nil in
+	// practice (there is no "clear" semantic for priority — it always has a
+	// value); nil keeps the existing value as a safety net.
+	Priority *string
 }
 
 // Patch applies a partial update to the task identified by id. A due change
@@ -834,6 +853,21 @@ func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) 
 			newDue := ptrStringOrEmpty(row.DueAt)
 			dueChanged = true
 			changes = append(changes, fieldChange{model.EventDueChanged, oldDue, newDue})
+		case "priority":
+			// Priority always has a value (standard default); a nil pointer is
+			// treated as a no-op to keep the existing value.
+			if in.Priority != nil {
+				newP := *in.Priority
+				if newP == "" {
+					newP = model.PriorityStandard
+				}
+				if !model.IsValidPriority(newP) {
+					return nil, errors.New("invalid priority")
+				}
+				old := row.Priority
+				row.Priority = newP
+				changes = append(changes, fieldChange{model.EventPriorityChanged, old, newP})
+			}
 		case "is_all_day":
 			row.IsAllDay = derefBool(in.IsAllDay)
 		}
@@ -1086,22 +1120,24 @@ func snapshotTaskJSON(row *model.TaskRow) string {
 
 // Scope enumerates the list result scopes. These mirror store.Scope so the
 // service layer keeps its own read-friendly names while delegating to the
-// store's enum.
+// store's enum. Two scopes are supported: channel (tasks of a channel) and
+// direct (tasks shared between two DM participants).
 type Scope string
 
 const (
-	ScopeMine    Scope = Scope(store.ScopeMine)
 	ScopeChannel Scope = Scope(store.ScopeChannel)
-	ScopeAll     Scope = Scope(store.ScopeAll)
+	ScopeDirect  Scope = Scope(store.ScopeDirect)
 )
 
 // ListQuery is the filtered/paginated list request. It mirrors store.ListQuery;
 // the service maps its loose Due string to a store.DueFilter.
 type ListQuery struct {
 	Scope         Scope
-	UserID        string // required for ScopeMine
+	UserID        string // required for ScopeDirect (one of the two DM users)
 	ChannelID     string // required for ScopeChannel
+	PartnerID     string // required for ScopeDirect (the other DM user)
 	Status        string // optional: "", todo, in_progress, done, cancelled
+	Priority      string // optional: "", standard, important, urgent
 	DueAt         string // optional: "", overdue, today, week
 	AfterOrderKey string // cursor: only tasks with OrderKey > this are returned
 	Limit         int    // page size; <=0 defaults to DefaultLimit
@@ -1125,7 +1161,9 @@ func (s *Service) List(q ListQuery) ([]*model.Task, error) {
 		Scope:         store.Scope(q.Scope),
 		UserID:        q.UserID,
 		ChannelID:     q.ChannelID,
+		PartnerID:     q.PartnerID,
 		Status:        q.Status,
+		Priority:      q.Priority,
 		Due:           mapDueFilter(q.DueAt),
 		DueAsOf:       nowFunc(),
 		AfterOrderKey: q.AfterOrderKey,

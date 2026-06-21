@@ -23,7 +23,7 @@ const taskTableShort = "tasks"
 // as a single compile-site edit rather than scattered magic numbers.
 var taskColumns = []string{
 	"id", "summary", "description", "channel_id", "parent_task_id",
-	"status", "order_key", "is_all_day", "due_at", "completed_at",
+	"status", "priority", "order_key", "is_all_day", "due_at", "completed_at",
 	"cancelled_at", "created_at", "updated_at",
 }
 
@@ -43,9 +43,9 @@ func (s *SQLStore) CreateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		Columns(taskColumns...).
 		Values(
 			task.ID, task.Summary, task.Description, task.ChannelID,
-			nullableString(task.ParentTaskID), task.Status, task.OrderKey,
-			task.IsAllDay, task.DueAt, task.CompletedAt, task.CancelledAt,
-			task.CreatedAt, task.UpdatedAt,
+			nullableString(task.ParentTaskID), task.Status, task.Priority,
+			task.OrderKey, task.IsAllDay, task.DueAt, task.CompletedAt,
+			task.CancelledAt, task.CreatedAt, task.UpdatedAt,
 		)
 	if _, err := qb.ExecContext(ctx); err != nil {
 		return model.TaskRow{}, fmt.Errorf("create task %s: %w", task.ID, err)
@@ -85,6 +85,7 @@ func (s *SQLStore) UpdateTask(ctx context.Context, task model.TaskRow) (model.Ta
 		"channel_id":     task.ChannelID,
 		"parent_task_id": nullableString(task.ParentTaskID),
 		"status":         task.Status,
+		"priority":       task.Priority,
 		"order_key":      task.OrderKey,
 		"is_all_day":     task.IsAllDay,
 		"due_at":         task.DueAt,
@@ -363,16 +364,33 @@ func (s *SQLStore) NextGlobalOrderKey(ctx context.Context) (string, error) {
 	return max.String, nil
 }
 
+// ListAllTasksForTest returns every task row ordered by order_key with no
+// scope/filter. Test-only (see store.Store interface); production code uses the
+// scope-driven ListTasks path.
+func (s *SQLStore) ListAllTasksForTest(ctx context.Context) ([]model.TaskRow, error) {
+	qb := s.builder().
+		Select(taskColumns...).
+		From(s.tableName(taskTableShort)).
+		OrderByClause(s.escapeField("order_key") + " ASC")
+	rows, err := qb.QueryContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list all tasks (test): %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanTaskRows(rows)
+}
+
 // applyTaskFilters returns a SelectBuilder with the WHERE clauses implied by
-// the ListQuery (scope, status, due). Columns selects what to project; both
-// ListTasks and CountTasksByStatus use it so the WHERE stays identical.
+// the ListQuery (scope, status, priority, due). Columns selects what to
+// project; both ListTasks and CountTasksByStatus use it so the WHERE stays
+// identical.
 //
-// The main table is always aliased `t` so that when ScopeMine JOINs
+// The main table is always aliased `t` so that when ScopeDirect JOINs
 // task_members (which also has a created_at column), SELECT/WHERE column
 // references can be qualified unambiguously as t.<col>.
 func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.SelectBuilder, error) {
 	// Qualify simple column names with the main-table alias `t`. When
-	// ScopeMine joins task_members (which also has a created_at column), bare
+	// ScopeDirect joins task_members (which also has a created_at column), bare
 	// column names would be ambiguous; qualifying as t.<col> resolves it.
 	// Expressions (COUNT(*), aggregates, "col AS x") are passed through
 	// unchanged so we don't break their syntax.
@@ -383,30 +401,38 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 	b := s.builder().Select(qcols...).From(s.tableName(taskTableShort) + " AS t")
 
 	switch q.Scope {
-	case store.ScopeMine:
-		// "My Tasks" = tasks where the user is the assignee, expressed as a
-		// JOIN on task_members (role='assignee'). This is one query instead of
-		// the KV store's ListKeys + per-task Get N+1 pattern. UserID is
-		// required; an empty value would match every unassigned-less task, so
-		// we reject it explicitly.
-		if q.UserID == "" {
-			return b, errors.New("list tasks: scope=mine requires UserID")
-		}
-		b = b.Join(s.tableName(membersTableShort) + " AS m ON m.task_id = t.id").
-			Where(sq.Eq{"m.user_id": q.UserID, "m.role": model.MemberRoleAssignee})
 	case store.ScopeChannel:
+		// "This channel" = tasks whose channel_id matches. One indexed
+		// equality predicate (tasks_channel_idx); no join needed.
 		if q.ChannelID == "" {
 			return b, errors.New("list tasks: scope=channel requires ChannelID")
 		}
 		b = b.Where(sq.Eq{"t.channel_id": q.ChannelID})
-	case store.ScopeAll:
-		// no extra filter
+	case store.ScopeDirect:
+		// "DM" = tasks shared between two users: every task on which either
+		// UserID or PartnerID holds the assignee or creator role. JOINs
+		// task_members on (user_id IN (me, partner) AND role IN (...)); a task
+		// both users relate to appears twice in the join and is collapsed by
+		// DISTINCT. The members_user_idx (user_id, role) index serves the JOIN
+		// and the IN list as two index scans the planner can merge.
+		if q.UserID == "" || q.PartnerID == "" {
+			return b, errors.New("list tasks: scope=direct requires UserID and PartnerID")
+		}
+		b = b.Join(s.tableName(membersTableShort) + " AS m ON m.task_id = t.id").
+			Where(sq.And{
+				sq.Eq{"m.user_id": []string{q.UserID, q.PartnerID}},
+				sq.Eq{"m.role": []string{model.MemberRoleAssignee, model.MemberRoleCreator}},
+			}).
+			Distinct()
 	default:
 		return b, fmt.Errorf("list tasks: unknown scope %q", q.Scope)
 	}
 
 	if q.Status != "" {
 		b = b.Where(sq.Eq{"t.status": q.Status})
+	}
+	if q.Priority != "" {
+		b = b.Where(sq.Eq{"t.priority": q.Priority})
 	}
 	if q.Due != store.DueAny {
 		if q.DueAsOf == 0 {
@@ -433,14 +459,18 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 	return b, nil
 }
 
-// countTasks returns the filtered total via COUNT(*). It rebuilds the same
-// WHERE (minus order_key cursor / limit) so the total matches the page set.
+// countTasks returns the filtered total. It rebuilds the same WHERE (minus
+// order_key cursor / limit) so the total matches the page set. For ScopeDirect
+// the JOIN multiplies rows that both DM users relate to, so the count uses
+// COUNT(DISTINCT t.id) to match the DISTINCT the list query applies.
 func (s *SQLStore) countTasks(ctx context.Context, q store.ListQuery) (int, error) {
-	// Reuse applyTaskFilters with a single COUNT(*) projection; drop the
-	// pagination cursor so the count covers the whole filtered set.
 	countQuery := q
 	countQuery.AfterOrderKey = ""
-	b, err := s.applyTaskFilters(countQuery, "COUNT(*)")
+	projection := "COUNT(*)"
+	if countQuery.Scope == store.ScopeDirect {
+		projection = "COUNT(DISTINCT t.id)"
+	}
+	b, err := s.applyTaskFilters(countQuery, projection)
 	if err != nil {
 		return 0, err
 	}
@@ -529,8 +559,8 @@ func scanTaskRow(r scanner) (*model.TaskRow, error) {
 	var parentTaskID sql.NullString
 	if err := r.Scan(
 		&t.ID, &t.Summary, &t.Description, &t.ChannelID, &parentTaskID,
-		&t.Status, &t.OrderKey, &t.IsAllDay, &t.DueAt, &t.CompletedAt,
-		&t.CancelledAt, &t.CreatedAt, &t.UpdatedAt,
+		&t.Status, &t.Priority, &t.OrderKey, &t.IsAllDay, &t.DueAt,
+		&t.CompletedAt, &t.CancelledAt, &t.CreatedAt, &t.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}

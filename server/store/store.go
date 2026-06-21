@@ -39,19 +39,27 @@ var (
 )
 
 // Scope names a task-list "view". It selects which WHERE clause ListTasks
-// applies: a user's assigned tasks, a channel's tasks, or everything.
+// applies. Two scopes are supported:
+//   - channel: tasks that belong to a specific channel (ChannelID).
+//   - direct:  tasks shared between two DM participants (UserID + PartnerID),
+//     i.e. tasks on which either user holds the assignee or creator role.
+//
+// The earlier "mine" (tasks assigned to a user) and "all" (every task in the
+// DB) scopes were removed when the slash-command and mobile-dialog paths were
+// dropped; the desktop RHS derives the scope from the current channel type
+// (channel vs DM) and never needs a cross-context "my tasks" view.
 type Scope string
 
 const (
-	// ScopeMine lists tasks assigned to a given user (JOIN task_members with
-	// role='assignee'). UserID must be set on the ListQuery.
-	ScopeMine Scope = "mine"
 	// ScopeChannel lists tasks scoped to a channel. ChannelID must be set on
 	// the ListQuery.
 	ScopeChannel Scope = "channel"
-	// ScopeAll lists every task regardless of scope. Used by admin/search
-	// views; no extra join or WHERE is applied.
-	ScopeAll Scope = "all"
+	// ScopeDirect lists tasks shared between two DM users: every task on which
+	// either UserID or PartnerID is a member with the assignee or creator role
+	// (JOIN task_members WHERE user_id IN (UserID, PartnerID) AND role IN
+	// ('assignee','creator')). UserID and PartnerID must be set on the
+	// ListQuery.
+	ScopeDirect Scope = "direct"
 )
 
 // DueFilter narrows ListTasks results by due-date bucket. Each value maps to
@@ -73,20 +81,27 @@ const (
 
 // ListQuery is the filter + pagination input for ListTasks / CountTasksByStatus.
 //
-// Scope is the only required field; it selects the list view (mine/channel/
-// all). The other fields are optional filters — the repository composes only
-// the WHERE clauses the populated fields imply. A ListQuery with
-// Scope=ScopeAll and nothing else is the "list all" request.
+// Scope selects the list view (channel/direct) and is required. The other
+// fields are optional filters — the repository composes only the WHERE clauses
+// the populated fields imply.
 type ListQuery struct {
-	// Scope selects the list view (mine/channel/all). Required.
+	// Scope selects the list view (channel/direct). Required.
 	Scope Scope
-	// UserID is required when Scope == ScopeMine (the assignee to filter on).
+	// UserID is the authenticated user. Required when Scope == ScopeDirect
+	// (one of the two DM participants).
 	UserID string
 	// ChannelID is required when Scope == ScopeChannel.
 	ChannelID string
+	// PartnerID is the other DM participant and is required when Scope ==
+	// ScopeDirect. The result set is the union of tasks on which either UserID
+	// or PartnerID holds the assignee or creator role.
+	PartnerID string
 	// Status, when non-empty, restricts to that status value (todo/in_progress/
 	// done/cancelled). Empty means "any status".
 	Status string
+	// Priority, when non-empty, restricts to that priority value
+	// (standard/important/urgent). Empty means "any priority".
+	Priority string
 	// Due filters by due-date bucket. DueAny means no due filter.
 	Due DueFilter
 	// DueAsOf is the reference timestamp (ms UTC) used to evaluate DueToday /
@@ -142,6 +157,10 @@ type Store interface {
 	ListSubtasks(ctx context.Context, parentID string) ([]model.TaskRow, error)
 	SubtaskProgress(ctx context.Context, parentID string) (done, total int, err error)
 	NextGlobalOrderKey(ctx context.Context) (string, error)
+	// ListAllTasksForTest returns every task row ordered by order_key, with no
+	// scope/filter. Test-only helper: the production list path is scope-driven
+	// (channel/direct), but tests need an unfiltered snapshot to assert fixtures.
+	ListAllTasksForTest(ctx context.Context) ([]model.TaskRow, error)
 
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error

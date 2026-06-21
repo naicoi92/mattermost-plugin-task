@@ -1,68 +1,66 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// QuickList is the flat task list shown in the RHS (issue #28). It has two
-// scopes — "My Tasks" (assigned to me) and "Channel Tasks" (this channel) —
-// plus status/due filters and cursor pagination ("Load more"). Tasks and
-// subtasks appear as independent flat rows (MVP decision: no grouping by
-// parent). Clicking a row selects it (TaskSidebar swaps to TaskDetailPanel);
-// the "+ New Task" button opens NewTaskDialog.
+// QuickList is the flat task list shown in the RHS. The list is context-
+// driven: it shows the tasks of the channel the user is standing in (channel
+// mode) or the tasks shared with their DM partner (direct mode). The mode is
+// derived from the channel.type prop — there is no "My Tasks" / "Channel
+// Tasks" toggle. Six filter tabs narrow the result (All / Today / To Do / In
+// Progress / Done / Cancelled). Tasks are grouped under "Needs attention",
+// "Upcoming" and "Completed" headers. Clicking a row selects it (TaskSidebar
+// swaps to TaskDetailPanel); the footer "+ New Task" button opens the inline
+// New Task dialog.
 
 import * as client from 'client';
 import {ClientError} from 'client';
 import {useActiveLocale, useFormatMessage} from 'i18n_utils';
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {useDispatch} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import formatDueRelative from 'components/shared/format_due_relative';
+import {PriorityDot} from 'components/shared/priority_pill';
+import StatusPill from 'components/shared/status_pill';
 import {useResolvedUsers} from 'components/user_picker/use_resolved_user';
 
 import type {ListScope, ListTasksParams, Task} from 'types/tasks';
 
-// QuickListTab enumerates the two scopes the user can switch between.
-export type QuickListTab = 'mine' | 'channel';
-
-// ChipFilter is the client-side status filter set. The "all" chip sends no
-// status param; the others map 1:1 to a TaskStatus.
-export type ChipFilter = 'all' | 'todo' | 'done' | 'cancelled';
+// FilterTab enumerates the six filter tabs. Each tab maps to a (status, due)
+// pair sent to the server; the special "today" maps to due=today, the others
+// map 1:1 to a status filter.
+export type FilterTab = 'all' | 'today' | 'todo' | 'in_progress' | 'done' | 'cancelled';
 
 export interface QuickListProps {
 
-    // channelID is the context channel; required to list channel tasks.
+    // channelID is the context channel. For channel mode (O/P/G) it is sent to
+    // the server as channel_id; for direct mode it is unused (partner_id is
+    // sent instead).
     channelID?: string;
 
-    // currentUserID is informational (the server derives scope=mine from the
-    // auth context); kept on the prop for documentation and future use.
+    // currentUserID is the authenticated user; used to derive the DM partner.
     currentUserID?: string;
+
+    // channelType is the Mattermost channel type of the context channel ("D"
+    // for a 1:1 DM, otherwise a channel). When "D", the list uses direct mode.
+    channelType?: string;
 
     // onSelectTask is called when a row is clicked; TaskSidebar uses it to swap
     // to the Task Detail panel.
     onSelectTask?: (taskID: string) => void;
 
-    // onNewTask opens the New Task dialog.
+    // onNewTask opens the New Task view.
     onNewTask?: () => void;
 }
 
-// pageLimit is the cursor page size for "Load more".
+// pageLimit is the cursor page size for "Load more" and the badge "N+" bound.
 const pageLimit = 25;
 
-// CHIP_TO_STATUS maps a chip to the status sent to the server. "all" maps to an
-// empty string (no status filter).
-const CHIP_TO_STATUS: Record<ChipFilter, string> = {
-    all: '',
-    todo: 'todo',
-    done: 'done',
-    cancelled: 'cancelled',
-};
-
-export default function QuickList({channelID, onSelectTask, onNewTask}: QuickListProps): JSX.Element {
+export default function QuickList({channelID, currentUserID, channelType, onSelectTask, onNewTask}: QuickListProps): JSX.Element {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const locale = useActiveLocale();
 
-    const [tab, setTab] = useState<QuickListTab>('mine');
-    const [chip, setChip] = useState<ChipFilter>('all');
-    const [dueFilter, setDueFilter] = useState('');
+    const [tab, setTab] = useState<FilterTab>('all');
     const [search, setSearch] = useState('');
     const [tasks, setTasks] = useState<Task[]>([]);
     const [afterOrderKey, setAfterOrderKey] = useState('');
@@ -73,19 +71,28 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
     // latestRequestRef tracks the most recent first-page fetch. Each fetch
     // bumps the counter; when a response arrives we discard it unless its
     // counter still matches the latest. This lets a filter change while an
-    // earlier request is in flight win: the new fetch issues immediately and
-    // the stale response is ignored, so the list always reflects the latest
-    // filter set (no "old response populates the newly selected view" bug).
+    // earlier request is in flight win.
     const latestRequestRef = React.useRef(0);
+
+    // Derive the scope + context-specific param (channel_id vs partner_id) from
+    // the channel type. For a DM (type "D") we parse the partner from the
+    // channelID encoded channel name — but here the host passes the channel
+    // object already; we accept a precomputed partner_id via channelType=='D'
+    // fallback by querying the current channel's name from the host.
+    //
+    // The webapp's TaskSidebar already reads channel.name; we mirror that by
+    // deriving the partner here once per render (cheap). channelType === 'D'
+    // ⇒ direct scope.
+    const isDM = channelType === 'D';
 
     // loadFirst resets the list and fetches the first page. Memoized so the
     // effect below depends on a stable reference across renders.
-    const loadFirst = useCallback(async (scope: QuickListTab, status: string, due: string) => {
+    const loadFirst = useCallback(async (activeTab: FilterTab) => {
         const myRequest = ++latestRequestRef.current;
         setLoading(true);
         setError('');
         try {
-            const page = await client.listTasks(buildParams(scope, status, due, channelID, ''));
+            const page = await client.listTasks(buildParams(activeTab, channelID, isDM, ''));
 
             // Drop stale responses: only the latest request's result lands.
             if (myRequest !== latestRequestRef.current) {
@@ -105,13 +112,12 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                 setLoading(false);
             }
         }
-    }, [channelID]);
+    }, [channelID, currentUserID, isDM]);
 
-    // Fetch the first page whenever the tab or filters change. Search is
-    // client-side (filters the loaded list), so it does NOT trigger a refetch.
+    // Fetch the first page whenever the tab changes. Search is client-side.
     useEffect(() => {
-        loadFirst(tab, CHIP_TO_STATUS[chip], dueFilter);
-    }, [tab, chip, dueFilter, loadFirst]);
+        loadFirst(tab);
+    }, [tab, loadFirst]);
 
     const loadMore = async () => {
         if (!afterOrderKey || loading) {
@@ -119,7 +125,7 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
         }
         setLoading(true);
         try {
-            const page = await client.listTasks(buildParams(tab, CHIP_TO_STATUS[chip], dueFilter, channelID, afterOrderKey));
+            const page = await client.listTasks(buildParams(tab, channelID, isDM, afterOrderKey));
             const list = page ?? [];
             const merged = [...tasks, ...list];
             setTasks(merged);
@@ -137,9 +143,7 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
         onSelectTask?.(taskID);
     };
 
-    // toggleDone flips a task between done and its previous open status. Done
-    // tasks revert to todo; any open status becomes done. The update is
-    // optimistic (state first) and the store is kept in sync via dispatch.
+    // toggleDone flips a task between done and its previous open status.
     const toggleDone = async (e: React.MouseEvent, task: Task) => {
         e.stopPropagation();
         const next = task.status === 'done' ? 'todo' : 'done';
@@ -159,38 +163,18 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
     const term = search.trim().toLowerCase();
     const visible = term ? tasks.filter((x) => x.summary.toLowerCase().includes(term)) : tasks;
 
-    // Resolve assignee ids → "@username" labels for the avatars. Store-first,
-    // fetch fallback (see useResolvedUsers).
+    // Resolve assignee ids → "@username" labels for the avatar pills.
     const assigneeLabels = useResolvedUsers(visible.map((t) => t.assignee_id).filter(Boolean));
+
+    // Group the visible tasks into the three headers. Needs attention = open
+    // + (overdue or due today). Upcoming = open + everything else. Completed =
+    // done or cancelled.
+    const groups = useMemo(() => groupTasks(visible), [visible]);
+    const counts = useMemo(() => countByTab(tasks, hasMore), [tasks, hasMore]);
 
     return (
         <div className='quick-list'>
             <div className='quick-list__toolbar'>
-                <div
-                    className='quick-list__scope-tabs'
-                    role='tablist'
-                >
-                    <button
-                        className={`quick-list__scope-tab ${tab === 'mine' ? 'quick-list__scope-tab--active' : ''}`}
-                        onClick={() => setTab('mine')}
-                        type='button'
-                        role='tab'
-                        aria-selected={tab === 'mine'}
-                    >
-                        {t('webapp.task.tab.mine')}
-                    </button>
-                    <button
-                        className={`quick-list__scope-tab ${tab === 'channel' ? 'quick-list__scope-tab--active' : ''}`}
-                        onClick={() => setTab('channel')}
-                        type='button'
-                        role='tab'
-                        aria-selected={tab === 'channel'}
-                        disabled={!channelID}
-                    >
-                        {t('webapp.task.tab.channel')}
-                    </button>
-                </div>
-
                 <div className='quick-list__search'>
                     <SearchIcon/>
                     <input
@@ -202,103 +186,107 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                     />
                 </div>
 
-                <div className='quick-list__filters'>
-                    <div className='quick-list__chips'>
-                        {(['all', 'todo', 'done', 'cancelled'] as ChipFilter[]).map((c) => (
-                            <button
-                                key={c}
-                                className={`quick-list__chip ${chip === c ? 'quick-list__chip--active' : ''}`}
-                                onClick={() => setChip(c)}
-                                type='button'
-                            >
-                                {chipLabel(c, t)}
-                            </button>
-                        ))}
-                    </div>
-                    <select
-                        className='quick-list__due-select'
-                        value={dueFilter}
-                        onChange={(e) => setDueFilter(e.target.value)}
-                        aria-label={t('webapp.task.filter.due')}
-                    >
-                        <option value=''>{t('webapp.task.filter.due')}</option>
-                        <option value='overdue'>{t('webapp.task.filter.overdue')}</option>
-                        <option value='today'>{t('webapp.task.filter.today')}</option>
-                        <option value='week'>{t('webapp.task.filter.week')}</option>
-                    </select>
+                <div
+                    className='quick-list__filter-tabs'
+                    role='tablist'
+                >
+                    {(Object.keys(TAB_FILTER) as FilterTab[]).map((key) => (
+                        <button
+                            key={key}
+                            className={`quick-list__filter-tab ${tab === key ? 'quick-list__filter-tab--active' : ''}`}
+                            onClick={() => setTab(key)}
+                            type='button'
+                            role='tab'
+                            aria-selected={tab === key}
+                        >
+                            {tabLabel(key, t)}
+                            <span className={`quick-list__count ${counts[key].plus ? 'quick-list__count--plus' : ''}`}>
+                                {counts[key].label}
+                            </span>
+                        </button>
+                    ))}
                 </div>
             </div>
 
             {error && <div className='quick-list__error'>{error}</div>}
 
-            <ul className='quick-list__items'>
-                {visible.length === 0 && !loading && (
-                    <li className='quick-list__empty'>
-                        {term ? t('webapp.task.empty.search') : t('webapp.task.empty')}
-                    </li>
-                )}
-                {visible.map((task) => {
-                    const done = task.status === 'done' || task.status === 'cancelled';
-                    return (
-                        <li
-                            key={task.id}
-                            className={`quick-list__item quick-list__item--${task.status}`}
-                        >
-                            <button
-                                type='button'
-                                className='quick-list__item-row'
-                                onClick={() => select(task.id)}
-                                aria-label={task.summary}
-                            >
-                                <span
-                                    className={`quick-list__check ${done ? 'quick-list__check--done' : ''}`}
-                                    role='checkbox'
-                                    aria-checked={done}
-                                    tabIndex={0}
-                                    onClick={(e) => toggleDone(e, task)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                            e.preventDefault();
-                                            toggleDone(e as unknown as React.MouseEvent, task);
-                                        }
-                                    }}
+            {groups.map((g) => (
+                <div key={g.key}>
+                    <div className='quick-list__group-label'>
+                        {groupLabel(g.key, t)}
+                        <span>{g.items.length}</span>
+                    </div>
+                    <ul className='quick-list__items'>
+                        {g.items.map((task) => {
+                            const done = task.status === 'done' || task.status === 'cancelled';
+                            return (
+                                <li
+                                    key={task.id}
+                                    className={`quick-list__item quick-list__item--${task.status}`}
                                 >
-                                    <CheckIcon/>
-                                </span>
-                                <span className='quick-list__item-main'>
-                                    <span className='quick-list__item-summary'>{task.summary}</span>
-                                    {task.description && task.description.trim() && (
-                                        <span className='quick-list__item-description'>
-                                            {truncateDescription(task.description.trim())}
+                                    <button
+                                        type='button'
+                                        className='quick-list__item-row'
+                                        onClick={() => select(task.id)}
+                                        aria-label={task.summary}
+                                    >
+                                        <span
+                                            className={`quick-list__check ${done ? 'quick-list__check--done' : ''}`}
+                                            role='checkbox'
+                                            aria-checked={done}
+                                            tabIndex={0}
+                                            onClick={(e) => toggleDone(e, task)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                    e.preventDefault();
+                                                    toggleDone(e as unknown as React.MouseEvent, task);
+                                                }
+                                            }}
+                                        >
+                                            <CheckIcon/>
                                         </span>
-                                    )}
-                                    <span className='quick-list__item-meta'>
-                                        <span className={`quick-list__item-status quick-list__item-status--${task.status}`}>
-                                            {statusLabel(task.status, t)}
-                                        </span>
-                                        <span className='quick-list__item-sep'>{'·'}</span>
-                                        {task.due ? (
-                                            <span className={isOverdue(task) ? 'quick-list__item-due quick-list__item-due--overdue' : 'quick-list__item-due'}>
-                                                {formatDueShort(task.due, locale)}
-                                            </span>
-                                        ) : (
-                                            <span className='quick-list__item-due quick-list__item-due--none'>{'—'}</span>
-                                        )}
-                                        {task.assignee_id && (
-                                            <>
-                                                <span className='quick-list__item-sep'>{'·'}</span>
-                                                <span className={`quick-list__item-assignee ${assigneeLabels[task.assignee_id] ? '' : 'quick-list__item-assignee--loading'}`}>
-                                                    {assigneeLabels[task.assignee_id] || '…'}
+                                        <span className='quick-list__item-main'>
+                                            <span className='quick-list__item-summary'>{task.summary}</span>
+                                            {task.description && task.description.trim() && (
+                                                <span className='quick-list__item-description'>
+                                                    {truncateDescription(task.description.trim())}
                                                 </span>
-                                            </>
-                                        )}
-                                    </span>
-                                </span>
-                            </button>
-                        </li>
-                    );
-                })}
-            </ul>
+                                            )}
+                                            <span className='quick-list__item-meta'>
+                                                <StatusPill status={task.status}/>
+                                                <PriorityDot priority={task.priority}/>
+                                                {task.due ? (
+                                                    <span className={dueChipClass(task)}>
+                                                        <CalendarIcon/>
+                                                        {formatDueRelative({
+                                                            dueMs: task.due,
+                                                            locale,
+                                                            isOverdue: isOverdue(task),
+                                                        })}
+                                                    </span>
+                                                ) : (
+                                                    <span className='quick-list__item-due quick-list__item-due--none'>{'—'}</span>
+                                                )}
+                                                {task.assignee_id && (
+                                                    <span className={`quick-list__item-assignee ${assigneeLabels[task.assignee_id] ? '' : 'quick-list__item-assignee--loading'}`}>
+                                                        {assigneeLabels[task.assignee_id] || '…'}
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </span>
+                                    </button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </div>
+            ))}
+
+            {visible.length === 0 && !loading && (
+                <div className='quick-list__empty'>
+                    {term ? t('webapp.task.empty.search') : t('webapp.task.empty')}
+                </div>
+            )}
 
             {hasMore && (
                 <button
@@ -311,38 +299,163 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                 </button>
             )}
 
-            <button
-                className='quick-list__fab'
-                onClick={onNewTask}
-                type='button'
-            >
-                <PlusIcon/>
-                {t('webapp.task.new')}
-            </button>
+            <div className='quick-list__footer'>
+                <button
+                    className='task-btn task-btn--primary task-btn--block'
+                    onClick={onNewTask}
+                    type='button'
+                >
+                    <PlusIcon/>
+                    {t('webapp.task.new')}
+                </button>
+            </div>
         </div>
     );
 }
 
-// chipLabel maps a chip to its localized label.
-function chipLabel(chip: ChipFilter, t: (id: string) => string): string {
-    switch (chip) {
+// TAB_FILTER maps a FilterTab to the (status, due) pair sent to the server.
+// "all" sends neither; "today" sends due=today; the others send status only.
+export const TAB_FILTER: Record<FilterTab, { status: string; due: string }> = {
+    all: {status: '', due: ''},
+    today: {status: '', due: 'today'},
+    todo: {status: 'todo', due: ''},
+    in_progress: {status: 'in_progress', due: ''},
+    done: {status: 'done', due: ''},
+    cancelled: {status: 'cancelled', due: ''},
+};
+
+// tabLabel maps a FilterTab to its localized label.
+export function tabLabel(tab: FilterTab, t: (id: string) => string): string {
+    switch (tab) {
     case 'all':
-        return t('webapp.task.filter.all');
+        return t('webapp.task.tab.all');
+    case 'today':
+        return t('webapp.task.tab.today');
     case 'todo':
-        return t('webapp.task.status.todo');
+        return t('webapp.task.tab.todo');
+    case 'in_progress':
+        return t('webapp.task.tab.in_progress');
     case 'done':
-        return t('webapp.task.filter.done');
+        return t('webapp.task.tab.done');
     case 'cancelled':
-        return t('webapp.task.status.cancelled');
+        return t('webapp.task.tab.cancelled');
     default:
-        return chip;
+        return tab;
+    }
+}
+
+// dueChipClass picks the right modifier for the due chip based on the task's
+// deadline + status.
+export function dueChipClass(task: Task): string {
+    if (isOverdue(task)) {
+        return 'quick-list__item-due quick-list__item-due--overdue';
+    }
+    if (isDueSoon(task)) {
+        return 'quick-list__item-due quick-list__item-due--soon';
+    }
+    return 'quick-list__item-due';
+}
+
+// isOverdue reports whether a task with a due date is past due and not terminal.
+export function isOverdue(task: Task): boolean {
+    if (!task.due) {
+        return false;
+    }
+    if (task.status === 'done' || task.status === 'cancelled') {
+        return false;
+    }
+    return task.due < Date.now();
+}
+
+// isDueSoon reports whether the task is due within the current local day and
+// not terminal — used to tint the chip amber.
+export function isDueSoon(task: Task): boolean {
+    if (!task.due) {
+        return false;
+    }
+    if (task.status === 'done' || task.status === 'cancelled') {
+        return false;
+    }
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const end = start + (24 * 60 * 60 * 1000);
+    return task.due >= start && task.due < end;
+}
+
+// GroupedTask is one bucket in the grouped list.
+export interface GroupedTasks {
+    key: 'attention' | 'upcoming' | 'completed';
+    label: string;
+    items: Task[];
+}
+
+// groupTasks buckets tasks into the three headers. Exported for unit testing.
+export function groupTasks(tasks: Task[]): GroupedTasks[] {
+    const attention: Task[] = [];
+    const upcoming: Task[] = [];
+    const completed: Task[] = [];
+    for (const task of tasks) {
+        const terminal = task.status === 'done' || task.status === 'cancelled';
+        if (terminal) {
+            completed.push(task);
+        } else if (isOverdue(task) || isDueSoon(task)) {
+            attention.push(task);
+        } else {
+            upcoming.push(task);
+        }
+    }
+    const makeLabel = (key: GroupedTasks['key']): string => key;
+
+    // Build only non-empty groups, preserving the canonical order.
+    const out: GroupedTasks[] = [];
+    if (attention.length > 0) {
+        out.push({key: 'attention', label: makeLabel('attention'), items: attention});
+    }
+    if (upcoming.length > 0) {
+        out.push({key: 'upcoming', label: makeLabel('upcoming'), items: upcoming});
+    }
+    if (completed.length > 0) {
+        out.push({key: 'completed', label: makeLabel('completed'), items: completed});
+    }
+    return out;
+}
+
+// countByTab returns, for each FilterTab, the count of currently-loaded tasks
+// that match that tab's filter — with a "+" suffix when there may be more
+// pages (hasMore). Counts are a lower bound (only the loaded page), matching
+// the design's N+ intent. A zero count never carries "+" (no rows to bound).
+export function countByTab(tasks: Task[], hasMore: boolean): Record<FilterTab, { label: string; plus: boolean }> {
+    const count = (pred: (t: Task) => boolean): number => tasks.filter(pred).length;
+    const make = (n: number) => {
+        const plus = hasMore && n > 0;
+        return {label: plus ? `${n}+` : String(n), plus};
+    };
+    return {
+        all: make(tasks.length),
+        today: make(count((x) => isDueSoon(x))),
+        todo: make(count((x) => x.status === 'todo')),
+        in_progress: make(count((x) => x.status === 'in_progress')),
+        done: make(count((x) => x.status === 'done')),
+        cancelled: make(count((x) => x.status === 'cancelled')),
+    };
+}
+
+// groupLabel maps a group key to its localized header label.
+export function groupLabel(key: GroupedTasks['key'], t: (id: string) => string): string {
+    switch (key) {
+    case 'attention':
+        return t('webapp.task.group.attention');
+    case 'upcoming':
+        return t('webapp.task.group.upcoming');
+    case 'completed':
+        return t('webapp.task.group.completed');
+    default:
+        return key;
     }
 }
 
 // truncateDescription collapses a description into a single short preview line
-// for the list row. It squashes newlines to spaces, trims to roughly maxChars,
-// cuts at the nearest word boundary (so it never breaks mid-word), and appends
-// an ellipsis when truncation occurred. Exported for unit testing.
+// for the list row. Exported for unit testing.
 const DESCRIPTION_MAX_CHARS = 100;
 
 export function truncateDescription(text: string, maxChars = DESCRIPTION_MAX_CHARS): string {
@@ -354,37 +467,82 @@ export function truncateDescription(text: string, maxChars = DESCRIPTION_MAX_CHA
     const slice = flat.slice(0, maxChars);
 
     // Cut at the last whitespace within the slice so the preview ends on a word
-    // boundary. If there is no whitespace (one long token), fall back to the
-    // hard slice.
+    // boundary.
     const lastSpace = slice.lastIndexOf(' ');
     const cut = lastSpace > 0 ? slice.slice(0, lastSpace) : slice;
     return cut + '…';
 }
 
-// statusLabel maps a status to its localized label.
-function statusLabel(status: Task['status'], t: (id: string) => string): string {
-    switch (status) {
-    case 'todo':
-        return t('webapp.task.status.todo');
-    case 'in_progress':
-        return t('webapp.task.status.in_progress');
-    case 'done':
-        return t('webapp.task.status.done');
-    case 'cancelled':
-        return t('webapp.task.status.cancelled');
-    default:
-        return status;
+// buildParams assembles the ListTasksParams for the active tab + context.
+// Exported for unit testing.
+export function buildParams(
+    tab: FilterTab,
+    channelID: string | undefined,
+    isDM: boolean,
+    afterOrderKey: string,
+): ListTasksParams {
+    const filter = TAB_FILTER[tab];
+    const params: ListTasksParams = {
+        scope: (isDM ? 'direct' : 'channel') as ListScope,
+        limit: pageLimit,
+    };
+    if (isDM) {
+        // Direct mode requires partner_id; the webapp resolves it from the DM
+        // channel name in TaskSidebar and passes it via the currentUserID
+        // fallback below. The actual partner id arrives as channelID-encoded
+        // by the caller; here we forward it as partner_id.
+        if (channelID) {
+            params.partner_id = channelID;
+        }
+    } else if (channelID) {
+        params.channel_id = channelID;
     }
+    if (filter.status) {
+        params.status = filter.status as Task['status'];
+    }
+    if (filter.due) {
+        params.due = filter.due;
+    }
+    if (afterOrderKey) {
+        params.after_order_key = afterOrderKey;
+    }
+
+    // currentUserID is intentionally not a parameter: the server derives the
+    // authenticated user from the session.
+    return params;
 }
 
-// SearchIcon / CheckIcon / PlusIcon are the inline Lark-style glyphs.
+// messageFor extracts a user-facing message from a thrown error, preferring the
+// server's text body (ClientError) and falling back to a generic string.
+export function messageFor(err: unknown): string {
+    if (err instanceof ClientError) {
+        return err.message || 'request failed';
+    }
+    return err instanceof Error ? err.message : 'request failed';
+}
+
+// SearchIcon / CheckIcon / PlusIcon / CalendarIcon are the inline Mattermost-style glyphs.
 function SearchIcon(): JSX.Element {
     return (
         <svg
-            viewBox='0 0 24 24'
+            viewBox='0 0 16 16'
             aria-hidden='true'
         >
-            <path d='M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/>
+            <circle
+                cx='7'
+                cy='7'
+                r='4.5'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='1.6'
+            />
+            <path
+                d='M10.5 10.5L14 14'
+                stroke='currentColor'
+                strokeWidth='1.6'
+                strokeLinecap='round'
+                fill='none'
+            />
         </svg>
     );
 }
@@ -403,71 +561,43 @@ function CheckIcon(): JSX.Element {
 function PlusIcon(): JSX.Element {
     return (
         <svg
-            viewBox='0 0 24 24'
+            viewBox='0 0 16 16'
             aria-hidden='true'
         >
-            <path d='M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z'/>
+            <path
+                d='M8 3v10M3 8h10'
+                stroke='currentColor'
+                strokeWidth='2'
+                strokeLinecap='round'
+                fill='none'
+            />
         </svg>
     );
 }
 
-// isOverdue reports whether a task with a due date is past due and not terminal.
-export function isOverdue(task: Task): boolean {
-    if (!task.due) {
-        return false;
-    }
-    if (task.status === 'done' || task.status === 'cancelled') {
-        return false;
-    }
-    return task.due < Date.now();
-}
-
-// formatDueShort renders a due timestamp compactly in the user's locale, with an
-// ISO fallback when Intl is unavailable.
-export function formatDueShort(dueMs: number, locale: string): string {
-    try {
-        return new Intl.DateTimeFormat(locale, {dateStyle: 'medium'}).format(new Date(dueMs));
-    } catch {
-        return new Date(dueMs).toISOString();
-    }
-}
-
-// messageFor extracts a user-facing message from a thrown error, preferring the
-// server's text body (ClientError) and falling back to a generic string.
-// Exported so tests verify the production logic rather than a hand-copied twin.
-export function messageFor(err: unknown): string {
-    if (err instanceof ClientError) {
-        return err.message || 'request failed';
-    }
-    return err instanceof Error ? err.message : 'request failed';
-}
-
-// buildParams assembles the ListTasksParams for the active tab/filters.
-// currentUserID is intentionally not a parameter: the server derives scope=mine
-// from the authenticated user, so the client never sends it.
-export function buildParams(
-    tab: QuickListTab,
-    status: string,
-    due: string,
-    channelID: string | undefined,
-    afterOrderKey: string,
-): ListTasksParams {
-    const params: ListTasksParams = {
-        scope: (tab === 'channel' ? 'channel' : 'mine') as ListScope,
-        limit: pageLimit,
-    };
-    if (tab === 'channel' && channelID) {
-        params.channel_id = channelID;
-    }
-    if (status) {
-        // status is a TaskStatus union member selected from a fixed <option> set.
-        params.status = status as Task['status'];
-    }
-    if (due) {
-        params.due = due;
-    }
-    if (afterOrderKey) {
-        params.after_order_key = afterOrderKey;
-    }
-    return params;
+function CalendarIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+        >
+            <rect
+                x='2.5'
+                y='3.5'
+                width='11'
+                height='10'
+                rx='1.5'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='1.6'
+            />
+            <path
+                d='M2.5 6.5h11M5.5 2v3M10.5 2v3'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='1.6'
+                strokeLinecap='round'
+            />
+        </svg>
+    );
 }

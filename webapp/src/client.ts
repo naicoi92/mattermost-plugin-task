@@ -70,8 +70,14 @@ function buildQuery(params?: ListTasksParams): string {
     if (params.channel_id) {
         q.set('channel_id', params.channel_id);
     }
+    if (params.partner_id) {
+        q.set('partner_id', params.partner_id);
+    }
     if (params.status) {
         q.set('status', params.status);
+    }
+    if (params.priority) {
+        q.set('priority', params.priority);
     }
     if (params.due) {
         q.set('due', params.due);

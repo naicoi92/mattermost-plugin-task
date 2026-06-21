@@ -2,11 +2,12 @@
 // See LICENSE.txt for license information.
 
 // TaskDetailPanel is the detail view shown inside the RHS when a task is
-// selected (issue #29). It renders the task's summary, description, due date
-// (in the user's timezone), assignee, the subtask list with an "x/y done"
-// progress summary, and the comment list with timestamps. Actions mutate via
-// the API client (#31) and dispatch into the Redux store (#27) so the change
-// is reflected immediately and broadcast over WebSocket (#32).
+// selected. It renders the task's summary, status, priority, due date,
+// assignee, the subtask list with an "x/y done" progress summary, the
+// description as a click-to-edit block, and the activity feed (comments) with
+// @mention-style avatars. Actions mutate via the API client and dispatch into
+// the Redux store so the change is reflected immediately and broadcast over
+// WebSocket.
 
 import * as client from 'client';
 import {ClientError} from 'client';
@@ -15,15 +16,17 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import formatDueRelative from 'components/shared/format_due_relative';
+import PriorityPill, {priorityLabel} from 'components/shared/priority_pill';
+import StatusPill from 'components/shared/status_pill';
 import {useResolvedUser, useResolvedUsers} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
-import type {Task, Comment, PatchTaskInput} from 'types/tasks';
+import type {Task, Comment, PatchTaskInput, PatchTaskInput as _PatchTaskInput, TaskPriority} from 'types/tasks';
 
 // The plugin reducer is mounted by registerReducer at
 // state['plugins-<pluginId>'] (Mattermost convention), so the slice lives at a
-// top-level key named with the plugin id — not under state.plugins. This type
-// models the relevant slice of GlobalState the panel reads.
+// top-level key named with the plugin id — not under state.plugins.
 interface PluginState {
     selectedTaskID: string;
     selectedTask: Task | null;
@@ -41,6 +44,9 @@ function selectSlice(state: GlobalStateWithPlugin): PluginState {
 
 // STATUS_CYCLE is the order the status pill advances through on click.
 const STATUS_CYCLE: Array<Task['status']> = ['todo', 'in_progress', 'done', 'cancelled'];
+
+// PRIORITY_CYCLE is the order the priority pill advances through on click.
+const PRIORITY_CYCLE: TaskPriority[] = ['standard', 'important', 'urgent'];
 
 export interface TaskDetailPanelProps {
 
@@ -74,11 +80,11 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     const [error, setError] = useState<string>('');
     const [newComment, setNewComment] = useState('');
     const [newSubtask, setNewSubtask] = useState('');
+    const [editingDescription, setEditingDescription] = useState(false);
 
     // Inline-edit buffers for summary / due / description. They mirror `full`
     // so the field renders the server value until the user starts editing,
-    // then commit on blur/Enter via patchTask. dueLocal holds the
-    // datetime-local string; empty string clears the due date.
+    // then commit on blur/Enter via patchTask.
     const [editSummary, setEditSummary] = useState('');
     const [editDueLocal, setEditDueLocal] = useState('');
     const [editDescription, setEditDescription] = useState('');
@@ -123,9 +129,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     }, [taskID, dispatch]);
 
     // Resolve the assignee id → "@username" for display, and comment author
-    // ids → labels, before the early returns below so the hooks run in a stable
-    // order every render. Empty ids yield '' (see useResolvedUser). The store
-    // is read first; a fetch fills in users the host hasn't cached.
+    // ids → labels. Hooks run before the early returns so the order is stable.
     const assigneeLabel = useResolvedUser(full?.assignee_id ?? '').label;
     const commentAuthorLabels = useResolvedUsers(comments.map((c) => c.user_id).filter(Boolean));
 
@@ -152,23 +156,36 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         }
     };
 
-    // cycleStatus advances the status pill to the next value in STATUS_CYCLE.
     const cycleStatus = () => {
         const idx = STATUS_CYCLE.indexOf(full.status);
         const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
         changeStatus(next);
     };
 
+    // cyclePriority advances the priority pill to the next value.
+    const cyclePriority = async () => {
+        const idx = PRIORITY_CYCLE.indexOf(full.priority || 'standard');
+        const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
+        try {
+            const input: PatchTaskInput = {
+                update_fields: ['priority'],
+                priority: next,
+            };
+            const updated = await client.patchTask(full.id, input);
+            setFull(updated);
+            dispatch({type: ACTION_TYPES.UPSERT_TASK, task: updated});
+        } catch (err) {
+            setError(messageFor(err));
+        }
+    };
+
     // patchField commits a single editable field (summary/description/due) via
     // PATCH /tasks/:id. Only fields whose value actually changed are sent, so
-    // blur-without-edit is a no-op. Used by the inline-edit fields below; the
-    // updated task replaces `full` and syncs the store.
+    // blur-without-edit is a no-op.
     const patchField = async (
         field: 'summary' | 'description' | 'due',
         nextValue: string,
     ): Promise<void> => {
-        // Resolve the field's current server value so we can skip the PATCH
-        // when nothing changed (blur-without-edit is a no-op).
         const currentByField: Record<typeof field, string> = {
             summary: full.summary,
             description: full.description,
@@ -185,7 +202,6 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
             } else if (field === 'description') {
                 input.description = nextValue || null;
             } else {
-                // due: empty string clears it; otherwise parse the local input.
                 const ms = localInputToDue(nextValue);
                 input.due = ms === null ? null : ms;
             }
@@ -241,7 +257,6 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         }
     };
 
-    // toggleSubtaskDone flips a subtask between done and todo.
     const toggleSubtaskDone = async (sub: Task) => {
         const next = sub.status === 'done' ? 'todo' : 'done';
         const prev = sub.status;
@@ -273,9 +288,6 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         try {
             await client.deleteTask(full.id);
             dispatch({type: ACTION_TYPES.DELETE_TASK, taskID: full.id});
-
-            // Clear local state so no stale task remains rendered even if the
-            // host doesn't supply onBack (e.g. the panel is the only view).
             setFull(null);
             setSubtasks([]);
             setComments([]);
@@ -285,119 +297,169 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         }
     };
 
-    // Delete is permitted for the creator or current assignee; hide otherwise.
     const canDelete = currentUserID !== undefined &&
         (full.creator_id === currentUserID || full.assignee_id === currentUserID);
 
     return (
         <div className='task-detail'>
             <div className='task-detail__header'>
-                {onBack && (
+                <div className='task-detail__header-left'>
+                    {onBack && (
+                        <button
+                            className='task-detail__back'
+                            onClick={onBack}
+                            type='button'
+                            aria-label={t('webapp.task.cancel')}
+                        >
+                            <BackIcon/>
+                        </button>
+                    )}
+                    <span className='task-detail__title-inline'>{t('webapp.task.title.detail')}</span>
+                </div>
+            </div>
+
+            <div className='task-detail__scroll'>
+                {error && <div className='task-detail__error-block'>{error}</div>}
+
+                {full.parent_task_id && (
                     <button
-                        className='task-detail__back'
-                        onClick={onBack}
+                        className='task-detail__parent-link'
                         type='button'
-                        aria-label={t('webapp.task.cancel')}
+                        onClick={() => onOpenSubtask?.(full.parent_task_id)}
+                        disabled={!onOpenSubtask}
                     >
                         <BackIcon/>
+                        {t('webapp.task.subtasks')}
                     </button>
                 )}
-                <button
-                    className='task-detail__status-pill'
-                    onClick={cycleStatus}
-                    type='button'
-                    aria-label={`${t('webapp.task.filter.status')}: ${statusLabel(full.status, t)}`}
-                >
-                    <span className={`task-detail__status-dot task-detail__status-dot--${full.status}`}/>
-                    {statusLabel(full.status, t)}
-                </button>
-            </div>
 
-            {error && <div className='task-detail__error-block'>{error}</div>}
-
-            {full.parent_task_id && (
-                <button
-                    className='task-detail__parent-link'
-                    type='button'
-                    onClick={() => onOpenSubtask?.(full.parent_task_id)}
-                    disabled={!onOpenSubtask}
-                >
-                    <BackIcon/>
-                    {t('webapp.task.subtasks')}
-                </button>
-            )}
-
-            <div className='task-field'>
-                <span className='task-field__label'>{t('webapp.task.summary')}</span>
-                <input
-                    className='task-input task-input--inline task-input--title'
-                    value={editSummary}
-                    onChange={(e) => setEditSummary(e.target.value)}
-                    onBlur={() => patchField('summary', editSummary.trim())}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            (e.target as HTMLInputElement).blur();
-                        }
-                    }}
-                    disabled={saving}
-                    aria-label={t('webapp.task.summary')}
-                />
-            </div>
-
-            <div className='task-fields-row'>
-                <div className='task-field'>
-                    <span className='task-field__label'>{t('webapp.task.assignee')}</span>
-                    <UserPicker
-                        value={full.assignee_id}
-                        valueLabel={assigneeLabel}
-
-                        // Scope the picker only to the task's own channel. A
-                        // personal task has no channel_id, so we pass undefined
-                        // (global search) rather than the host's active channel
-                        // — otherwise personal-task assignee search would be
-                        // wrongly restricted to the currently open channel.
-                        channelID={full.channel_id || undefined}
-                        onSelect={(u) => setAssignee(u ? u.id : '')}
-                    />
-                </div>
-                <div className='task-field'>
-                    <span className='task-field__label'>{t('webapp.task.due')}</span>
+                <div className='task-detail__title-row'>
+                    <span
+                        className={`quick-list__check task-detail__title-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
+                        role='checkbox'
+                        aria-checked={full.status === 'done'}
+                        tabIndex={0}
+                        onClick={cycleStatus}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                cycleStatus();
+                            }
+                        }}
+                    >
+                        <CheckIcon/>
+                    </span>
                     <input
-                        className={`task-input task-input--inline ${isOverdue(full) ? 'task-input--overdue' : ''}`}
-                        type='datetime-local'
-                        value={editDueLocal}
-                        onChange={(e) => setEditDueLocal(e.target.value)}
-                        onBlur={() => patchField('due', editDueLocal)}
+                        className='task-input task-input--inline task-input--title'
+                        value={editSummary}
+                        onChange={(e) => setEditSummary(e.target.value)}
+                        onBlur={() => patchField('summary', editSummary.trim())}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                (e.target as HTMLInputElement).blur();
+                            }
+                        }}
                         disabled={saving}
-                        aria-label={t('webapp.task.due')}
+                        aria-label={t('webapp.task.summary')}
                     />
                 </div>
-            </div>
 
-            <div className='task-field'>
-                <span className='task-field__label'>{t('webapp.task.description')}</span>
-                <textarea
-                    className='task-textarea task-input--inline'
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    onBlur={() => patchField('description', editDescription)}
-                    disabled={saving}
-                    placeholder={t('webapp.task.description')}
-                    aria-label={t('webapp.task.description')}
-                />
-            </div>
+                <div className='task-detail__meta-table'>
+                    <div className='task-detail__meta-label'>{t('webapp.task.filter.status')}</div>
+                    <div className='task-detail__meta-value'>
+                        <button
+                            type='button'
+                            className='task-detail__meta-value-button'
+                            onClick={cycleStatus}
+                            style={{border: 0, background: 'transparent', padding: 0, cursor: 'pointer'}}
+                        >
+                            <StatusPill status={full.status}/>
+                        </button>
+                    </div>
 
-            <section className='task-detail__section'>
-                <div className='task-detail__section-title'>
+                    <div className='task-detail__meta-label'>{t('webapp.task.priority')}</div>
+                    <div className='task-detail__meta-value'>
+                        <PriorityPill
+                            priority={full.priority || 'standard'}
+                            onClick={cyclePriority}
+                        />
+                    </div>
+
+                    <div className='task-detail__meta-label'>{t('webapp.task.due')}</div>
+                    <div className={`task-detail__meta-value ${isOverdue(full) ? 'task-detail__meta-value--overdue' : ''}`}>
+                        <input
+                            className='task-input task-input--inline'
+                            type='datetime-local'
+                            value={editDueLocal}
+                            onChange={(e) => setEditDueLocal(e.target.value)}
+                            onBlur={() => patchField('due', editDueLocal)}
+                            disabled={saving}
+                            aria-label={t('webapp.task.due')}
+                        />
+                        {full.due && (
+                            <span style={{color: 'var(--task-meta)', fontSize: 12}}>
+                                {formatDueRelative({dueMs: full.due, locale, isOverdue: isOverdue(full)})}
+                            </span>
+                        )}
+                    </div>
+
+                    <div className='task-detail__meta-label'>{t('webapp.task.assignee')}</div>
+                    <div className='task-detail__meta-value'>
+                        <UserPicker
+                            value={full.assignee_id}
+                            valueLabel={assigneeLabel}
+                            channelID={full.channel_id || undefined}
+                            onSelect={(u) => setAssignee(u ? u.id : '')}
+                            placeholder={t('webapp.task.assignee.placeholder')}
+                        />
+                    </div>
+
+                    {full.channel_id && (
+                        <>
+                            <div className='task-detail__meta-label'>{t('webapp.task.scope.channel')}</div>
+                            <div className='task-detail__meta-value'>
+                                <span style={{color: 'var(--task-muted)'}}>{'#' + full.channel_id}</span>
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                <div className='task-detail__section-label'>{t('webapp.task.description')}</div>
+                {editingDescription ? (
+                    <textarea
+                        className='task-textarea task-input--inline'
+                        value={editDescription}
+                        onChange={(e) => setEditDescription(e.target.value)}
+                        onBlur={() => {
+                            patchField('description', editDescription);
+                            setEditingDescription(false);
+                        }}
+                        autoFocus={true}
+                        disabled={saving}
+                        placeholder={t('webapp.task.description')}
+                        aria-label={t('webapp.task.description')}
+                    />
+                ) : (
+                    <div
+                        className={`task-detail__description ${full.description ? '' : 'task-detail__description--empty'}`}
+                        onClick={() => setEditingDescription(true)}
+                        role='button'
+                        tabIndex={0}
+                    >
+                        {full.description || t('webapp.task.description')}
+                    </div>
+                )}
+
+                <div className='task-detail__section-label'>
                     {t('webapp.task.subtasks')}
-                    <span className='task-detail__progress'>
+                    <span style={{marginLeft: 6, color: 'var(--task-meta)'}}>
                         {t('webapp.task.subtasks.progress', doneCount, subtasks.length)}
                     </span>
                 </div>
                 <ul className='task-detail__subtask-list'>
                     {subtasks.length === 0 && (
-                        <li style={{padding: '8px 0', color: 'var(--task-muted)', fontSize: 13}}>
+                        <li style={{padding: '8px 0', color: 'var(--task-meta)', fontSize: 13}}>
                             {t('webapp.task.empty')}
                         </li>
                     )}
@@ -469,33 +531,33 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         {'+'}
                     </button>
                 </div>
-            </section>
 
-            <section className='task-detail__section'>
-                <div className='task-detail__section-title'>{t('webapp.task.comments')}</div>
+                <div className='task-detail__section-label'>{t('webapp.task.comments')}</div>
                 <ul className='task-detail__comment-list'>
                     {comments.length === 0 && (
-                        <li style={{padding: '8px 0', color: 'var(--task-muted)', fontSize: 13}}>
+                        <li style={{padding: '8px 0', color: 'var(--task-meta)', fontSize: 13}}>
                             {t('webapp.task.empty')}
                         </li>
                     )}
                     {comments.map((c) => (
                         <li
                             key={c.id}
-                            className='task-detail__comment'
+                            className='task-detail__activity-item'
                         >
                             <span
-                                className='quick-list__avatar'
+                                className='task-detail__activity-avatar'
                                 title={commentAuthorLabels[c.user_id] || c.user_id}
                             >
                                 {(commentAuthorLabels[c.user_id] || c.user_id || '?').
                                     replace(/^@/, '').trim()[0]?.toUpperCase() || '?'}
                             </span>
-                            <div className='task-detail__comment-body'>
-                                <div className='task-detail__comment-meta'>
+                            <div className='task-detail__activity-body'>
+                                <strong>{commentAuthorLabels[c.user_id] || t('webapp.task.comments')}</strong>
+                                {' '}
+                                <span className='task-detail__activity-time'>
                                     {formatTimestamp(c.created_at, locale)}
-                                </div>
-                                <div className='task-detail__comment-text'>{c.content}</div>
+                                </span>
+                                <div className='task-detail__activity-comment'>{c.content}</div>
                             </div>
                         </li>
                     ))}
@@ -521,27 +583,25 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         {t('webapp.task.comments.post')}
                     </button>
                 </div>
-            </section>
 
-            {canDelete && (
-                <div className='task-detail__actions'>
-                    <button
-                        className='task-btn task-btn--danger'
-                        onClick={remove}
-                        type='button'
-                    >
-                        {t('webapp.task.delete')}
-                    </button>
-                </div>
-            )}
+                {canDelete && (
+                    <div className='task-detail__actions'>
+                        <button
+                            className='task-btn task-btn--danger'
+                            onClick={remove}
+                            type='button'
+                        >
+                            {t('webapp.task.delete')}
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
 
-// statusLabel maps a status to its localized label.
-// dueToLocalInput converts an epoch-ms due date into the value a
-// datetime-local input expects ("YYYY-MM-DDTHH:mm"), in the user's local time.
-// Returns '' when there is no due date. Used to seed the inline-edit buffer.
+// dueToLocalInput converts an epoch-ms due date into the value a datetime-local
+// input expects ("YYYY-MM-DDTHH:mm"), in the user's local time.
 function dueToLocalInput(dueMs: number | undefined): string {
     if (!dueMs) {
         return '';
@@ -561,22 +621,44 @@ function localInputToDue(value: string): number | null {
     return Number.isNaN(ms) ? null : ms;
 }
 
-function statusLabel(status: Task['status'], t: (id: string) => string): string {
-    switch (status) {
-    case 'todo':
-        return t('webapp.task.status.todo');
-    case 'in_progress':
-        return t('webapp.task.status.in_progress');
-    case 'done':
-        return t('webapp.task.status.done');
-    case 'cancelled':
-        return t('webapp.task.status.cancelled');
-    default:
-        return status;
+// isOverdue reports whether a task with a due date is past due and not terminal.
+function isOverdue(task: Task): boolean {
+    if (!task.due) {
+        return false;
+    }
+    if (task.status === 'done' || task.status === 'cancelled') {
+        return false;
+    }
+    return task.due < Date.now();
+}
+
+// formatDue is exported for testing; it formats a due timestamp using the
+// shared formatDueRelative helper.
+export function formatDue(dueMs: number, locale: string): string {
+    return formatDueRelative({dueMs, locale});
+}
+
+// formatTimestamp formats a comment timestamp (date + time short).
+export function formatTimestamp(ms: number, locale: string): string {
+    try {
+        return new Intl.DateTimeFormat(locale, {
+            dateStyle: 'short',
+            timeStyle: 'short',
+        }).format(new Date(ms));
+    } catch {
+        return new Date(ms).toISOString();
     }
 }
 
-// BackIcon / CheckIcon are the inline Lark-style glyphs.
+// messageFor extracts a user-facing message from a thrown error.
+export function messageFor(err: unknown): string {
+    if (err instanceof ClientError) {
+        return err.message || 'request failed';
+    }
+    return err instanceof Error ? err.message : 'request failed';
+}
+
+// BackIcon / CheckIcon are the inline glyphs.
 function BackIcon(): JSX.Element {
     return (
         <svg
@@ -599,49 +681,10 @@ function CheckIcon(): JSX.Element {
     );
 }
 
-// messageFor extracts a user-facing message from a thrown error, preferring the
-// server's text body (ClientError) and falling back to a generic string.
-// Exported so tests verify the production logic rather than a hand-copied twin.
-export function messageFor(err: unknown): string {
-    if (err instanceof ClientError) {
-        return err.message || 'request failed';
-    }
-    return err instanceof Error ? err.message : 'request failed';
-}
+// Re-export priorityLabel for tests that previously imported it from here.
+export {priorityLabel};
 
-// isOverdue reports whether a task with a due date is past due and not terminal.
-function isOverdue(task: Task): boolean {
-    if (!task.due) {
-        return false;
-    }
-    if (task.status === 'done' || task.status === 'cancelled') {
-        return false;
-    }
-    return task.due < Date.now();
-}
-
-// formatDue renders a due timestamp in the given locale, defensively returning
-// a fallback if the Intl API is unavailable (older runtimes / SSR).
-export function formatDue(dueMs: number, locale: string): string {
-    try {
-        return new Intl.DateTimeFormat(locale, {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-        }).format(new Date(dueMs));
-    } catch {
-        return new Date(dueMs).toISOString();
-    }
-}
-
-// formatDue is exported for testing; formatTimestamp mirrors it but trims the
-// time when only a date is meaningful (comments always show time).
-export function formatTimestamp(ms: number, locale: string): string {
-    try {
-        return new Intl.DateTimeFormat(locale, {
-            dateStyle: 'short',
-            timeStyle: 'short',
-        }).format(new Date(ms));
-    } catch {
-        return new Date(ms).toISOString();
-    }
-}
+// _PatchTaskInput is imported only to keep the type referenced; the runtime
+// uses PatchTaskInput above. Suppress the unused warning.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type KeepPatchTaskInput = _PatchTaskInput;

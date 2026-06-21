@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -14,10 +13,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 
-	"github.com/naicoi92/mattermost-plugin-task/server/command"
-	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
-	"github.com/naicoi92/mattermost-plugin-task/server/permission"
 	"github.com/naicoi92/mattermost-plugin-task/server/store"
 	"github.com/naicoi92/mattermost-plugin-task/server/store/sqlstore"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
@@ -35,20 +31,16 @@ type Plugin struct {
 	// client is the Mattermost server API client.
 	client *pluginapi.Client
 
-	// commandClient is the client used to register and execute slash commands.
-	commandClient command.Command
-
 	// taskService wraps the store with task lifecycle business logic
-	// (create/list/patch/delete cascade), shared by the REST API and slash
-	// commands.
+	// (create/list/patch/delete cascade), used by the REST API and the
+	// cluster-scheduled reminder job.
 	taskService *task.Service
 
 	// botUserID is the plugin bot's user id, used as the author of DM/card
 	// posts. Ensured in OnActivate via EnsureBot.
 	botUserID string
 
-	// i18n is the server-side translation bundle used by notifications and
-	// ephemeral responses.
+	// i18n is the server-side translation bundle used by notifications.
 	i18n *I18n
 
 	// notifier sends task-event DMs from the bot in each recipient's locale.
@@ -113,18 +105,6 @@ func (p *Plugin) OnActivate() error {
 
 	p.taskService = task.NewService(p.taskStore, &p.client.Log)
 
-	p.commandClient = command.NewCommandHandler(p.client, p.taskService, command.Options{
-		Notifier:          commandNotifier{p.notifier},
-		AssignNotifier:    commandAssignNotifier{p.notifier},
-		CommentNotifier:   commandCommentNotifier{p.notifier},
-		CommentAuthorizer: commandCommentAuthorizer{channels: channelMembershipChecker{api: p.API}},
-		NewTaskOpener:     newTaskDialogOpener{p: p},
-		QuickListOpener:   quickListDialogOpener{p: p},
-		TaskDetailOpener:  taskDetailDialogOpener{p: p},
-		Users:             userResolver{p.API},
-		BotUserID:         p.botUserID,
-	})
-
 	p.router = p.initRouter()
 
 	job, err := cluster.Schedule(
@@ -186,15 +166,6 @@ func (p *Plugin) OnDeactivate() error {
 	return nil
 }
 
-// This will execute the commands that were registered in the NewCommandHandler function.
-func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
-	response, err := p.commandClient.Handle(args)
-	if err != nil {
-		return nil, model.NewAppError("ExecuteCommand", "plugin.command.execute_command.app_error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	return response, nil
-}
-
 // See https://developers.mattermost.com/extend/plugins/server/reference/
 
 // notifierAPI adapts plugin.API to notification.API. plugin.API returns
@@ -233,84 +204,6 @@ func (n notifierAPI) LogError(message string, keyValuePairs ...any) {
 	n.api.LogError(message, keyValuePairs...)
 }
 
-// commandNotifier adapts the notification.Notifier to the command.TaskNotifier
-// interface (TaskRef -> notification.TaskSummary). Kept nil-safe: when the
-// underlying notifier is nil (e.g. activation race) all calls are no-ops.
-type commandNotifier struct {
-	n *notification.Notifier
-}
-
-func (c commandNotifier) NotifyCompleted(ref command.TaskRef, actorID, creatorID, assigneeID string) {
-	if c.n == nil {
-		return
-	}
-	c.n.NotifyCompleted(toSummary(ref), actorID, creatorID, assigneeID)
-}
-
-func (c commandNotifier) NotifyCancelled(ref command.TaskRef, actorID, creatorID, assigneeID string) {
-	if c.n == nil {
-		return
-	}
-	c.n.NotifyCancelled(toSummary(ref), actorID, creatorID, assigneeID)
-}
-
-func toSummary(ref command.TaskRef) notification.TaskSummary {
-	return notification.TaskSummary{ID: ref.ID, Summary: ref.Summary}
-}
-
-// commandAssignNotifier adapts notification.Notifier.NotifyAssigned to the
-// command.AssignNotifier interface. Nil-safe (no-op when notifier unset).
-type commandAssignNotifier struct {
-	n *notification.Notifier
-}
-
-func (c commandAssignNotifier) NotifyAssigned(assigneeID, creatorID string, ref command.AssignRef) {
-	if c.n == nil {
-		return
-	}
-	c.n.NotifyAssigned(assigneeID, creatorID, notification.TaskSummary{ID: ref.ID, Summary: ref.Summary})
-}
-
-// commandCommentNotifier adapts notification.Notifier.NotifyCommented to the
-// command.CommentNotifier interface. Nil-safe (no-op when notifier unset).
-type commandCommentNotifier struct {
-	n *notification.Notifier
-}
-
-func (c commandCommentNotifier) NotifyCommented(ref command.TaskRef, actorID, creatorID, assigneeID string) {
-	if c.n == nil {
-		return
-	}
-	c.n.NotifyCommented(notification.TaskSummary{ID: ref.ID, Summary: ref.Summary}, actorID, creatorID, assigneeID)
-}
-
-// commandCommentAuthorizer adapts permission.CanUserCommentTask to the
-// command.CommentAuthorizer interface, using the channel-membership checker.
-type commandCommentAuthorizer struct {
-	channels permission.ChannelMembershipChecker
-}
-
-func (c commandCommentAuthorizer) CanComment(userID string, t *taskmodel.Task) bool {
-	if t == nil {
-		return false
-	}
-	return permission.CanUserCommentTask(userID, t, c.channels)
-}
-
-// userResolver adapts plugin.API.GetUserByUsername to command.UserResolver,
-// returning the user id ("" when not found / on error).
-type userResolver struct {
-	api plugin.API
-}
-
-func (u userResolver) UserIDByUsername(username string) string {
-	user, appErr := u.api.GetUserByUsername(username)
-	if appErr != nil || user == nil {
-		return ""
-	}
-	return user.Id
-}
-
 // channelMembershipChecker adapts plugin.API to permission.ChannelMembershipChecker.
 // It backs the view/comment permission rules for channel-scoped tasks. A nil api
 // reports "not a member" for every check.
@@ -341,61 +234,4 @@ func (c channelMembershipChecker) IsChannelAdmin(userID, channelID string) bool 
 	}
 	// Channel admins carry the "channel_admin" role in the member's role list.
 	return slices.Contains(member.GetRoles(), "channel_admin")
-}
-
-// newTaskDialogOpener adapts the plugin layer to command.NewTaskDialogOpener
-// (#95). It opens the New Task Interactive Dialog prefilled with a summary so
-// `/task add "<summary>"` lets the user fill assignee/due/description before
-// the task is created. Returns true when the dialog was opened successfully.
-type newTaskDialogOpener struct {
-	p *Plugin
-}
-
-func (o newTaskDialogOpener) OpenNewTask(triggerID, prefillSummary, channelID string) bool {
-	if o.p == nil || triggerID == "" {
-		return false
-	}
-	if err := o.p.openNewTaskDialogFor(triggerID, prefillSummary, channelID); err != nil {
-		o.p.API.LogError("Failed to open New Task dialog", "error", err)
-		return false
-	}
-	return true
-}
-
-// quickListDialogOpener adapts the plugin layer to
-// command.QuickListDialogOpener (#97). It opens the Quick List Interactive
-// Dialog scoped/filtered for the user so `/task list` on mobile renders an
-// interactive picker instead of a flat text dump. Returns true on success.
-type quickListDialogOpener struct {
-	p *Plugin
-}
-
-func (o quickListDialogOpener) OpenQuickList(triggerID, userID, scope, channelID, status, due string) bool {
-	if o.p == nil || triggerID == "" {
-		return false
-	}
-	if err := o.p.openQuickListDialogFor(triggerID, userID, scope, channelID, status, due); err != nil {
-		o.p.API.LogError("Failed to open Quick List dialog", "error", err)
-		return false
-	}
-	return true
-}
-
-// taskDetailDialogOpener adapts the plugin layer to
-// command.TaskDetailDialogOpener (#97). It opens the Task Detail Interactive
-// Dialog for a task so `/task show <id>` on mobile renders an editable view
-// instead of a read-only text card. Returns true on success.
-type taskDetailDialogOpener struct {
-	p *Plugin
-}
-
-func (o taskDetailDialogOpener) OpenTaskDetail(triggerID, taskID string) bool {
-	if o.p == nil || triggerID == "" {
-		return false
-	}
-	if err := o.p.openTaskDetailDialogFor(triggerID, taskID); err != nil {
-		o.p.API.LogError("Failed to open Task Detail dialog", "task_id", taskID, "error", err)
-		return false
-	}
-	return true
 }

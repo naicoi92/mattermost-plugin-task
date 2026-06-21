@@ -1,13 +1,20 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// Unit tests for QuickList (issue #28). Covers the pure helpers (buildParams,
-// isOverdue, formatDueShort, messageFor) — the contract this file pins down
-// without a host Redux/intl provider harness.
+// Unit tests for QuickList. Covers the pure helpers (buildParams, isOverdue,
+// groupTasks, countByTab, messageFor, truncateDescription) — the contract this
+// file pins down without a host Redux/intl provider harness.
 
 import {ClientError} from 'client';
 
-import {buildParams, formatDueShort, isOverdue, messageFor, truncateDescription} from 'components/task_sidebar/quick_list';
+import {
+    buildParams,
+    countByTab,
+    groupTasks,
+    isOverdue,
+    messageFor,
+    truncateDescription,
+} from 'components/task_sidebar/quick_list';
 
 import type {Task} from 'types/tasks';
 
@@ -23,6 +30,7 @@ function makeTask(over: Partial<Task> = {}): Task {
         dm_post_id: '',
         is_all_day: false,
         status: 'todo',
+        priority: 'standard',
         order_key: '',
         parent_task_id: '',
         reminder_fired: false,
@@ -33,44 +41,46 @@ function makeTask(over: Partial<Task> = {}): Task {
 }
 
 describe('buildParams', () => {
-    test('mine tab yields scope=mine and no channel_id', () => {
-        const p = buildParams('mine', '', '', undefined, '');
-        expect(p.scope).toBe('mine');
-        expect(p.channel_id).toBeUndefined();
+    test('channel mode (non-DM) sends scope=channel + channel_id', () => {
+        const p = buildParams('all', 'ch1', false, '');
+        expect(p.scope).toBe('channel');
+        expect(p.channel_id).toBe('ch1');
+        expect(p.partner_id).toBeUndefined();
         expect(p.limit).toBe(25);
     });
 
-    test('channel tab includes channel_id when provided', () => {
-        const p = buildParams('channel', '', '', 'ch1', '');
-        expect(p.scope).toBe('channel');
-        expect(p.channel_id).toBe('ch1');
-    });
-
-    test('channel tab without a channelID omits channel_id', () => {
-        const p = buildParams('channel', '', '', undefined, '');
+    test('direct mode (DM) sends scope=direct + partner_id', () => {
+        const p = buildParams('all', 'u-partner', true, '');
+        expect(p.scope).toBe('direct');
+        expect(p.partner_id).toBe('u-partner');
         expect(p.channel_id).toBeUndefined();
     });
 
-    test('status filter is passed through', () => {
-        const p = buildParams('mine', 'done', '', undefined, '');
-        expect(p.status).toBe('done');
+    test('channel mode without a channelID omits channel_id', () => {
+        const p = buildParams('all', undefined, false, '');
+        expect(p.channel_id).toBeUndefined();
     });
 
-    test('due filter is passed through', () => {
-        const p = buildParams('mine', '', 'today', undefined, '');
+    test('todo tab sets status filter', () => {
+        const p = buildParams('todo', 'ch1', false, '');
+        expect(p.status).toBe('todo');
+    });
+
+    test('today tab sets due filter', () => {
+        const p = buildParams('today', 'ch1', false, '');
         expect(p.due).toBe('today');
+        expect(p.status).toBeUndefined();
+    });
+
+    test('all tab sends neither status nor due', () => {
+        const p = buildParams('all', 'ch1', false, '');
+        expect(p.status).toBeUndefined();
+        expect(p.due).toBeUndefined();
     });
 
     test('after_order_key enables pagination', () => {
-        const p = buildParams('mine', '', '', undefined, 'm0');
+        const p = buildParams('all', 'ch1', false, 'm0');
         expect(p.after_order_key).toBe('m0');
-    });
-
-    test('empty filters/after yield no optional fields', () => {
-        const p = buildParams('mine', '', '', undefined, '');
-        expect(p.status).toBeUndefined();
-        expect(p.due).toBeUndefined();
-        expect(p.after_order_key).toBeUndefined();
     });
 });
 
@@ -96,25 +106,57 @@ describe('isOverdue', () => {
     });
 });
 
-describe('formatDueShort', () => {
-    test('renders a localized date string', () => {
-        const out = formatDueShort(Date.UTC(2026, 5, 19), 'en');
-        expect(typeof out).toBe('string');
-        expect(out.length).toBeGreaterThan(0);
+describe('groupTasks', () => {
+    test('buckets by status + due window', () => {
+        const overdue = makeTask({id: '1', status: 'todo', due: Date.now() - 86400000});
+        const today = makeTask({id: '2', status: 'todo', due: Date.now() + 60_000});
+        const upcoming = makeTask({id: '3', status: 'todo', due: Date.now() + (30 * 86400000)});
+        const done = makeTask({id: '4', status: 'done'});
+        const cancelled = makeTask({id: '5', status: 'cancelled'});
+        const groups = groupTasks([overdue, today, upcoming, done, cancelled]);
+
+        // Three non-empty buckets in canonical order.
+        expect(groups.map((g) => g.key)).toEqual(['attention', 'upcoming', 'completed']);
+        expect(groups[0].items.map((t) => t.id).sort()).toEqual(['1', '2']);
+        expect(groups[1].items.map((t) => t.id)).toEqual(['3']);
+        expect(groups[2].items.map((t) => t.id).sort()).toEqual(['4', '5']);
     });
 
-    test('falls back to ISO when Intl throws', () => {
-        const originalDTF = Intl.DateTimeFormat;
-        Intl.DateTimeFormat = function() {
-            throw new Error('boom');
-        } as unknown as typeof Intl.DateTimeFormat;
-        try {
-            const out = formatDueShort(0, 'en');
-            expect(typeof out).toBe('string');
-            expect(out.length).toBeGreaterThan(0);
-        } finally {
-            Intl.DateTimeFormat = originalDTF;
-        }
+    test('empty buckets are omitted', () => {
+        const onlyDone = makeTask({id: '1', status: 'done'});
+        const groups = groupTasks([onlyDone]);
+        expect(groups.map((g) => g.key)).toEqual(['completed']);
+    });
+});
+
+describe('countByTab', () => {
+    test('counts each tab from the loaded list', () => {
+        const tasks: Task[] = [
+            makeTask({id: '1', status: 'todo'}),
+            makeTask({id: '2', status: 'todo'}),
+            makeTask({id: '3', status: 'done'}),
+            makeTask({id: '4', status: 'cancelled'}),
+        ];
+        const counts = countByTab(tasks, false);
+        expect(counts.all.label).toBe('4');
+        expect(counts.todo.label).toBe('2');
+        expect(counts.done.label).toBe('1');
+        expect(counts.cancelled.label).toBe('1');
+        expect(counts.in_progress.label).toBe('0');
+    });
+
+    test('appends "+" when hasMore is true', () => {
+        const tasks: Task[] = [makeTask({id: '1', status: 'todo'})];
+        const counts = countByTab(tasks, true);
+        expect(counts.all.label).toBe('1+');
+        expect(counts.all.plus).toBe(true);
+    });
+
+    test('does not append "+" for zero-count tabs', () => {
+        const tasks: Task[] = [];
+        const counts = countByTab(tasks, true);
+        expect(counts.all.label).toBe('0');
+        expect(counts.all.plus).toBe(false);
     });
 });
 

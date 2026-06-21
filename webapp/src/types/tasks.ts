@@ -15,6 +15,17 @@ export const TaskStatus = {
 
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 
+// Task priorities, matching model.Priority* in server/model/priority.go.
+// Mirrors the Mattermost message-priority enum (standard/important/urgent);
+// standard is the implicit default.
+export const TaskPriority = {
+    Standard: 'standard',
+    Important: 'important',
+    Urgent: 'urgent',
+} as const;
+
+export type TaskPriority = typeof TaskPriority[keyof typeof TaskPriority];
+
 // Task mirrors server/model/task.Task. Optional fields (`?:`) are absent when
 // the server omits them (matching Go's `omitempty` on a `*int64`), which in
 // TypeScript is `number | undefined`. This is distinct from PatchTaskInput
@@ -31,6 +42,7 @@ export interface Task {
     due?: number; // ms epoch; absent means no due date
     is_all_day: boolean;
     status: TaskStatus;
+    priority: TaskPriority;
     order_key: string; // global fractional-index rank for Kanban ordering
     completed_at?: number;
     cancelled_at?: number;
@@ -50,8 +62,11 @@ export interface Comment {
     updated_at: number;
 }
 
-// ListScope enumerates the Quick List result scopes, matching task.Scope.
-export type ListScope = 'mine' | 'channel' | 'all';
+// ListScope enumerates the Quick List result scopes, matching task.Scope. Two
+// scopes: channel (tasks of a channel) and direct (tasks shared between two
+// DM users). The earlier mine/all scopes were removed with the slash-command
+// and mobile-dialog paths.
+export type ListScope = 'channel' | 'direct';
 
 // ListTasksParams is the query-string shape for GET /tasks. It mirrors the
 // server's task.ListQuery (server/task/service.go) minus the server-only
@@ -59,7 +74,9 @@ export type ListScope = 'mine' | 'channel' | 'all';
 export interface ListTasksParams {
     scope?: ListScope;
     channel_id?: string;
+    partner_id?: string;
     status?: TaskStatus | '';
+    priority?: TaskPriority | '';
     due?: string;
     after_order_key?: string;
     limit?: number;
@@ -77,17 +94,19 @@ export interface CreateTaskInput {
     is_all_day?: boolean;
     parent_task_id?: string;
     reminder_offset?: number;
+    priority?: TaskPriority;
 }
 
 // PatchTaskInput is the JSON body for PATCH /tasks/:id. Only fields named in
 // update_fields are modified; a field present in update_fields with a null
 // pointer clears that field. Matches server PatchInput (server/task/service.go).
 export interface PatchTaskInput {
-    update_fields: Array<'summary' | 'description' | 'due' | 'is_all_day'>;
+    update_fields: Array<'summary' | 'description' | 'due' | 'is_all_day' | 'priority'>;
     summary?: string;
     description?: string | null;
     due?: number | null;
     is_all_day?: boolean;
+    priority?: TaskPriority | null;
 }
 
 // CreateSubtaskInput is the JSON body for POST /tasks/:id/subtasks. The subtask

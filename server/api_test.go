@@ -311,19 +311,83 @@ func TestListTasks_BadStatus(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestListTasks_ReturnsMine(t *testing.T) {
+func TestListTasks_ReturnsDirectScope(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	createTaskViaService(t, p, task.CreateInput{Summary: "mine", CreatorID: "u1", AssigneeID: "u-me"})
-	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u1", AssigneeID: "u-other"})
+	// DM u-me + u-partner. Both shared tasks returned; third-party task hidden.
+	createTaskViaService(t, p, task.CreateInput{Summary: "shared-mine", CreatorID: "u1", AssigneeID: "u-me"})
+	createTaskViaService(t, p, task.CreateInput{Summary: "shared-partner", CreatorID: "u1", AssigneeID: "u-partner"})
+	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u1", AssigneeID: "u-third"})
 
 	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine", "", "u-me"))
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-partner", "", "u-me"))
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var got []model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	require.Len(t, got, 1)
-	assert.Equal(t, "mine", got[0].Summary)
+	require.Len(t, got, 2)
+	summaries := []string{got[0].Summary, got[1].Summary}
+	assert.ElementsMatch(t, []string{"shared-mine", "shared-partner"}, summaries)
+}
+
+func TestListTasks_DirectScopeRequiresPartnerID(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct", "", "u-me"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestCreateTask_PriorityRoundTrip verifies priority is persisted by create
+// and echoed back unchanged (including the default when omitted).
+func TestCreateTask_PriorityRoundTrip(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"urgent task","creator_id":"u1","priority":"urgent"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+	var created model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	assert.Equal(t, model.PriorityUrgent, created.Priority)
+
+	// Default priority when omitted.
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(nil, w2, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"default priority","creator_id":"u1"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w2.Code)
+	var created2 model.Task
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &created2))
+	assert.Equal(t, model.PriorityStandard, created2.Priority)
+}
+
+// TestPatchTask_Priority verifies priority is patchable via update_fields.
+func TestPatchTask_Priority(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	newPrio := model.PriorityImportant
+	body, _ := json.Marshal(map[string]any{
+		"update_fields": []string{"priority"},
+		"priority":      newPrio,
+	})
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID, string(body), "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, model.PriorityImportant, got.Priority)
+}
+
+// TestPatchTask_InvalidPriorityRejected verifies an unknown priority value is
+// rejected as a 400 rather than persisted.
+func TestPatchTask_InvalidPriorityRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	body, _ := json.Marshal(map[string]any{
+		"update_fields": []string{"priority"},
+		"priority":      "blocker",
+	})
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID, string(body), "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestHelloWorld_StillWorks(t *testing.T) {
@@ -541,8 +605,6 @@ func TestAuthenticatedRoutes_StillRequireHeader(t *testing.T) {
 		{"task create", http.MethodPost, "/api/v1/tasks", `{"summary":"x"}`},
 		{"task list", http.MethodGet, "/api/v1/tasks", ""},
 		{"card action", http.MethodPost, "/api/v1/actions", `{}`},
-		{"dialog open task detail", http.MethodPost, "/api/v1/dialogs/open-task-detail", `{"trigger_id":"t","task_id":"x"}`},
-		{"dialog open new task", http.MethodPost, "/api/v1/dialogs/open-new-task", `{"trigger_id":"t"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -251,22 +251,24 @@ func TestDelete_NotFound(t *testing.T) {
 
 // --- List ---
 
-func TestList_ScopeMineReturnsAssignedTasks(t *testing.T) {
+func TestList_ScopeDirectReturnsSharedTasks(t *testing.T) {
 	svc, _ := newTestService(t)
-	mustCreateTask(t, svc, CreateInput{Summary: "mine1", CreatorID: "u-c", AssigneeID: "u-me"})
-	mustCreateTask(t, svc, CreateInput{Summary: "mine2", CreatorID: "u-c", AssigneeID: "u-me"})
-	mustCreateTask(t, svc, CreateInput{Summary: "other", CreatorID: "u-c", AssigneeID: "u-other"})
-	got, err := svc.List(ListQuery{Scope: ScopeMine, UserID: "u-me", Limit: 50})
+	// u-me + u-partner are the DM pair. Tasks where either is a member are
+	// returned; a task whose only member is a third user is hidden.
+	mustCreateTask(t, svc, CreateInput{Summary: "shared1", CreatorID: "u-c", AssigneeID: "u-me"})
+	mustCreateTask(t, svc, CreateInput{Summary: "shared2", CreatorID: "u-c", AssigneeID: "u-partner"})
+	mustCreateTask(t, svc, CreateInput{Summary: "other", CreatorID: "u-c", AssigneeID: "u-third"})
+	got, err := svc.List(ListQuery{Scope: ScopeDirect, UserID: "u-me", PartnerID: "u-partner", Limit: 50})
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 }
 
 func TestList_StatusFilter(t *testing.T) {
 	svc, _ := newTestService(t)
-	mustCreateTask(t, svc, CreateInput{Summary: "todo", CreatorID: "u-c"})
-	t2 := mustCreateTask(t, svc, CreateInput{Summary: "done", CreatorID: "u-c"})
+	mustCreateTask(t, svc, CreateInput{Summary: "todo", CreatorID: "u-c", ChannelID: "ch1", AssigneeID: "u-me"})
+	t2 := mustCreateTask(t, svc, CreateInput{Summary: "done", CreatorID: "u-c", ChannelID: "ch1", AssigneeID: "u-me"})
 	_, _ = svc.SetStatus("u-actor", t2.ID, model.StatusDone)
-	got, err := svc.List(ListQuery{Scope: ScopeAll, Status: model.StatusDone, Limit: 50})
+	got, err := svc.List(ListQuery{Scope: ScopeChannel, ChannelID: "ch1", Status: model.StatusDone, Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "done", got[0].Summary)
@@ -274,13 +276,13 @@ func TestList_StatusFilter(t *testing.T) {
 
 func TestList_CursorPagination(t *testing.T) {
 	svc, _ := newTestService(t)
-	mustCreateTask(t, svc, CreateInput{Summary: "a", CreatorID: "u-c"})
-	mustCreateTask(t, svc, CreateInput{Summary: "b", CreatorID: "u-c"})
-	c := mustCreateTask(t, svc, CreateInput{Summary: "c", CreatorID: "u-c"})
-	page1, err := svc.List(ListQuery{Scope: ScopeAll, Limit: 2})
+	mustCreateTask(t, svc, CreateInput{Summary: "a", CreatorID: "u-c", ChannelID: "ch1"})
+	mustCreateTask(t, svc, CreateInput{Summary: "b", CreatorID: "u-c", ChannelID: "ch1"})
+	c := mustCreateTask(t, svc, CreateInput{Summary: "c", CreatorID: "u-c", ChannelID: "ch1"})
+	page1, err := svc.List(ListQuery{Scope: ScopeChannel, ChannelID: "ch1", Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, page1, 2)
-	page2, err := svc.List(ListQuery{Scope: ScopeAll, Limit: 2, AfterOrderKey: page1[1].OrderKey})
+	page2, err := svc.List(ListQuery{Scope: ScopeChannel, ChannelID: "ch1", Limit: 2, AfterOrderKey: page1[1].OrderKey})
 	require.NoError(t, err)
 	require.Len(t, page2, 1)
 	assert.Equal(t, c.ID, page2[0].ID)

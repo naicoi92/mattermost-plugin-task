@@ -23,6 +23,9 @@ type TaskRow struct {
 	ParentTaskID string `json:"parent_task_id,omitempty" db:"parent_task_id"`
 	// Status is one of the Status* constants (todo/in_progress/done/cancelled).
 	Status string `json:"status" db:"status"`
+	// Priority is one of the Priority* constants
+	// (standard/important/urgent). Mirrors the Mattermost message-priority enum.
+	Priority string `json:"priority" db:"priority"`
 	// OrderKey is the global fractional-index rank used for Kanban ordering.
 	OrderKey string `json:"order_key" db:"order_key"`
 	// IsAllDay marks the due date as a date (no time component) for rendering.

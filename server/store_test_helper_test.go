@@ -42,21 +42,19 @@ func newTestTaskStore(t *testing.T) store.Store {
 // ctxBG is a background context shorthand for test fixture calls.
 func ctxBG() context.Context { return context.Background() }
 
-// allTasks returns every task in the store (ScopeAll), as assembled Task
-// entities with creator/assignee populated from task_members. A test helper
-// that replaces the old fakeStore.tasks map iteration: the SQL store has no
-// .tasks field, so tests assert via this snapshot.
+// allTasks returns every task in the store as assembled Task entities with
+// creator/assignee populated from task_members. A test helper that replaces
+// the old fakeStore.tasks map iteration: the SQL store has no .tasks field, so
+// tests assert via this snapshot. Uses the unfiltered ListAllTasksForTest path
+// (the production list path is scope-driven and has no "list everything" case).
 func allTasks(t *testing.T, s store.Store) []*taskmodel.Task {
 	t.Helper()
-	page, err := s.ListTasks(ctxBG(), store.ListQuery{Scope: store.ScopeAll, Limit: 1000})
+	rows, err := s.ListAllTasksForTest(ctxBG())
 	require.NoError(t, err)
-	out := make([]*taskmodel.Task, 0, len(page.Items))
-	for _, item := range page.Items {
-		row, ok := item.(*taskmodel.TaskRow)
-		if !ok {
-			continue
-		}
-		t2 := &taskmodel.Task{TaskRow: *row}
+	out := make([]*taskmodel.Task, 0, len(rows))
+	for i := range rows {
+		row := rows[i]
+		t2 := &taskmodel.Task{TaskRow: row}
 		// Populate creator/assignee so tests asserting on them (the old
 		// fakeStore exposed them directly) keep working.
 		if c, e := s.GetMemberByRole(ctxBG(), row.ID, taskmodel.MemberRoleCreator); e == nil {

@@ -161,13 +161,13 @@ describe('listTasks query building', () => {
         });
 
         const {listTasks} = await importClient();
-        await listTasks({scope: 'mine', status: 'todo', limit: 25});
+        await listTasks({scope: 'channel', channel_id: 'ch1', status: 'todo', limit: 25});
 
         // URLSearchParams preserves insertion order, which buildQuery controls.
-        expect(capturedUrl).toContain('scope=mine');
+        expect(capturedUrl).toContain('scope=channel');
+        expect(capturedUrl).toContain('channel_id=ch1');
         expect(capturedUrl).toContain('status=todo');
         expect(capturedUrl).toContain('limit=25');
-        expect(capturedUrl).not.toContain('channel_id=');
     });
 
     test('no params yields a bare URL with no query string', async () => {

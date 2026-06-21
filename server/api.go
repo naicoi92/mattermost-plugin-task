@@ -36,24 +36,6 @@ func (p *Plugin) initRouter() *mux.Router {
 	// Subtask/Comment buttons POST here with context {action, task_id}.
 	apiRouter.HandleFunc("/actions", p.handleCardAction).Methods(http.MethodPost)
 
-	// Dialog openers are HTTP endpoints called from clients that hold a
-	// browser session, so they stay authenticated (issues #8, #17, #95).
-	apiRouter.HandleFunc("/dialogs/open-task-detail", p.openTaskDetailDialog).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/dialogs/open-new-task", p.openNewTaskDialog).Methods(http.MethodPost)
-
-	// Dialog SUBMIT callbacks arrive as internal server→plugin HTTP requests
-	// issued by the Mattermost server when a user submits an Interactive
-	// Dialog. They do NOT carry the Mattermost-User-ID header (that header is
-	// only set on browser-session requests), so they cannot be mounted under
-	// the auth middleware or they are rejected with 401 before the handler
-	// runs (#109). The actor is trusted via model.SubmitDialogRequest.UserId
-	// in the body, and each handler validates that field non-empty as a
-	// hardening check.
-	dialogCallbacks := router.PathPrefix("/api/v1/dialogs").Subrouter()
-	dialogCallbacks.HandleFunc("/quicklist", p.submitQuickListDialog).Methods(http.MethodPost)
-	dialogCallbacks.HandleFunc("/taskdetail", p.submitTaskDetailDialog).Methods(http.MethodPost)
-	dialogCallbacks.HandleFunc("/newtask", p.submitNewTaskDialog).Methods(http.MethodPost)
-
 	// Task CRUD (issue #7).
 	tasks := apiRouter.PathPrefix("/tasks").Subrouter()
 	tasks.HandleFunc("", p.createTask).Methods(http.MethodPost)
@@ -141,6 +123,7 @@ type createTaskRequest struct {
 	IsAllDay       bool   `json:"is_all_day"`
 	ParentTaskID   string `json:"parent_task_id"`
 	ReminderOffset *int64 `json:"reminder_offset"`
+	Priority       string `json:"priority"`
 }
 
 // createTask handles POST /tasks.
@@ -161,6 +144,7 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		IsAllDay:       req.IsAllDay,
 		ParentTaskID:   req.ParentTaskID,
 		ReminderOffset: req.ReminderOffset,
+		Priority:       req.Priority,
 	})
 	if err != nil {
 		switch {
@@ -219,16 +203,42 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // listTasks handles GET /tasks with scope/status/due/cursor query params.
+//
+// Two scopes are supported (the desktop RHS picks based on channel type):
+//   - scope=channel&channel_id=X  → tasks of channel X
+//   - scope=direct&partner_id=Y   → tasks shared between the caller and Y
+//     (assignee OR creator for either user)
+//
+// Membership defense: for scope=channel the caller must be a member of the
+// channel they ask about, otherwise the request is rejected as 403 (this
+// prevents a user from enumerating another channel's tasks by guessing the
+// channel id). Scope=direct is bounded to the caller + the named partner, so
+// no third-party data can leak.
 func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 
+	scope := task.Scope(q.Get("scope"))
+	channelID := q.Get("channel_id")
+	partnerID := q.Get("partner_id")
+	userID := currentUserID(r)
+
+	// Membership defense for scope=channel.
+	if scope == task.ScopeChannel && channelID != "" {
+		if !p.channelMembership().IsChannelMember(userID, channelID) {
+			p.writeError(w, http.StatusForbidden, "not a member of channel")
+			return
+		}
+	}
+
 	query := task.ListQuery{
-		Scope:         task.Scope(q.Get("scope")),
-		UserID:        currentUserID(r),
-		ChannelID:     q.Get("channel_id"),
+		Scope:         scope,
+		UserID:        userID,
+		ChannelID:     channelID,
+		PartnerID:     partnerID,
 		Status:        q.Get("status"),
 		DueAt:         q.Get("due"),
+		Priority:      q.Get("priority"),
 		AfterOrderKey: q.Get("after_order_key"),
 		Limit:         limit,
 	}
@@ -237,8 +247,16 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "channel_id is required when scope=channel")
 		return
 	}
+	if query.Scope == task.ScopeDirect && (query.UserID == "" || query.PartnerID == "") {
+		p.writeError(w, http.StatusBadRequest, "partner_id is required when scope=direct")
+		return
+	}
 	if query.Status != "" && !taskmodel.IsValidStatus(query.Status) {
 		p.writeError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+	if query.Priority != "" && !taskmodel.IsValidPriority(query.Priority) {
+		p.writeError(w, http.StatusBadRequest, "invalid priority")
 		return
 	}
 
@@ -273,6 +291,7 @@ type patchTaskRequest struct {
 	Description  *string  `json:"description"`
 	Due          *int64   `json:"due"`
 	IsAllDay     *bool    `json:"is_all_day"`
+	Priority     *string  `json:"priority"`
 }
 
 // patchTask handles PATCH /tasks/:id.
@@ -290,13 +309,17 @@ func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 		Description:  req.Description,
 		DueAt:        req.Due,
 		IsAllDay:     req.IsAllDay,
+		Priority:     req.Priority,
 	})
 	if err != nil {
-		if errors.Is(err, task.ErrNotFound) {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
 			p.writeError(w, http.StatusNotFound, "task not found")
-			return
+		case strings.Contains(err.Error(), "invalid priority"):
+			p.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			p.writeError(w, http.StatusInternalServerError, err.Error())
 		}
-		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	p.writeJSON(w, updated)

@@ -154,10 +154,14 @@ func TestSetAssignee_NoExistingAssigneeInsertsNew(t *testing.T) {
 	assert.Equal(t, "u1", got)
 }
 
-func TestListTasks_ScopeMineJoinsMembers(t *testing.T) {
+// TestListTasks_ScopeDirectJoinsMembers verifies the DM scope: a user sees
+// every task on which either they or their DM partner holds the assignee or
+// creator role. Tasks where neither user is a member are hidden.
+func TestListTasks_ScopeDirectJoinsMembers(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
-	// u1 is assignee of T1 and T2; u2 is assignee of T3; T4 has no assignee.
+	// u1 + u2 are the DM pair. T1: u1 assignee. T2: u1 assignee + creator
+	// (both roles same user). T3: u2 assignee. T4: u3 (third party) assignee.
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	mustCreate(t, s, ctx, fixture("T2", "k2"))
 	mustCreate(t, s, ctx, fixture("T3", "k3"))
@@ -166,20 +170,40 @@ func TestListTasks_ScopeMineJoinsMembers(t *testing.T) {
 	require.NoError(t, s.AddMember(ctx, "T2", "u1", model.MemberRoleAssignee))
 	require.NoError(t, s.AddMember(ctx, "T2", "u1", model.MemberRoleCreator)) // extra role, same user
 	require.NoError(t, s.AddMember(ctx, "T3", "u2", model.MemberRoleAssignee))
+	require.NoError(t, s.AddMember(ctx, "T4", "u3", model.MemberRoleAssignee)) // not in the DM
 
-	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u1", Limit: 10})
+	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", PartnerID: "u2", Limit: 10})
 	require.NoError(t, err)
-	assert.Equal(t, 2, page.Total, "u1 should see only T1 and T2")
+	assert.Equal(t, 3, page.Total, "DM u1+u2 should see T1, T2, T3 (not T4)")
 	assert.False(t, page.HasMore)
-	ids := []string{page.Items[0].(*model.TaskRow).ID, page.Items[1].(*model.TaskRow).ID}
-	assert.ElementsMatch(t, []string{"T1", "T2"}, ids)
+	ids := []string{page.Items[0].(*model.TaskRow).ID, page.Items[1].(*model.TaskRow).ID, page.Items[2].(*model.TaskRow).ID}
+	assert.ElementsMatch(t, []string{"T1", "T2", "T3"}, ids)
 }
 
-func TestListTasks_ScopeMineRequiresUserID(t *testing.T) {
+// TestListTasks_ScopeDirectCollapsesDuplicateMembers ensures a task where
+// both DM users are members (e.g. one is creator, the other assignee) is
+// returned once (DISTINCT).
+func TestListTasks_ScopeDirectCollapsesDuplicateMembers(t *testing.T) {
 	s := tasksTestStore(t)
-	_, err := s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeMine, Limit: 10})
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+	require.NoError(t, s.AddMember(ctx, "T1", "u1", model.MemberRoleCreator))
+	require.NoError(t, s.AddMember(ctx, "T1", "u2", model.MemberRoleAssignee))
+
+	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", PartnerID: "u2", Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, page.Total, "task shared by both users counts once")
+}
+
+func TestListTasks_ScopeDirectRequiresUserAndPartner(t *testing.T) {
+	s := tasksTestStore(t)
+	_, err := s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", Limit: 10})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scope=mine requires UserID")
+	assert.Contains(t, err.Error(), "scope=direct requires UserID and PartnerID")
+
+	_, err = s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeDirect, PartnerID: "u2", Limit: 10})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope=direct requires UserID and PartnerID")
 }
 
 func TestIsValidMemberRole(t *testing.T) {

@@ -1,5 +1,67 @@
 # Release Notes
 
+## v0.2.0 — Mattermost redesign + context-driven listing + priority
+
+Desktop-first redesign of the Right-Hand Sidebar (Quick List, Task Detail, New
+Task) following the Mattermost design system, plus a context-driven task
+listing model and a new per-task priority field.
+
+> The slash-command layer (`/task list`, `/task add`, `/task show`) and the
+> mobile Interactive Dialogs have been **removed** in this release. They will
+> be rebuilt on top of the new APIs in a follow-up (see GitHub issues).
+
+### Highlights
+
+- **Mattermost design system.** The RHS now uses Mattermost Blue (`#1f66e1`),
+  cool gray neutrals, Open Sans, tight 3–6px corners, uppercase status pills
+  with leading dots, @mention-style assignee pills, and a focus ring matching
+  the host. Dark theme overrides are kept in sync.
+- **Context-driven Quick List.** A single list per channel: regular channels
+  show that channel's tasks; DMs show the tasks shared between the two
+  participants. The old "My Tasks / Channel Tasks" toggle and the `mine` /
+  `all` scopes are gone — the list follows where the user is standing.
+- **Filter tabs + grouping.** Six filter tabs (All · Today · To Do · In
+  Progress · Done · Cancelled) replace the chip row; tasks are grouped under
+  "Needs attention · N", "Upcoming · N" and "Completed · N" headers. Counts
+  are computed client-side with an `N+` indicator when more pages exist.
+- **Per-task priority.** New `priority` column on `task_tasks` with the
+  Mattermost message-priority enum (`standard` / `important` / `urgent`,
+  default `standard`). Shown as a colored dot in the list and a click-to-cycle
+  pill in the Task Detail meta-table; selectable in the New Task form.
+- **Redesigned Task Detail.** Click-to-edit summary, a `96px 1fr` meta-table
+  (Status · Priority · Due · Assignee · Channel), click-to-edit description,
+  and an activity feed with avatar bubbles.
+- **Redesigned New Task.** Title + status/priority + hybrid due (quick-select
+  + datetime-local) + assignee + description, in a footer-split primary form.
+- **Relative due formatting.** Due dates render as "Today, 17:00" /
+  "Tomorrow" / "3 days overdue" / "Fri, 26 Jun" via a shared, locale-aware
+  helper with an ISO fallback.
+
+### Breaking changes
+
+- The `mine` and `all` list scopes are removed from `store.Scope` /
+  `task.Scope`. The API now accepts only `scope=channel` (with `channel_id`)
+  and `scope=direct` (with `partner_id`).
+- The `/task` slash command and the mobile Interactive Dialogs (Quick List,
+  Task Detail, New Task) are removed along with their HTTP endpoints
+  (`/dialogs/*`). They will be reintroduced in a later release.
+- `Task` gains a required `priority` field (default `standard`).
+
+### Security
+
+- `GET /tasks?scope=channel` now enforces channel membership: a caller who is
+  not a member of the requested channel receives a 403 (prevents enumerating
+  another channel's tasks by guessing the id).
+- `GET /tasks/{id}` and other per-task reads still rely on the existing
+  `CanUserViewTask` rule where it is wired; full wiring is tracked in a
+  follow-up issue.
+
+### Deferred (tracked as GitHub issues)
+
+- Wire `CanUserViewTask` into `GET /tasks/{id}` and `SearchTasks`.
+- Rebuild the slash-command layer on the 2-scope API.
+- Rebuild the mobile Interactive Dialogs on the new design.
+
 ## v0.1.0 — first test release
 
 The first usable build of the Task plugin: Lark-Suite-style task management inside Mattermost, covering task CRUD, single assignee, reminders, subtasks, comments, interactive cards, the desktop RHS, and cross-platform slash-command + Interactive Dialog flows.
