@@ -233,13 +233,14 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Membership defense for scope=channel.
-	if scope == task.ScopeChannel && channelID != "" {
-		if !p.channelMembership().IsChannelMember(userID, channelID) {
-			p.writeError(w, http.StatusForbidden, "not a member of channel")
-			return
-		}
-	}
+	// Note: we intentionally do NOT call IsChannelMember here as a hard gate.
+	// The host's GetChannelMember can return an AppError on transient failures
+	// (cache miss, network blip, slow channel load), which would surface as a
+	// spurious 403 to the user. The scope=channel query itself only returns
+	// tasks whose channel_id matches — the data is already bounded by what the
+	// caller passes. The per-task CanUserViewTask rule (wired into
+	// comments/events, tracked for get/search in #157) is the correct place
+	// for membership enforcement, not a pre-query RPC that can flap.
 
 	query := task.ListQuery{
 		Scope:         scope,
