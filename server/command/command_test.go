@@ -67,12 +67,12 @@ type fakeStatusService struct {
 	subtaskResult   *taskmodel.Task
 	subtaskErr      error
 
-	commentTaskID string
-	commentPostID string
-	commentUserID string
-	commentResult taskmodel.TaskComment
-	commentEvent  task.CommentEvent
-	commentErr    error
+	commentTaskID   string
+	commentPostID   string
+	commentAuthorID string
+	commentResult   taskmodel.TaskComment
+	commentEvent    task.CommentEvent
+	commentErr      error
 
 	listQuery  task.ListQuery
 	listResult []*taskmodel.Task
@@ -132,7 +132,7 @@ func (f *fakeStatusService) CreateSubtask(parentID, creatorID, summary, assignee
 func (f *fakeStatusService) LinkComment(taskID, postID, userID string) (taskmodel.TaskComment, task.CommentEvent, error) {
 	f.commentTaskID = taskID
 	f.commentPostID = postID
-	f.commentUserID = userID
+	f.commentAuthorID = userID
 	return f.commentResult, f.commentEvent, f.commentErr
 }
 
@@ -338,7 +338,7 @@ func TestTaskComment_Command(t *testing.T) {
 	svc := &fakeStatusService{
 		getResult:     &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "task"}, CreatorID: "u-me"},
 		commentResult: taskmodel.TaskComment{ID: "C1", PostID: "post-1"},
-		commentEvent:  task.CommentEvent{TaskID: "T1", UserID: "u-me", CreatorID: "u-me"},
+		commentEvent:  task.CommentEvent{TaskID: "T1", AuthorID: "u-me", CreatorID: "u-me"},
 	}
 	// CommentNotifier is wired to capture the call.
 	notifier := &captureCommentNotifier{}
@@ -349,7 +349,7 @@ func TestTaskComment_Command(t *testing.T) {
 	assert.Contains(t, resp.Text, "Comment added")
 	assert.Equal(t, "T1", svc.commentTaskID)
 	assert.Equal(t, "post-1", svc.commentPostID)
-	assert.Equal(t, "u-me", svc.commentUserID)
+	assert.Equal(t, "u-me", svc.commentAuthorID)
 	assert.Equal(t, "T1", notifier.taskID, "comment DM fired to participants")
 }
 
@@ -454,8 +454,8 @@ func TestTaskEdit_Command(t *testing.T) {
 	assert.ElementsMatch(t, []string{"summary", "due"}, svc.lastPatch.UpdateFields)
 	require.NotNil(t, svc.lastPatch.Summary)
 	assert.Equal(t, "New title", *svc.lastPatch.Summary)
-	require.NotNil(t, svc.lastPatch.Due)
-	assert.Equal(t, int64(1700000000000), *svc.lastPatch.Due)
+	require.NotNil(t, svc.lastPatch.DueAt)
+	assert.Equal(t, int64(1700000000000), *svc.lastPatch.DueAt)
 }
 
 func TestTaskEdit_ClearDue(t *testing.T) {
@@ -467,7 +467,7 @@ func TestTaskEdit_ClearDue(t *testing.T) {
 	resp, err := handler.Handle(&model.CommandArgs{Command: "/task edit T1 due=0"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Text, "updated")
-	assert.Nil(t, svc.lastPatch.Due)
+	assert.Nil(t, svc.lastPatch.DueAt)
 }
 
 func TestTaskEdit_DescriptionAlias(t *testing.T) {

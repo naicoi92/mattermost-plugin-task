@@ -56,9 +56,9 @@ func buildTaskCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, co
 			Title: "Assignee", Value: mention(t.AssigneeID), Short: true,
 		})
 	}
-	if t.Due != nil {
+	if t.DueAt != nil {
 		fields = append(fields, &model.SlackAttachmentField{
-			Title: "Due", Value: dueLabel(*t.Due, nowMs), Short: true,
+			Title: "Due", Value: dueLabel(*t.DueAt, nowMs), Short: true,
 		})
 	}
 	if subtaskTotal > 0 {
@@ -95,7 +95,7 @@ func cardTitle(t *taskmodel.Task) string {
 // cardColor returns the attachment color: red for overdue open tasks, else the
 // status color.
 func cardColor(t *taskmodel.Task, nowMs int64) string {
-	if t.Due != nil && *t.Due < nowMs &&
+	if t.DueAt != nil && *t.DueAt < nowMs &&
 		(t.Status == taskmodel.StatusTodo || t.Status == taskmodel.StatusInProgress) {
 		return "#D92D20" // red, overdue
 	}

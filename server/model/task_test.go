@@ -74,7 +74,7 @@ func TestTaskJSONRoundTrip(t *testing.T) {
 			ID:        "01HZX",
 			Summary:   "Ship MVP",
 			ChannelID: "ch1",
-			Due:       &due,
+			DueAt:     &due,
 			IsAllDay:  true,
 			Status:    StatusInProgress,
 			OrderKey:  "a0",
@@ -129,7 +129,7 @@ func TestTaskNilOptionalFieldsOmitted(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Due != nil || got.CompletedAt != nil || got.CancelledAt != nil || got.ReminderOffset != nil {
+	if got.DueAt != nil || got.CompletedAt != nil || got.CancelledAt != nil || got.ReminderOffset != nil {
 		t.Errorf("expected nil optional fields, got %+v", got)
 	}
 }

@@ -20,7 +20,6 @@ const membersTableShort = "members"
 // membersColumns lists every column of task_members in scan order.
 var membersColumns = []string{"task_id", "user_id", "role", "created_at"}
 
-// store.ErrMemberNotFound is returned by GetMemberByRole / RemoveMember when no
 // matching membership edge exists.
 
 // AddMember records a (task, user, role) edge. The composite primary key makes
@@ -146,39 +145,35 @@ func (s *SQLStore) GetMemberByRole(ctx context.Context, taskID, role string) (st
 	return userID, nil
 }
 
-// SwapAssignee atomically changes the assignee of a task from oldID to newID.
-// It is implemented as a single UPDATE on the role='assignee' edge, which is
-// inherently atomic; a DELETE+INSERT would also work but requires a
-// transaction (WithTx, M3-1) to stay atomic across two statements. If the
-// task has no current assignee edge (oldID mismatch is tolerated), the method
-// falls back to inserting the new assignee directly.
-func (s *SQLStore) SwapAssignee(ctx context.Context, taskID, oldID, newID string) error {
-	if taskID == "" || newID == "" {
-		return errors.New("swap assignee: task id and new user id are required")
-	}
-	if oldID == newID {
-		// Nothing to do; idempotent.
-		return nil
+// SetAssignee sets or replaces the assignee of a task. It does a single UPDATE
+// on the role='assignee' edge (inherently atomic); if no assignee edge exists
+// yet (RowsAffected==0), it inserts one. The old assignee is NOT a parameter —
+// the caller resolves it separately via GetMemberByRole and does the no-op
+// check before calling. This replaced the old SwapAssignee name, which implied
+// a conditional two-way swap that the SQL never performed.
+func (s *SQLStore) SetAssignee(ctx context.Context, taskID, newAssigneeID string) error {
+	if taskID == "" || newAssigneeID == "" {
+		return errors.New("set assignee: task id and new assignee id are required")
 	}
 	// Update the assignee row's user_id in place. RowsAffected==0 means
-	// either no assignee edge exists or it already pointed at newID; either
-	// way we ensure the new assignee edge exists.
+	// either no assignee edge exists; either way we ensure the new assignee
+	// edge exists.
 	res, err := s.builder().
 		Update(s.tableName(membersTableShort)).
-		Set("user_id", newID).
+		Set("user_id", newAssigneeID).
 		Where(sq.Eq{"task_id": taskID, "role": model.MemberRoleAssignee}).
 		ExecContext(ctx)
 	if err != nil {
-		return fmt.Errorf("swap assignee %s: %w", taskID, err)
+		return fmt.Errorf("set assignee %s: %w", taskID, err)
 	}
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("swap assignee %s: rows affected: %w", taskID, err)
+		return fmt.Errorf("set assignee %s: rows affected: %w", taskID, err)
 	}
 	if rows == 0 {
 		// No existing assignee edge — create one.
-		if err := s.AddMember(ctx, taskID, newID, model.MemberRoleAssignee); err != nil {
-			return fmt.Errorf("swap assignee %s: insert new: %w", taskID, err)
+		if err := s.AddMember(ctx, taskID, newAssigneeID, model.MemberRoleAssignee); err != nil {
+			return fmt.Errorf("set assignee %s: insert new: %w", taskID, err)
 		}
 	}
 	return nil

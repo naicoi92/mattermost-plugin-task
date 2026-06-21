@@ -148,7 +148,10 @@ type Store interface {
 	RemoveMember(ctx context.Context, taskID, userID, role string) error
 	ListMembers(ctx context.Context, taskID string) ([]model.TaskMember, error)
 	GetMemberByRole(ctx context.Context, taskID, role string) (string, error)
-	SwapAssignee(ctx context.Context, taskID, oldID, newID string) error
+	// SetAssignee replaces the assignee edge (role='assignee') for a task. If
+	// no assignee edge exists yet, it inserts one. The caller resolves the old
+	// assignee separately via GetMemberByRole and handles the no-op case.
+	SetAssignee(ctx context.Context, taskID, newAssigneeID string) error
 
 	// --- Reminders (M2-3) ---
 	SetReminder(ctx context.Context, id, taskID string, offsetMS int64) (model.TaskReminder, error)

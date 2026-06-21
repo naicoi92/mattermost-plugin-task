@@ -109,20 +109,20 @@ func TestListDueReminders_FiresOnlyDuePendingAssigned(t *testing.T) {
 	const now, grace = int64(10_000), int64(1_000)
 
 	// T1: due at 11_000, offset 2_000 -> fire time 9_000 <= now. DUE.
-	mustCreate(t, s, ctx, fixture("T1", "k1", func(t *model.TaskRow) { t.Due = ptr(int64(11_000)) }))
+	mustCreate(t, s, ctx, fixture("T1", "k1", func(t *model.TaskRow) { t.DueAt = ptr(int64(11_000)) }))
 	require.NoError(t, s.AddMember(ctx, "T1", "u1", model.MemberRoleAssignee))
 	_, err := s.SetReminder(ctx, "R1", "T1", 2_000)
 	require.NoError(t, err)
 
 	// T2: due at 20_000, offset 1_000 -> fire time 19_000 > now. NOT DUE YET.
-	mustCreate(t, s, ctx, fixture("T2", "k2", func(t *model.TaskRow) { t.Due = ptr(int64(20_000)) }))
+	mustCreate(t, s, ctx, fixture("T2", "k2", func(t *model.TaskRow) { t.DueAt = ptr(int64(20_000)) }))
 	require.NoError(t, s.AddMember(ctx, "T2", "u1", model.MemberRoleAssignee))
 	_, err = s.SetReminder(ctx, "R2", "T2", 1_000)
 	require.NoError(t, err)
 
 	// T3: due at 11_000, offset 2_000 -> fire time 9_000 <= now, BUT status=done.
 	mustCreate(t, s, ctx, fixture("T3", "k3", func(t *model.TaskRow) {
-		t.Due = ptr(int64(11_000))
+		t.DueAt = ptr(int64(11_000))
 		t.Status = model.StatusDone
 	}))
 	require.NoError(t, s.AddMember(ctx, "T3", "u1", model.MemberRoleAssignee))
@@ -130,7 +130,7 @@ func TestListDueReminders_FiresOnlyDuePendingAssigned(t *testing.T) {
 	require.NoError(t, err)
 
 	// T4: due at 11_000, offset 2_000 -> due, but already fired.
-	mustCreate(t, s, ctx, fixture("T4", "k4", func(t *model.TaskRow) { t.Due = ptr(int64(11_000)) }))
+	mustCreate(t, s, ctx, fixture("T4", "k4", func(t *model.TaskRow) { t.DueAt = ptr(int64(11_000)) }))
 	require.NoError(t, s.AddMember(ctx, "T4", "u1", model.MemberRoleAssignee))
 	_, err = s.SetReminder(ctx, "R4", "T4", 2_000)
 	require.NoError(t, err)
@@ -138,14 +138,14 @@ func TestListDueReminders_FiresOnlyDuePendingAssigned(t *testing.T) {
 
 	// T5: due at 5_000, offset 1_000 -> fire time 4_000 <= now, BUT due_at < now-grace
 	// (5_000 < 9_000) -> long-overdue, skipped.
-	mustCreate(t, s, ctx, fixture("T5", "k5", func(t *model.TaskRow) { t.Due = ptr(int64(5_000)) }))
+	mustCreate(t, s, ctx, fixture("T5", "k5", func(t *model.TaskRow) { t.DueAt = ptr(int64(5_000)) }))
 	require.NoError(t, s.AddMember(ctx, "T5", "u1", model.MemberRoleAssignee))
 	_, err = s.SetReminder(ctx, "R5", "T5", 1_000)
 	require.NoError(t, err)
 
 	// T6: due at 11_000, offset 2_000 -> due, but NO assignee. Should still
 	// surface (LEFT JOIN) with empty AssigneeID; scheduler decides to skip.
-	mustCreate(t, s, ctx, fixture("T6", "k6", func(t *model.TaskRow) { t.Due = ptr(int64(11_000)) }))
+	mustCreate(t, s, ctx, fixture("T6", "k6", func(t *model.TaskRow) { t.DueAt = ptr(int64(11_000)) }))
 	_, err = s.SetReminder(ctx, "R6", "T6", 2_000)
 	require.NoError(t, err)
 
@@ -169,7 +169,7 @@ func TestListDueReminders_FiresOnlyDuePendingAssigned(t *testing.T) {
 	}
 	assert.Equal(t, "T1", r1.TaskID)
 	assert.Equal(t, "u1", r1.AssigneeID, "assignee must be JOINed for the DM")
-	assert.Equal(t, int64(11_000), r1.DueMS)
+	assert.Equal(t, int64(11_000), r1.DueAt)
 	assert.Equal(t, int64(2_000), r1.OffsetMS)
 
 	// R6 has no assignee -> empty string (COALESCE).

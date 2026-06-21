@@ -131,36 +131,24 @@ func TestRemoveMember_Idempotent(t *testing.T) {
 	require.NoError(t, s.RemoveMember(ctx, "T1", "u1", model.MemberRoleCreator))
 }
 
-func TestSwapAssignee_UpdateInPlace(t *testing.T) {
+func TestSetAssignee_UpdateInPlace(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	require.NoError(t, s.AddMember(ctx, "T1", "u1", model.MemberRoleAssignee))
 
-	require.NoError(t, s.SwapAssignee(ctx, "T1", "u1", "u2"))
+	require.NoError(t, s.SetAssignee(ctx, "T1", "u2"))
 	got, err := s.GetMemberByRole(ctx, "T1", model.MemberRoleAssignee)
 	require.NoError(t, err)
 	assert.Equal(t, "u2", got)
 }
 
-func TestSwapAssignee_NoExistingAssigneeInsertsNew(t *testing.T) {
+func TestSetAssignee_NoExistingAssigneeInsertsNew(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	// No prior assignee edge.
-	require.NoError(t, s.SwapAssignee(ctx, "T1", "", "u1"))
-	got, err := s.GetMemberByRole(ctx, "T1", model.MemberRoleAssignee)
-	require.NoError(t, err)
-	assert.Equal(t, "u1", got)
-}
-
-func TestSwapAssignee_SameUserIsNoOp(t *testing.T) {
-	s := tasksTestStore(t)
-	ctx := context.Background()
-	mustCreate(t, s, ctx, fixture("T1", "k1"))
-	require.NoError(t, s.AddMember(ctx, "T1", "u1", model.MemberRoleAssignee))
-
-	require.NoError(t, s.SwapAssignee(ctx, "T1", "u1", "u1"))
+	require.NoError(t, s.SetAssignee(ctx, "T1", "u1"))
 	got, err := s.GetMemberByRole(ctx, "T1", model.MemberRoleAssignee)
 	require.NoError(t, err)
 	assert.Equal(t, "u1", got)

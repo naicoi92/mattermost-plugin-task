@@ -360,7 +360,7 @@ func TestHandleShow_RendersDetail(t *testing.T) {
 	svc := &fakeStatusService{getResult: &taskmodel.Task{
 		TaskRow: taskmodel.TaskRow{
 			ID: "t1", Summary: "Review", Status: taskmodel.StatusInProgress,
-			Description: "needs review", Due: &due,
+			Description: "needs review", DueAt: &due,
 		},
 		AssigneeID: "u2",
 	}}
@@ -457,7 +457,7 @@ func TestFormatTaskDetail(t *testing.T) {
 		s := formatTaskDetail(&taskmodel.Task{
 			TaskRow: taskmodel.TaskRow{
 				ID: "t1", Summary: "x", Status: taskmodel.StatusTodo,
-				Description: "desc", Due: &due,
+				Description: "desc", DueAt: &due,
 			},
 			AssigneeID: "u2",
 		})

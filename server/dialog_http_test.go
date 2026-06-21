@@ -147,8 +147,8 @@ func TestSubmitNewTaskDialog_AssigneeAndDueAndDescriptionApplied(t *testing.T) {
 	require.Len(t, allTasks(t, store), 1)
 	for _, tsk := range allTasks(t, store) {
 		assert.Equal(t, "u-assignee", tsk.AssigneeID)
-		require.NotNil(t, tsk.Due)
-		assert.Equal(t, int64(1_700_000_000_000), *tsk.Due)
+		require.NotNil(t, tsk.DueAt)
+		assert.Equal(t, int64(1_700_000_000_000), *tsk.DueAt)
 		assert.Equal(t, "Cut the release branch", tsk.Description)
 	}
 }

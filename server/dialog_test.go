@@ -45,7 +45,7 @@ func TestBuildQuickListDialog_TruncatesLongSummary(t *testing.T) {
 
 func TestBuildTaskDetailDialog_EditableFields(t *testing.T) {
 	due := int64(1_700_000_000_000)
-	t0 := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review", Description: "desc", Status: taskmodel.StatusTodo, Due: &due}, AssigneeID: "u-bob"}
+	t0 := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Summary: "Review", Description: "desc", Status: taskmodel.StatusTodo, DueAt: &due}, AssigneeID: "u-bob"}
 	dialog := buildTaskDetailDialog(t0, 1, 3, nil)
 
 	assert.Equal(t, dialogCallbackTaskDetail, dialog.CallbackId)
@@ -102,8 +102,8 @@ func TestParseTaskDetailSubmission_AllChanged(t *testing.T) {
 	assert.Equal(t, taskmodel.StatusInProgress, update.NewStatus)
 	assert.Equal(t, "u-new", update.NewAssignee)
 	assert.True(t, update.AssigneeSet)
-	require.NotNil(t, update.Patch.Due)
-	assert.Equal(t, int64(1_700_000_000_000), *update.Patch.Due)
+	require.NotNil(t, update.Patch.DueAt)
+	assert.Equal(t, int64(1_700_000_000_000), *update.Patch.DueAt)
 }
 
 func TestParseTaskDetailSubmission_InvalidStatus(t *testing.T) {
@@ -129,11 +129,11 @@ func TestParseTaskDetailSubmission_NumericPrefixSuffixRejected(t *testing.T) {
 
 func TestParseTaskDetailSubmission_ClearsDue(t *testing.T) {
 	oldDue := int64(1_000)
-	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Status: taskmodel.StatusTodo, Due: &oldDue}}
+	current := &taskmodel.Task{TaskRow: taskmodel.TaskRow{ID: "T1", Status: taskmodel.StatusTodo, DueAt: &oldDue}}
 	update, err := parseTaskDetailSubmission(map[string]any{dialogFieldTaskDue: ""}, current)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"due"}, update.Patch.UpdateFields)
-	assert.Nil(t, update.Patch.Due)
+	assert.Nil(t, update.Patch.DueAt)
 }
 
 func TestParseTaskDetailSubmission_NoChanges(t *testing.T) {
