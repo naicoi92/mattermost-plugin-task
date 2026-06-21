@@ -109,6 +109,31 @@ func (s *SQLStore) GetPostByKind(ctx context.Context, taskID, kind string) (stri
 	return postID, nil
 }
 
+// GetTaskIDByPost returns the task_id of the task whose card is the given
+// postID, or ErrPostNotFound when postID is not a tracked card. Used by the
+// MessageHasBeenPosted hook to decide whether a thread reply belongs to a
+// task's card (the reverse lookup of GetPostByKind).
+func (s *SQLStore) GetTaskIDByPost(ctx context.Context, postID string) (string, error) {
+	if postID == "" {
+		return "", errors.New("get task id by post: post id is required")
+	}
+	var taskID string
+	err := s.builder().
+		Select("task_id").
+		From(s.tableName(postsTableShort)).
+		Where(sq.Eq{"post_id": postID}).
+		Limit(1).
+		QueryRowContext(ctx).
+		Scan(&taskID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", store.ErrPostNotFound
+		}
+		return "", fmt.Errorf("get task id by post %s: %w", postID, err)
+	}
+	return taskID, nil
+}
+
 // DeletePost removes the tracking row for a single post. Idempotent: returns
 // store.ErrPostNotFound when no tracking row exists (the post may already have been
 // untracked, or was never a card); callers wanting idempotency ignore that

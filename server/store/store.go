@@ -161,6 +161,9 @@ type Store interface {
 	AddPost(ctx context.Context, id, taskID, postID, kind string) error
 	ListPosts(ctx context.Context, taskID string) ([]model.TaskPost, error)
 	GetPostByKind(ctx context.Context, taskID, kind string) (string, error)
+	// GetTaskIDByPost reverse-looks-up the task whose card is postID. Used by
+	// the MessageHasBeenPosted hook to detect task-thread replies.
+	GetTaskIDByPost(ctx context.Context, postID string) (string, error)
 	DeletePost(ctx context.Context, postID string) error
 
 	// --- Comments (M2-5) ---
