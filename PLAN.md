@@ -114,13 +114,30 @@ Template `mattermost-plugin-starter-template` đã cung cấp sẵn các pattern
 
 ---
 
-## Phần 4 — Thiết kế dữ liệu trên KVStore
+## Phần 4 — Thiết kế dữ liệu trên SQL (milestone 12: KV → SQL)
 
-KVStore không có query → thiết kế **entity store + inverted index** (slice taskID đã sắp xếp theo `created_at`).
+> **Cập nhật (milestone 12):** Lớp lưu trữ đã chuyển từ KVStore sang **cơ sở dữ liệu quan hệ** (postgres production, sqlite test) qua `pluginapi.Store.GetMasterDB`. Thiết kế key-per-edge KV được thay bằng **6 bảng quan hệ chuẩn hoá** + query push-down (WHERE/JOIN/LIMIT). Chi tiết đầy đủ: [`docs/SQL_MIGRATION_PLAN.md`](docs/SQL_MIGRATION_PLAN.md).
 
-### 4.1 Lược đồ key (MVP — tối ưu KVStore theo review)
+Lưu trữ dùng **DB chính của server Mattermost** (không tạo DB riêng), dialect-aware qua squirrel + morph migrations. Mọi query WHERE/ORDER BY/LIMIT đẩy xuống DB (thay vì load-all + filter trong Go như KV).
 
-Nguyên tắc: **key-per-edge** (mỗi quan hệ = 1 key riêng) → **ghi rẻ, không tranh chấp CAS**; truy vấn dùng `KV.ListKeys(prefix)`. **KHÔNG** lưu `[]taskID` lớn trong 1 key (tránh O(n) marshal + CAS retry khi đông user). TaskID = **ULID** (sortable, không dùng `seq` counter → không hotspot).
+### 4.1 Lược đồ 6 bảng quan hệ
+
+| Bảng | Mục đích | Cột chính |
+|---|---|---|
+| `task_tasks` | Entity task core (1:1) | id, summary, description, channel_id, parent_task_id (self-FK CASCADE), status, order_key, due, is_all_day, completed_at, cancelled_at, created_at, updated_at |
+| `task_members` | Quan hệ task↔user (creator/assignee/follower) | task_id FK CASCADE, user_id, role, created_at. PK (task_id, user_id, role) — future-proof cho multi-assignee. |
+| `task_reminders` | Reminder state (multi-ready) | id, task_id FK CASCADE, offset_ms CHECK(>=0), fired_at (NULL=pending), created_at. UNIQUE(task_id) tại MVP. |
+| `task_posts` | Card-post tracking (channel/DM/future) | id, task_id FK CASCADE, post_id UNIQUE, kind, created_at. UNIQUE(task_id, kind). |
+| `task_comments` | Ánh xạ comment-as-thread (post_id → task_id) | id, task_id FK CASCADE, post_id UNIQUE, author_id, created_at. Content nằm trong MM post, không lưu trong SQL. |
+| `task_events` | Audit trail (append-only) | id, task_id FK CASCADE, actor_id, event_type, from_value, to_value (TEXT JSON), created_at. |
+
+**Lý do 6 bảng** (thay vì 1 KV entity phẳng):
+- **Query**: WHERE/JOIN/LIMIT đẩy xuống DB — List/Search/Reminders là 1 query thay vì N+1 ListKeys+Get.
+- **Atomicity**: WithTx đảm bảo multi-table write commit/roll back cùng nhau (Create = task + members + reminder + event).
+- **FK CASCADE**: Delete 1 task tự xoá members/reminders/posts/comments/events — không cần cascade thủ công.
+- **Future-proof**: members sẵn multi-role; posts sẵn multi-location; reminders sẵn multi-reminder.
+
+Dialect: **postgres** (production mặc định), **sqlite** (test in-memory qua `modernc.org/sqlite` pure-Go). MySQL chưa test (CREATE INDEX IF NOT EXISTS không hỗ trợ). Test suite chạy trên sqlite với FK enforcement on.
 
 ```
 # Entity
@@ -536,11 +553,12 @@ Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/
 - **Kiểm pagination**: tạo >100 task, duyệt `list` qua các trang.
 
 ## Rủi ro & lưu ý
-- **KVStore key ≤150 ký tự**: lược đồ key hiện an toàn; nếu cần index phức tạp hơn (sau này) phải rút gọn tiền tố.
-- **Giới hạn scale KV (theo review)**: `KV.ListKeys(page,count,WithPrefix)` lọc prefix **client-side** và phân trang → vùng an toàn thực tế: **~2.000 task/user**, **~10.000 task/channel**, **~vài trăm comment/task**, **~vài nghìn reminder đang chờ**. **DB riêng là roadmap, hoãn** (chỉ làm lại khi benchmark cho thấy vượt vùng an toàn; đến lúc đó tách sang bảng riêng hoặc dùng plugin DB hooks).
+- **Dialect postgres/mysql + sqlite test**: production chạy **postgres** (mặc định Mattermost). Test suite dùng **sqlite in-memory** pure-Go (`modernc.org/sqlite`, không cgo). MySQL chưa test đầy đủ (`CREATE INDEX IF NOT EXISTS` không hỗ trợ trước 8.0; `UPDATE ... RETURNING` không hỗ trợ). Plugin MVP hỗ trợ postgres + sqlite.
+- **Migration cluster-safe**: `RunMigrationsClusterSafe` dùng `cluster.Mutex` + morph idempotency → chỉ 1 node chạy migration. `task_schema_migrations` bookkeeping table.
+- **Transaction trong handler createTask** (M4-2): service.Create commit task (WithTx: task + members + reminder + event) TRƯỚC, post card SAU. `CreatePost` là server RPC không tham gia DB transaction → đây là boundary đúng. Crash giữa Create và post card → task tồn tại không card (rebuild được); crash sau post nhưng trước AddPost → card mồ côi (harmless).
 - **Quick List dialog (mobile)**: `select` không search/pagination → chỉ hiển thị **top N** task; RHS desktop là chính cho danh sách dài.
-- **Reminder trên cluster**: `cluster.Schedule` đảm bảo chỉ 1 node chạy job — tránh gửi DM trùng.
-- **Hard delete cascade**: rủi ro crash giữa chừng để lại vài key rác (hiếm); không có transaction KV → chấp nhận, không dùng GC quét toàn bộ.
+- **Reminder trên cluster**: `cluster.Schedule` đảm bảo chỉ 1 node chạy job — tránh gửi DM trùng. `ListDueReminders` là 1 JOIN query (reminders ⨝ tasks ⨝ members).
+- **FK CASCADE delete**: `task_tasks` self-FK + các bảng con đều `ON DELETE CASCADE` → Delete 1 task tự xoá toàn bộ dependents. Audit event `deleted` ghi trong cùng tx nhưng cũng bị cascade (serves WS broadcast, không retention dài hạn).
 - **Timezone**: render due theo `preference` timezone của từng user (giống Lark — server lưu timestamp, client tự hiển thị).
 - **Idempotent**: KHÔNG dùng `client_token` trong MVP (đã chốt bỏ).
 - **Rate limiting / abuse prevention** (spam comment/create): **hoãn** (Vượt MVP).
@@ -614,6 +632,14 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Rejected:** Reminder quét toàn bộ task mỗi phút. **Why:** Không scalable (hàng chục nghìn task). Thêm **index riêng** `idx:reminder:{taskID} -> {due, offset}` — scheduler chỉ `ListKeys("idx:reminder:")` đọc value nhỏ, không load entity (mục 4.3, 7).
 - **Rejected:** `OrderInStatus int`. **Why:** Chèn giữa 2 thẻ phải reindex cả cột → chuỗi CAS. Chuyển sang **`OrderKey` fractional index** (midpoint string) — kéo thả chỉ cập nhật 1 thẻ (mục 4.2/4.3).
 - **Rejected:** TaskID tuần tự `seq:task`. **Why:** Counter chung là hotspot contention. Chuyển sang **ULID** (toàn cục, sortable) (mục 4.1/4.2).
+
+### Đợt review #10 — chuyển KV sang SQL (milestone 12)
+- **Accepted:** Chuyển toàn bộ lớp lưu trữ từ KVStore sang **DB quan hệ** (postgres/sqlite) qua `pluginapi.Store.GetMasterDB`. **Why:** KV `ListKeys` client-side filter không scale (giới hạn ~2.000 task/user); query push-down (WHERE/JOIN/LIMIT) loại bỏ N+1 ListKeys+Get. 6 bảng chuẩn hoá (task_tasks/members/reminders/posts/comments/events) + WithTx atomicity + FK CASCADE. Tham chiếu: `docs/SQL_MIGRATION_PLAN.md`.
+- **Accepted:** `model.TaskView` đổi tên thành `model.Task` (entity đầy đủ cho consumer); `model.TaskRow` = storage row. **Why:** Đặt tên trung thực — `TaskView` là tên tránh đụng `model.Task` cũ; sau khi xoá KV model, entity assembled mới là "Task" thật.
+- **Accepted:** Comment-as-thread hybrid — `task_comments` chỉ lưu ánh xạ `(task_id, post_id)`, content nằm trong MM post. **Why:** Giảm ~70% logic comment; native notification/reaction/@mention free; `MessageHasBeenPosted` hook auto-link reply.
+- **Accepted:** Audit trail (`task_events`) append-only, atomic với change qua WithTx. ActorID = user thật (M3-3), không placeholder.
+- **Rejected:** Giữ KVStore song song SQL (adapter layer). **Why:** Adapter là throwaway code; service rewrite trực tiếp lên store.Store sạch hơn. KVStore package xoá hẳn.
+- **Rejected:** `mattn/go-sqlite3` (cgo) cho test. **Why:** Plugin build `CGO_ENABLED=0`; pure-Go `modernc.org/sqlite` (morph's actual transitive dep) giữ test suite cgo-free.
 - **Rejected:** Thiếu index toàn cục. **Why:** `/task list all` phải merge/dedup nhiều index. Thêm `idx:all:task:{taskID}` (mục 4.1).
 - **Rejected:** Xoá cascade cứng (nhiều KV op, rác nếu crash). **Why:** Không có transaction. Chuyển sang **soft-delete** (`DeletedAt`) + xoá index trước + **GC job** dọn entity/subtask/comment mồ côi > 24h (mục 4.3).
 - **Rejected:** Subtask đếm kép trong My Tasks. **Why:** Subtask có assignee riêng lọt index. My Tasks chỉ hiện **task gốc** (`ParentTaskID==""`); Kanban có **toggle hiện/ẩn subtask** + style khác (mục 5.5).
