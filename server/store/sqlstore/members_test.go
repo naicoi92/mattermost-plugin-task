@@ -199,6 +199,7 @@ func TestListTasks_ScopeDirectPartnerGuessingFails(t *testing.T) {
 
 	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", PartnerID: "u3", Limit: 10})
 	require.NoError(t, err)
+	require.Empty(t, page.Items, "no task rows should leak to an unrelated caller")
 	assert.Equal(t, 0, page.Total, "u1 cannot see u3's task by claiming partner_id=u3")
 }
 
