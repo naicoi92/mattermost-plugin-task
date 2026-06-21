@@ -74,8 +74,13 @@ func (n *Notifier) dm(recipientID, key string, args ...any) {
 		return
 	}
 	channel, err := n.api.GetDirectChannel(recipientID, n.botUserID)
-	if err != nil {
-		n.api.LogError("Failed to open DM channel", "recipient", recipientID, "error", err)
+	if err != nil || channel == nil {
+		// GetDirectChannel can return (nil, nil) or (nil, err) when the RPC
+		// connection to the host is shutting down. A nil channel here would
+		// panic on channel.Id below — bail out instead.
+		if err != nil {
+			n.api.LogError("Failed to open DM channel", "recipient", recipientID, "error", err)
+		}
 		return
 	}
 	text := n.translator.T(n.localeFor(recipientID), key, args...)
