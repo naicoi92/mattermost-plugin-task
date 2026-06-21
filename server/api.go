@@ -594,7 +594,9 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, task.ErrParentNotFound):
 			p.writeError(w, http.StatusNotFound, "parent task not found")
 		default:
-			p.writeError(w, http.StatusInternalServerError, err.Error())
+			p.API.LogError("Failed to create subtask",
+				"parent_id", parentID, "actor", actorID, "error", err.Error())
+			p.writeError(w, http.StatusInternalServerError, "failed to create subtask")
 		}
 		return
 	}
