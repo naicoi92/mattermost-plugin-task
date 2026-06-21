@@ -1,34 +1,88 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// Plugin-wide styles for the Task plugin webapp (#93). The React components in
-// src/components already ship className hooks but no CSS matched them, so the
-// RHS, Quick List, New Task dialog, and Task Detail panel rendered unstyled.
+// Lark-style design system for the Task plugin webapp. Redesigns the
+// Right-Hand Sidebar (Quick List + Task Detail + inline New Task) after the
+// Lark Tasks panel: a 60px header, a search/filter toolbar, task rows with
+// circular checks, status pills, badge chips, and a floating "New task" button.
 //
-// This file is imported once from src/index.tsx so webpack bundles it into
-// main.js. It is intentionally framework-free plain CSS (via SCSS nesting for
-// readability) and stays within the plugin's own class namespace (`task-*`,
-// `quick-list*`) so it does not collide with the host webapp.
+// Imported once from src/index.tsx so webpack bundles it into main.js. It is
+// framework-free plain CSS (via SCSS nesting) scoped under the plugin's own
+// class namespace (`task-rhs`, `quick-list`, `task-detail`, `task-new`) so it
+// does not collide with the host webapp.
 //
-// Out of scope for v0.1.0: the Kanban modal (`.task-kanban-modal`) — Phase 4.
+// Theming: the host renders inside a light or dark theme. The plugin reads CSS
+// custom properties that fall back to light Lark tokens, so the panel renders
+// correctly without depending on host theme variables. Dark mode is opt-in via
+// [data-theme="dark"] on the panel root (not toggled automatically here — the
+// host's theme is applied through the surrounding chrome).
 
-// --- Shared variables -------------------------------------------------------
+// --- Design tokens (Lark) ---------------------------------------------------
 
-$border-color: #ccc;
-$text-muted: #666;
-$danger: #d24b4e;
-$primary: #1c58d9;
-$primary-hover: #1547b0;
-$bg-alt: #f7f7f7;
-$bg-hover: #eef1f5;
-$radius: 4px;
-$gap: 8px;
+:root {
+    --task-bg: #ffffff;
+    --task-surface: #f7f8fa;
+    --task-surface-hover: #f0f1f3;
+    --task-fg: #1f2329;
+    --task-muted: #8f959e;
+    --task-border: #dee0e3;
+    --task-accent: #3370ff;
+    --task-accent-hover: #2761e8;
+    --task-accent-tint: rgba(51, 112, 255, 0.10);
+    --task-success: #34d399;
+    --task-warning: #f59e0b;
+    --task-danger: #f54a45;
+    --task-radius: 8px;
+    --task-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
 
-// --- New Task composer button (#107) --------------------------------------
-// No custom CSS: the button reuses the host's `AdvancedTextEditor__action-button`
-// class (the same one the attachment/emoji buttons use), so its styling — color,
-// size, hover/active — matches the composer controls and adapts to the active
-// theme automatically.
+.task-rhs[data-theme='dark'] {
+    --task-bg: #1f2329;
+    --task-surface: #272b30;
+    --task-surface-hover: #2f343b;
+    --task-fg: #ffffff;
+    --task-muted: #8f959e;
+    --task-border: #373c43;
+    --task-accent: #5b8ff9;
+    --task-accent-hover: #4a7de0;
+    --task-accent-tint: rgba(91, 143, 249, 0.12);
+}
+
+// --- Shared primitives ------------------------------------------------------
+
+%task-icon-btn {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--task-radius);
+    background: transparent;
+    color: var(--task-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+
+    &:hover {
+        background: var(--task-surface);
+        color: var(--task-fg);
+    }
+
+    svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
+        flex-shrink: 0;
+    }
+}
+
+// checkSvg is the small filled checkmark reused inside circular checks.
+%task-check-svg {
+    width: 11px;
+    height: 11px;
+    fill: #fff;
+}
 
 // --- TaskSidebar (RHS container) -------------------------------------------
 
@@ -37,513 +91,846 @@ $gap: 8px;
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    background: #fff;
+    background: var(--task-bg);
+    color: var(--task-fg);
+    font-family: var(--task-font);
+    font-size: 14px;
+    overflow: hidden;
 
-    &__title {
-        padding: 12px 16px;
-        font-size: 16px;
-        font-weight: 600;
-        border-bottom: 1px solid $border-color;
-        flex: 0 0 auto;
+    &__header {
+        height: 60px;
+        padding: 0 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--task-border);
+        flex-shrink: 0;
     }
 
+    &__title {
+        font-weight: 600;
+        font-size: 17px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+
+        svg {
+            width: 22px;
+            height: 22px;
+            fill: var(--task-accent);
+            flex-shrink: 0;
+        }
+    }
+
+    &__header-actions {
+        display: flex;
+        gap: 4px;
+    }
+
+    &__icon-btn {
+        @extend %task-icon-btn;
+    }
+
+    // The view body is a scroll container that hosts whichever view is active
+    // (list / detail / new). It fills the remaining height under the header.
     &__body {
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        padding: $gap;
+        padding: 16px;
+        position: relative;
+
+        &::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        &::-webkit-scrollbar-thumb {
+            background: var(--task-border);
+            border-radius: 3px;
+        }
     }
 }
 
-// --- Quick List ------------------------------------------------------------
+// --- Quick List -------------------------------------------------------------
 
 .quick-list {
     display: flex;
     flex-direction: column;
-    gap: $gap;
+    gap: 12px;
 
-    &__tabs {
+    &__toolbar {
         display: flex;
-        gap: 4px;
-        border-bottom: 1px solid $border-color;
+        flex-direction: column;
+        gap: 10px;
     }
 
-    &__tab {
+    // Scope tabs: pill group (My Tasks / Channel Tasks).
+    &__scope-tabs {
+        display: flex;
+        gap: 4px;
+        background: var(--task-surface);
+        border-radius: var(--task-radius);
+        padding: 3px;
+    }
+
+    &__scope-tab {
         flex: 1 1 0;
-        padding: 6px 10px;
+        min-width: 0;
+        height: 30px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 6px;
         background: transparent;
-        border: none;
-        border-bottom: 2px solid transparent;
-        cursor: pointer;
+        color: var(--task-muted);
         font-size: 13px;
-        color: $text-muted;
+        font-weight: 500;
+        cursor: pointer;
+        font-family: inherit;
+        transition: background 0.15s, color 0.15s;
 
         &:hover:not(:disabled) {
-            color: #333;
+            color: var(--task-fg);
         }
 
         &:disabled {
-            opacity: 0.5;
+            opacity: 0.45;
             cursor: not-allowed;
         }
 
         &--active {
-            color: $primary;
-            border-bottom-color: $primary;
+            background: var(--task-bg);
+            color: var(--task-fg);
+            font-weight: 600;
+            box-shadow: 0 1px 3px rgba(31, 35, 41, 0.08);
+        }
+    }
+
+    // Search box.
+    &__search {
+        height: 40px;
+        padding: 0 12px;
+        border-radius: var(--task-radius);
+        border: 1px solid var(--task-border);
+        background: var(--task-surface);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--task-muted);
+        font-size: 14px;
+        transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+
+        &:focus-within {
+            border-color: var(--task-accent);
+            box-shadow: 0 0 0 3px var(--task-accent-tint);
+            background: var(--task-bg);
+        }
+
+        svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+            flex-shrink: 0;
+        }
+
+        input {
+            flex: 1;
+            min-width: 0;
+            border: 0;
+            background: transparent;
+            color: var(--task-fg);
+            font-size: 14px;
+            outline: none;
+            font-family: inherit;
+
+            &::placeholder {
+                color: var(--task-muted);
+            }
+        }
+    }
+
+    // Status filter chips (All / To do / Done) + due select row.
+    &__filters {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    &__chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    &__chip {
+        height: 28px;
+        padding: 0 12px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border: 1px solid transparent;
+        background: var(--task-surface);
+        color: var(--task-muted);
+        font-family: inherit;
+        transition: background 0.15s, color 0.15s;
+
+        &:hover {
+            background: var(--task-surface-hover);
+            color: var(--task-fg);
+        }
+
+        &--active {
+            background: var(--task-accent-tint);
+            color: var(--task-accent);
             font-weight: 600;
         }
     }
 
-    &__filters {
-        display: flex;
-        gap: $gap;
-        flex-wrap: wrap;
-    }
+    &__due-select {
+        height: 28px;
+        margin-left: auto;
+        padding: 0 8px;
+        border-radius: 999px;
+        border: 1px solid var(--task-border);
+        background: var(--task-bg);
+        color: var(--task-fg);
+        font-size: 12px;
+        font-family: inherit;
+        cursor: pointer;
+        outline: none;
 
-    &__filter {
-        flex: 1 1 120px;
-        min-width: 100px;
-        padding: 4px 6px;
-        border: 1px solid $border-color;
-        border-radius: $radius;
-        background: #fff;
-        font-size: 13px;
+        &:focus {
+            border-color: var(--task-accent);
+        }
     }
 
     &__error {
-        padding: 6px 8px;
-        background: #fdecea;
-        color: $danger;
-        border-radius: $radius;
+        padding: 8px 12px;
+        background: rgba(245, 74, 69, 0.10);
+        color: var(--task-danger);
+        border-radius: var(--task-radius);
         font-size: 13px;
     }
 
-    &__empty {
-        padding: 16px 8px;
-        text-align: center;
-        color: $text-muted;
-        font-size: 13px;
-    }
-
+    // Task rows.
     &__items {
         list-style: none;
         margin: 0;
         padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 8px;
     }
 
     &__item {
-        &-button {
-            display: block;
-            width: 100%;
-            text-align: left;
-            padding: 8px 10px;
-            background: $bg-alt;
-            border: 1px solid transparent;
-            border-radius: $radius;
-            cursor: pointer;
-
-            &:hover {
-                background: $bg-hover;
-                border-color: $border-color;
-            }
-        }
-
-        &-summary {
-            font-size: 14px;
-            color: #222;
-            margin-bottom: 4px;
-        }
-
-        &-meta {
-            display: flex;
-            gap: $gap;
-            flex-wrap: wrap;
-            font-size: 12px;
-            color: $text-muted;
-        }
-
-        &-status {
-            font-weight: 600;
-
-            &--done,
-            &--cancelled {
-                opacity: 0.7;
-            }
-        }
-
-        &-due {
-            &--overdue {
-                color: $danger;
-                font-weight: 600;
-            }
-        }
-
         &--done,
         &--cancelled {
             .quick-list__item-summary {
                 text-decoration: line-through;
-                color: $text-muted;
+                color: var(--task-muted);
             }
         }
     }
 
-    &__load-more,
-    &__new-btn {
-        padding: 8px 12px;
-        border-radius: $radius;
+    &__item-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid var(--task-border);
+        border-radius: var(--task-radius);
+        background: var(--task-bg);
         cursor: pointer;
-        font-size: 13px;
-        border: 1px solid $border-color;
-        background: #fff;
+        transition: background 0.15s, border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+        width: 100%;
+        text-align: left;
+        font-family: inherit;
 
-        &:hover:not(:disabled) {
-            background: $bg-hover;
+        &:hover {
+            background: var(--task-surface);
+            border-color: var(--task-accent);
+            box-shadow: 0 2px 10px rgba(31, 35, 41, 0.06);
+            transform: translateY(-1px);
+        }
+    }
+
+    // Circular check (toggle done). Square variant reused for subtasks.
+    &__check {
+        width: 18px;
+        height: 18px;
+        border: 2px solid var(--task-border);
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        margin-top: 1px;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+        background: transparent;
+
+        &:hover {
+            border-color: var(--task-accent);
         }
 
-        &:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
+        svg {
+            @extend %task-check-svg;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: opacity 0.15s, transform 0.15s;
+        }
+
+        &--done {
+            background: var(--task-accent);
+            border-color: var(--task-accent);
+
+            svg {
+                opacity: 1;
+                transform: scale(1);
+            }
         }
     }
 
-    &__new-btn {
-        background: $primary;
-        color: #fff;
-        border-color: $primary;
-        font-weight: 600;
-
-        &:hover:not(:disabled) {
-            background: $primary-hover;
-            border-color: $primary-hover;
-        }
+    &__item-main {
+        flex: 1;
+        min-width: 0;
     }
-}
 
-// --- New Task dialog -------------------------------------------------------
+    &__item-summary {
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.4;
+        color: var(--task-fg);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 
-.task-new-dialog {
-    &__overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.5);
+    &__item-meta {
         display: flex;
         align-items: center;
-        justify-content: center;
-        z-index: 1050;
-        padding: 16px;
+        gap: 8px;
+        margin-top: 6px;
+        flex-wrap: wrap;
     }
 
-    &#{&} {
-        // compound to raise specificity over generic .modal resets
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-        width: 100%;
-        max-width: 480px;
-        max-height: 90vh;
-        overflow-y: auto;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
+    // Status dot + label.
+    &__item-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--task-muted);
+        font-weight: 500;
     }
 
-    &__title {
-        font-size: 18px;
-        font-weight: 600;
+    &__status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        background: var(--task-muted);
+
+        &--todo {
+            background: var(--task-muted);
+        }
+
+        &--in_progress {
+            background: var(--task-warning);
+        }
+
+        &--done {
+            background: var(--task-success);
+        }
+
+        &--cancelled {
+            background: var(--task-muted);
+        }
     }
 
-    &__error {
-        padding: 8px;
-        background: #fdecea;
-        color: $danger;
-        border-radius: $radius;
-        font-size: 13px;
+    &__item-due {
+        font-size: 12px;
+        color: var(--task-muted);
+
+        &--overdue {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
     }
 
-    &__field {
-        display: flex;
-        flex-direction: column;
+    // Avatar initials.
+    &__item-assignee {
+        font-size: 10px;
+        color: var(--task-muted);
+        display: inline-flex;
+        align-items: center;
         gap: 4px;
     }
 
-    &__scope {
-        border: 1px solid $border-color;
-        border-radius: $radius;
-        padding: 8px;
-
-        legend {
-            padding: 0 4px;
-        }
-
-        label {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            margin-right: 16px;
-            font-size: 14px;
-        }
+    &__avatar {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--task-accent), #7aa8ff);
+        color: #fff;
+        font-size: 10px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
     }
 
-    &__label {
+    &__empty {
+        text-align: center;
+        padding: 48px 16px;
+        color: var(--task-muted);
+        font-size: 14px;
+    }
+
+    // Load more (text link under the list).
+    &__load-more {
+        align-self: center;
+        padding: 8px 16px;
+        border: 0;
+        background: transparent;
+        color: var(--task-accent);
         font-size: 13px;
         font-weight: 600;
-        color: #333;
-    }
-
-    &__input,
-    &__textarea {
-        padding: 6px 8px;
-        border: 1px solid $border-color;
-        border-radius: $radius;
-        font-size: 14px;
+        cursor: pointer;
         font-family: inherit;
 
-        &:focus {
-            outline: none;
-            border-color: $primary;
-            box-shadow: 0 0 0 2px rgba(28, 88, 217, 0.2);
+        &:hover:not(:disabled) {
+            text-decoration: underline;
         }
-    }
-
-    &__textarea {
-        min-height: 70px;
-        resize: vertical;
-    }
-
-    &__actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: $gap;
-    }
-
-    &__btn {
-        padding: 8px 16px;
-        border-radius: $radius;
-        cursor: pointer;
-        font-size: 14px;
-        border: 1px solid $border-color;
-        background: #fff;
 
         &:disabled {
-            opacity: 0.6;
+            opacity: 0.5;
             cursor: not-allowed;
         }
+    }
 
-        &--primary {
-            background: $primary;
-            color: #fff;
-            border-color: $primary;
-            font-weight: 600;
+    // Floating action button — "New task".
+    &__fab {
+        position: sticky;
+        bottom: 0;
+        margin-left: auto;
+        margin-top: 8px;
+        height: 40px;
+        padding: 0 18px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--task-accent);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        box-shadow: 0 6px 20px rgba(51, 112, 255, 0.30);
+        transition: background 0.15s, transform 0.15s;
+        font-family: inherit;
 
-            &:hover:not(:disabled) {
-                background: $primary-hover;
-                border-color: $primary-hover;
-            }
+        &:hover {
+            background: var(--task-accent-hover);
+            transform: translateY(-1px);
         }
 
-        &--secondary:hover:not(:disabled) {
-            background: $bg-hover;
+        svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+            flex-shrink: 0;
         }
     }
 }
 
-// --- Task Detail panel -----------------------------------------------------
+// --- Task Detail panel ------------------------------------------------------
 
 .task-detail {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 16px;
 
-    &--loading {
+    &--loading,
+    &__error-block {
         padding: 16px;
         text-align: center;
-        color: $text-muted;
+        color: var(--task-muted);
+        font-size: 14px;
     }
 
     &__header {
         display: flex;
         align-items: center;
-        gap: $gap;
+        gap: 10px;
     }
 
     &__back {
-        background: transparent;
-        border: 1px solid $border-color;
-        border-radius: $radius;
+        @extend %task-icon-btn;
+    }
+
+    // Status pill (click cycles todo → in_progress → done → cancelled).
+    &__status-pill {
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 999px;
+        border: 1px solid var(--task-border);
+        background: var(--task-bg);
+        color: var(--task-fg);
+        font-size: 13px;
         cursor: pointer;
-        font-size: 16px;
-        line-height: 1;
-        padding: 2px 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: inherit;
+        transition: border-color 0.15s;
 
         &:hover {
-            background: $bg-hover;
+            border-color: var(--task-accent);
         }
-    }
-
-    &__summary {
-        font-size: 16px;
-        font-weight: 600;
-        flex: 1 1 auto;
-    }
-
-    &__error {
-        padding: 8px;
-        background: #fdecea;
-        color: $danger;
-        border-radius: $radius;
-        font-size: 13px;
-    }
-
-    &__meta {
-        margin: 0;
-        display: grid;
-        grid-template-columns: max-content 1fr;
-        gap: 4px $gap;
-        font-size: 13px;
-
-        dt {
-            color: $text-muted;
-            font-weight: 600;
-        }
-
-        dd {
-            margin: 0;
-        }
-    }
-
-    &__status {
-        padding: 4px 6px;
-        border: 1px solid $border-color;
-        border-radius: $radius;
-        font-size: 13px;
-        background: #fff;
-    }
-
-    &__due--overdue {
-        color: $danger;
-        font-weight: 600;
-    }
-
-    &__description {
-        padding: 8px;
-        background: $bg-alt;
-        border-radius: $radius;
-        font-size: 14px;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-
-    &__section-title {
-        font-size: 13px;
-        font-weight: 600;
-        color: #333;
-        display: flex;
-        gap: $gap;
-        align-items: center;
-        margin-bottom: 4px;
     }
 
     &__progress {
         font-weight: 400;
-        color: $text-muted;
+        color: var(--task-muted);
+        margin-left: 6px;
+        font-size: 12px;
+    }
+
+    &__section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    &__section-title {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--task-muted);
     }
 
     &__subtask-list,
     &__comment-list {
         list-style: none;
-        margin: 0 0 8px 0;
+        margin: 0;
         padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 4px;
     }
 
     &__subtask {
-        padding: 4px 8px;
-        background: $bg-alt;
-        border-radius: $radius;
-        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--task-border);
+        font-size: 14px;
+
+        &:last-child {
+            border-bottom: 0;
+        }
 
         &--done,
         &--cancelled {
+            color: var(--task-muted);
             text-decoration: line-through;
-            color: $text-muted;
         }
     }
 
+    // Square check variant for subtasks.
+    &__subtask-check {
+        @extend .quick-list__check;
+        border-radius: 4px;
+        margin-top: 0;
+    }
+
     &__comment {
-        padding: 6px 8px;
-        background: $bg-alt;
-        border-radius: $radius;
+        display: flex;
+        gap: 10px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--task-border);
+
+        &:last-child {
+            border-bottom: 0;
+        }
     }
 
     &__comment-body {
-        font-size: 13px;
+        flex: 1;
+        min-width: 0;
+    }
+
+    &__comment-meta {
+        font-size: 12px;
+        color: var(--task-muted);
+        margin-bottom: 2px;
+    }
+
+    &__comment-text {
+        font-size: 14px;
+        color: var(--task-fg);
+        line-height: 1.4;
         white-space: pre-wrap;
         word-break: break-word;
     }
 
-    &__comment-meta {
-        font-size: 11px;
-        color: $text-muted;
-        margin-top: 2px;
+    &__comment-input {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
     }
 
     &__add-row {
         display: flex;
-        gap: $gap;
-    }
-
-    &__input {
-        flex: 1 1 auto;
-        padding: 6px 8px;
-        border: 1px solid $border-color;
-        border-radius: $radius;
-        font-size: 13px;
-
-        &:focus {
-            outline: none;
-            border-color: $primary;
-        }
-    }
-
-    &__add-btn {
-        flex: 0 0 auto;
-        padding: 6px 12px;
-        background: $primary;
-        color: #fff;
-        border: 1px solid $primary;
-        border-radius: $radius;
-        cursor: pointer;
-        font-weight: 600;
-
-        &:hover {
-            background: $primary-hover;
-        }
+        gap: 8px;
+        margin-top: 4px;
     }
 
     &__actions {
         display: flex;
         justify-content: flex-end;
+        gap: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--task-border);
         margin-top: 8px;
     }
+}
 
-    &__delete {
-        padding: 6px 12px;
-        background: #fff;
-        color: $danger;
-        border: 1px solid $danger;
-        border-radius: $radius;
+// --- Form fields (shared by Task Detail + New Task) -------------------------
+
+.task-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+
+    &__label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--task-muted);
+    }
+}
+
+// Two-column field row (Assignee | Due, etc.).
+.task-fields-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.task-input,
+.task-select,
+.task-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--task-border);
+    border-radius: var(--task-radius);
+    background: var(--task-bg);
+    color: var(--task-fg);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:focus {
+        border-color: var(--task-accent);
+        box-shadow: 0 0 0 3px var(--task-accent-tint);
+    }
+}
+
+// Larger title-style input for the summary field.
+.task-input--title {
+    font-size: 17px;
+    font-weight: 600;
+    padding: 10px 12px;
+}
+
+.task-textarea {
+    min-height: 90px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+// --- User picker -----------------------------------------------------------
+
+.user-picker {
+    position: relative;
+
+    &__trigger {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         cursor: pointer;
+
+        &--placeholder {
+            color: var(--task-muted);
+        }
+    }
+
+    &__selected {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: var(--task-accent-tint);
+        color: var(--task-accent);
         font-size: 13px;
+        font-weight: 600;
+    }
+
+    &__clear {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        padding: 0 0 0 2px;
+        opacity: 0.7;
 
         &:hover {
-            background: $danger;
-            color: #fff;
+            opacity: 1;
+        }
+    }
+
+    &__panel {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        z-index: 20;
+        max-height: 240px;
+        overflow-y: auto;
+        background: var(--task-bg);
+        border: 1px solid var(--task-border);
+        border-radius: var(--task-radius);
+        box-shadow: 0 8px 24px rgba(31, 35, 41, 0.16);
+    }
+
+    &__option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 8px 12px;
+        border: 0;
+        background: transparent;
+        color: var(--task-fg);
+        font-size: 13px;
+        font-family: inherit;
+        cursor: pointer;
+        text-align: left;
+
+        &:hover,
+        &--active {
+            background: var(--task-surface);
+        }
+    }
+
+    &__option-name {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+
+        span:first-child {
+            font-weight: 500;
+        }
+
+        span:last-child {
+            font-size: 11px;
+            color: var(--task-muted);
+        }
+    }
+
+    &__loading,
+    &__empty {
+        padding: 12px;
+        text-align: center;
+        color: var(--task-muted);
+        font-size: 12px;
+    }
+}
+
+// --- Buttons (shared) ------------------------------------------------------
+
+.task-actions-bar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--task-border);
+    margin-top: 8px;
+}
+
+.task-btn {
+    height: 36px;
+    padding: 0 16px;
+    border-radius: var(--task-radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s;
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    &--secondary {
+        background: var(--task-surface);
+        color: var(--task-fg);
+        border-color: var(--task-border);
+
+        &:hover:not(:disabled) {
+            background: var(--task-surface-hover);
+        }
+    }
+
+    &--primary {
+        background: var(--task-accent);
+        color: #fff;
+        border-color: var(--task-accent);
+
+        &:hover:not(:disabled) {
+            background: var(--task-accent-hover);
+            border-color: var(--task-accent-hover);
+        }
+    }
+
+    &--danger {
+        background: var(--task-bg);
+        color: var(--task-danger);
+        border-color: var(--task-border);
+
+        &:hover:not(:disabled) {
+            background: rgba(245, 74, 69, 0.08);
+            border-color: var(--task-danger);
         }
     }
 }
+
+// --- New Task dialog (legacy modal — kept for registration compat) ---------
+// The New Task form now renders inline inside the RHS (TaskSidebar switches
+// rhsView to 'new'). The connected root component returns null; these classes
+// remain only so any legacy references don't break, but the modal overlay is no
+// longer rendered.
+
+.task-new-dialog__overlay {
+    display: none;
+}
+
+// --- Kanban modal ----------------------------------------------------------
+// Out of scope for v0.1.0 (Phase 4).

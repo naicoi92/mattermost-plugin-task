@@ -15,6 +15,8 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import UserPicker from 'components/user_picker/user_picker';
+
 import type {Task, Comment} from 'types/tasks';
 
 // The plugin reducer is mounted by registerReducer at
@@ -36,6 +38,9 @@ function selectSlice(state: GlobalStateWithPlugin): PluginState {
     return state[PLUGIN_STATE_KEY] ?? {selectedTaskID: '', selectedTask: null};
 }
 
+// STATUS_CYCLE is the order the status pill advances through on click.
+const STATUS_CYCLE: Array<Task['status']> = ['todo', 'in_progress', 'done', 'cancelled'];
+
 export interface TaskDetailPanelProps {
 
     // taskID overrides the store selection (e.g. when opened with a fixed id).
@@ -46,9 +51,12 @@ export interface TaskDetailPanelProps {
 
     // currentUserID gates the delete control (creator/assignee may delete).
     currentUserID?: string;
+
+    // channelID scopes the assignee picker to the task's channel members.
+    channelID?: string;
 }
 
-export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUserID}: TaskDetailPanelProps): JSX.Element | null {
+export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUserID, channelID}: TaskDetailPanelProps): JSX.Element | null {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const locale = useActiveLocale();
@@ -63,6 +71,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     const [error, setError] = useState<string>('');
     const [newComment, setNewComment] = useState('');
     const [newSubtask, setNewSubtask] = useState('');
+    const [editAssignee, setEditAssignee] = useState(false);
 
     // Load the task + subtasks + comments whenever the selected id changes.
     useEffect(() => {
@@ -105,7 +114,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     if (!full) {
         return (
             <div className='task-detail task-detail--loading'>
-                <div className='task-detail__error'>{error || t('webapp.task.empty')}</div>
+                <div className='task-detail__error-block'>{error || t('webapp.task.empty')}</div>
             </div>
         );
     }
@@ -122,6 +131,30 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         }
     };
 
+    // cycleStatus advances the status pill to the next value in STATUS_CYCLE.
+    const cycleStatus = () => {
+        const idx = STATUS_CYCLE.indexOf(full.status);
+        const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
+        changeStatus(next);
+    };
+
+    const setAssignee = async (userID: string) => {
+        setEditAssignee(false);
+        try {
+            if (userID) {
+                const updated = await client.setTaskAssignee(full.id, userID);
+                setFull(updated);
+                dispatch({type: ACTION_TYPES.UPSERT_TASK, task: updated});
+            } else {
+                const updated = await client.removeTaskAssignee(full.id);
+                setFull(updated);
+                dispatch({type: ACTION_TYPES.UPSERT_TASK, task: updated});
+            }
+        } catch (err) {
+            setError(messageFor(err));
+        }
+    };
+
     const addSubtask = async () => {
         const summary = newSubtask.trim();
         if (!summary) {
@@ -132,6 +165,20 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
             setSubtasks((prev) => [...prev, created]);
             setNewSubtask('');
         } catch (err) {
+            setError(messageFor(err));
+        }
+    };
+
+    // toggleSubtaskDone flips a subtask between done and todo.
+    const toggleSubtaskDone = async (sub: Task) => {
+        const next = sub.status === 'done' ? 'todo' : 'done';
+        const prev = sub.status;
+        setSubtasks((cur) => cur.map((x) => (x.id === sub.id ? {...x, status: next} : x)));
+        try {
+            const updated = await client.setTaskStatus(sub.id, next);
+            setSubtasks((cur) => cur.map((x) => (x.id === sub.id ? updated : x)));
+        } catch (err) {
+            setSubtasks((cur) => cur.map((x) => (x.id === sub.id ? {...x, status: prev} : x)));
             setError(messageFor(err));
         }
     };
@@ -178,43 +225,66 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         className='task-detail__back'
                         onClick={onBack}
                         type='button'
-                        aria-label={t('webapp.task.filter.status')}
+                        aria-label={t('webapp.task.cancel')}
                     >
-                        {'‹'}
+                        <BackIcon/>
                     </button>
                 )}
-                <div className='task-detail__summary'>{full.summary}</div>
+                <button
+                    className='task-detail__status-pill'
+                    onClick={cycleStatus}
+                    type='button'
+                    aria-label={t('webapp.task.filter.status')}
+                >
+                    <span className={`quick-list__status-dot quick-list__status-dot--${full.status}`}/>
+                    {statusLabel(full.status, t)}
+                </button>
             </div>
 
-            {error && <div className='task-detail__error'>{error}</div>}
+            {error && <div className='task-detail__error-block'>{error}</div>}
 
-            <dl className='task-detail__meta'>
-                <dt>{t('webapp.task.filter.status')}</dt>
-                <dd>
-                    <select
-                        className='task-detail__status'
-                        value={full.status}
-                        onChange={(e) => changeStatus(e.target.value as Task['status'])}
-                    >
-                        <option value='todo'>{t('webapp.task.status.todo')}</option>
-                        <option value='in_progress'>{t('webapp.task.status.in_progress')}</option>
-                        <option value='done'>{t('webapp.task.status.done')}</option>
-                        <option value='cancelled'>{t('webapp.task.status.cancelled')}</option>
-                    </select>
-                </dd>
-                <dt>{t('webapp.task.due')}</dt>
-                <dd className={isOverdue(full) ? 'task-detail__due--overdue' : ''}>
-                    {full.due ? formatDue(full.due, locale) : '—'}
-                </dd>
-                <dt>{t('webapp.task.assignee')}</dt>
-                <dd>{full.assignee_id || '—'}</dd>
-            </dl>
+            <div className='task-field'>
+                <span className='task-field__label'>{t('webapp.task.summary')}</span>
+                <div className='task-input task-input--title'>{full.summary}</div>
+            </div>
+
+            <div className='task-fields-row'>
+                <div className='task-field'>
+                    <span className='task-field__label'>{t('webapp.task.assignee')}</span>
+                    {editAssignee ? (
+                        <UserPicker
+                            value={full.assignee_id}
+                            valueLabel={full.assignee_id || ''}
+                            channelID={full.channel_id || channelID}
+                            onSelect={(u) => setAssignee(u ? u.id : '')}
+                        />
+                    ) : (
+                        <button
+                            type='button'
+                            className='task-input'
+                            onClick={() => setEditAssignee(true)}
+                            style={{cursor: 'pointer', textAlign: 'left'}}
+                        >
+                            {full.assignee_id || t('webapp.task.assignee.placeholder')}
+                        </button>
+                    )}
+                </div>
+                <div className='task-field'>
+                    <span className='task-field__label'>{t('webapp.task.due')}</span>
+                    <div className={isOverdue(full) ? 'task-input' : 'task-input'}>
+                        {full.due ? formatDue(full.due, locale) : '—'}
+                    </div>
+                </div>
+            </div>
 
             {full.description && (
-                <div className='task-detail__description'>{full.description}</div>
+                <div className='task-field'>
+                    <span className='task-field__label'>{t('webapp.task.description')}</span>
+                    <div className='task-textarea'>{full.description}</div>
+                </div>
             )}
 
-            <section className='task-detail__subtasks'>
+            <section className='task-detail__section'>
                 <div className='task-detail__section-title'>
                     {t('webapp.task.subtasks')}
                     <span className='task-detail__progress'>
@@ -222,24 +292,53 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     </span>
                 </div>
                 <ul className='task-detail__subtask-list'>
-                    {subtasks.map((s) => (
-                        <li
-                            key={s.id}
-                            className={`task-detail__subtask task-detail__subtask--${s.status}`}
-                        >
-                            {s.summary}
+                    {subtasks.length === 0 && (
+                        <li style={{padding: '8px 0', color: 'var(--task-muted)', fontSize: 13}}>
+                            {t('webapp.task.empty')}
                         </li>
-                    ))}
+                    )}
+                    {subtasks.map((s) => {
+                        const subDone = s.status === 'done' || s.status === 'cancelled';
+                        return (
+                            <li
+                                key={s.id}
+                                className={`task-detail__subtask task-detail__subtask--${s.status}`}
+                            >
+                                <span
+                                    className={`task-detail__subtask-check ${subDone ? 'quick-list__check--done' : ''}`}
+                                    role='checkbox'
+                                    aria-checked={subDone}
+                                    tabIndex={0}
+                                    onClick={() => toggleSubtaskDone(s)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            toggleSubtaskDone(s);
+                                        }
+                                    }}
+                                >
+                                    <CheckIcon/>
+                                </span>
+                                <span>{s.summary}</span>
+                            </li>
+                        );
+                    })}
                 </ul>
                 <div className='task-detail__add-row'>
                     <input
-                        className='task-detail__input'
+                        className='task-input'
                         value={newSubtask}
                         onChange={(e) => setNewSubtask(e.target.value)}
                         placeholder={t('webapp.task.add_subtask')}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addSubtask();
+                            }
+                        }}
                     />
                     <button
-                        className='task-detail__add-btn'
+                        className='task-btn task-btn--secondary'
                         onClick={addSubtask}
                         type='button'
                         aria-label={t('webapp.task.add_subtask')}
@@ -249,35 +348,50 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                 </div>
             </section>
 
-            <section className='task-detail__comments'>
+            <section className='task-detail__section'>
                 <div className='task-detail__section-title'>{t('webapp.task.comments')}</div>
                 <ul className='task-detail__comment-list'>
+                    {comments.length === 0 && (
+                        <li style={{padding: '8px 0', color: 'var(--task-muted)', fontSize: 13}}>
+                            {t('webapp.task.empty')}
+                        </li>
+                    )}
                     {comments.map((c) => (
                         <li
                             key={c.id}
                             className='task-detail__comment'
                         >
-                            <div className='task-detail__comment-body'>{c.content}</div>
-                            <div className='task-detail__comment-meta'>
-                                {formatTimestamp(c.created_at, locale)}
+                            <span className='quick-list__avatar'>
+                                {(c.user_id[0] || '?').toUpperCase()}
+                            </span>
+                            <div className='task-detail__comment-body'>
+                                <div className='task-detail__comment-meta'>
+                                    {formatTimestamp(c.created_at, locale)}
+                                </div>
+                                <div className='task-detail__comment-text'>{c.content}</div>
                             </div>
                         </li>
                     ))}
                 </ul>
-                <div className='task-detail__add-row'>
+                <div className='task-detail__comment-input'>
                     <input
-                        className='task-detail__input'
+                        className='task-input'
                         value={newComment}
                         onChange={(e) => setNewComment(e.target.value)}
                         placeholder={t('webapp.task.add_comment')}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addComment();
+                            }
+                        }}
                     />
                     <button
-                        className='task-detail__add-btn'
+                        className='task-btn task-btn--primary'
                         onClick={addComment}
                         type='button'
-                        aria-label={t('webapp.task.add_comment')}
                     >
-                        {'+'}
+                        {t('webapp.task.comments.post')}
                     </button>
                 </div>
             </section>
@@ -285,7 +399,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
             {canDelete && (
                 <div className='task-detail__actions'>
                     <button
-                        className='task-detail__delete'
+                        className='task-btn task-btn--danger'
                         onClick={remove}
                         type='button'
                     >
@@ -294,6 +408,45 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                 </div>
             )}
         </div>
+    );
+}
+
+// statusLabel maps a status to its localized label.
+function statusLabel(status: Task['status'], t: (id: string) => string): string {
+    switch (status) {
+    case 'todo':
+        return t('webapp.task.status.todo');
+    case 'in_progress':
+        return t('webapp.task.status.in_progress');
+    case 'done':
+        return t('webapp.task.status.done');
+    case 'cancelled':
+        return t('webapp.task.status.cancelled');
+    default:
+        return status;
+    }
+}
+
+// BackIcon / CheckIcon are the inline Lark-style glyphs.
+function BackIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 24 24'
+            aria-hidden='true'
+        >
+            <path d='M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z'/>
+        </svg>
+    );
+}
+
+function CheckIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 24 24'
+            aria-hidden='true'
+        >
+            <path d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z'/>
+        </svg>
     );
 }
 

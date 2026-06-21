@@ -274,6 +274,55 @@ export async function getUserByUsername(username: string): Promise<User> {
     return JSON.parse(await res.text()) as User;
 }
 
+// UserSearchResult is the minimal slice of model.User the listing endpoints
+// return. Kept compatible with getUserByUsername's User (id + username) but
+// also carries the display name for richer picker rows.
+export interface UserSearchResult {
+    id: string;
+    username: string;
+    first_name?: string;
+    last_name?: string;
+    nickname?: string;
+    is_bot?: boolean;
+    delete_at?: number;
+}
+
+// searchUsers lists users for the assignee picker. When channelID is provided
+// it scopes to that channel's members (host REST API v4
+// GET /api/v4/users?in_channel=<id>&per_page=N); otherwise it lists users the
+// caller can see (GET /api/v4/users?per_page=N&in_team=... would need a team
+// id, so the no-channel path lists globally visible users). The optional term
+// is sent as `term` for server-side filtering when non-empty; callers may also
+// filter further client-side.
+//
+// Like getUserByUsername this hits the host /api/v4 path directly and delegates
+// request options to Client4.getOptions({}) so auth/credentials/CSRF handling
+// matches the rest of the client. Bots and deleted users are filtered out
+// client-side so the picker only offers real, active people.
+export async function searchUsers(term?: string, channelID?: string, perPage = 50): Promise<UserSearchResult[]> {
+    const q = new URLSearchParams();
+    q.set('per_page', String(perPage));
+    if (channelID) {
+        q.set('in_channel', channelID);
+    }
+    if (term && term.trim()) {
+        q.set('term', term.trim());
+    }
+    const url = `/api/v4/users?${q.toString()}`;
+    const res = await fetch(url, Client4.getOptions({}));
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(res.status, message || res.statusText || 'request failed');
+    }
+    const list = JSON.parse(await res.text()) as UserSearchResult[];
+    return list.filter((u) => !u.is_bot && !u.delete_at);
+}
+
 export default {
     createTask,
     getTask,
@@ -291,4 +340,5 @@ export default {
     listComments,
     setTaskOrder,
     getUserByUsername,
+    searchUsers,
 };

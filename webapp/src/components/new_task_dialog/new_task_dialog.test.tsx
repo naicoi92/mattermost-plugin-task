@@ -7,7 +7,56 @@
 
 import {ClientError} from 'client';
 
-import {assigneeLookupError, messageFor, normalizeAssigneeUsername, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
+import {assigneeLookupError, deriveNewTaskContext, messageFor, normalizeAssigneeUsername, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
+
+describe('deriveNewTaskContext', () => {
+    test('a public/group channel yields a channel task with no assignee hint', () => {
+        const ctx = deriveNewTaskContext({id: 'ch1', type: 'O', name: 'town-square'}, 'me');
+        expect(ctx.channelId).toBe('ch1');
+        expect(ctx.suggestedAssigneeID).toBe('');
+    });
+
+    test('a private channel also yields a channel task', () => {
+        const ctx = deriveNewTaskContext({id: 'ch2', type: 'P', name: 'secret'}, 'me');
+        expect(ctx.channelId).toBe('ch2');
+        expect(ctx.suggestedAssigneeID).toBe('');
+    });
+
+    test('a DM with a partner yields a personal task with the partner as assignee', () => {
+        const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'me__partner'}, 'me');
+        expect(ctx.channelId).toBe('');
+        expect(ctx.suggestedAssigneeID).toBe('partner');
+    });
+
+    test('a DM with the partner id order reversed still picks the non-me user', () => {
+        const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'partner__me'}, 'me');
+        expect(ctx.channelId).toBe('');
+        expect(ctx.suggestedAssigneeID).toBe('partner');
+    });
+
+    test('a DM with myself (nota) yields a personal task assigned to me', () => {
+        const ctx = deriveNewTaskContext({id: 'dm-self', type: 'D', name: 'me__me'}, 'me');
+        expect(ctx.channelId).toBe('');
+        expect(ctx.suggestedAssigneeID).toBe('me');
+    });
+
+    test('no channel context yields a personal task assigned to me', () => {
+        expect(deriveNewTaskContext(null, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me'});
+        expect(deriveNewTaskContext(undefined, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me'});
+        expect(deriveNewTaskContext({id: '', type: 'O'}, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me'});
+    });
+
+    test('a group channel (type G) is treated as a channel task', () => {
+        const ctx = deriveNewTaskContext({id: 'g1', type: 'G', name: 'group'}, 'me');
+        expect(ctx.channelId).toBe('g1');
+    });
+
+    test('a DM whose name fails to parse falls back to personal + me', () => {
+        const ctx = deriveNewTaskContext({id: 'dm2', type: 'D', name: ''}, 'me');
+        expect(ctx.channelId).toBe('');
+        expect(ctx.suggestedAssigneeID).toBe('me');
+    });
+});
 
 describe('parseDueLocal', () => {
     test('returns null for an empty string', () => {
