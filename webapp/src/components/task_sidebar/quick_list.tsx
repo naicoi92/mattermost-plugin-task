@@ -263,23 +263,28 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
                                 </span>
                                 <span className='quick-list__item-main'>
                                     <span className='quick-list__item-summary'>{task.summary}</span>
+                                    {task.description && task.description.trim() && (
+                                        <span className='quick-list__item-description'>{task.description.trim()}</span>
+                                    )}
                                     <span className='quick-list__item-meta'>
-                                        <span className='quick-list__item-status'>
-                                            <span className={`quick-list__status-dot quick-list__status-dot--${task.status}`}/>
+                                        <span className={`quick-list__item-status quick-list__item-status--${task.status}`}>
                                             {statusLabel(task.status, t)}
                                         </span>
-                                        {task.due && (
+                                        <span className='quick-list__item-sep'>{'·'}</span>
+                                        {task.due ? (
                                             <span className={isOverdue(task) ? 'quick-list__item-due quick-list__item-due--overdue' : 'quick-list__item-due'}>
                                                 {formatDueShort(task.due, locale)}
                                             </span>
+                                        ) : (
+                                            <span className='quick-list__item-due quick-list__item-due--none'>{'—'}</span>
                                         )}
                                         {task.assignee_id && (
-                                            <span
-                                                className='quick-list__avatar'
-                                                title={assigneeLabels[task.assignee_id] || task.assignee_id}
-                                            >
-                                                {initialsFromLabel(assigneeLabels[task.assignee_id] || task.assignee_id)}
-                                            </span>
+                                            <>
+                                                <span className='quick-list__item-sep'>{'·'}</span>
+                                                <span className='quick-list__item-assignee'>
+                                                    {assigneeLabels[task.assignee_id] || task.assignee_id}
+                                                </span>
+                                            </>
                                         )}
                                     </span>
                                 </span>
@@ -326,14 +331,6 @@ function chipLabel(chip: ChipFilter, t: (id: string) => string): string {
     default:
         return chip;
     }
-}
-
-// initialsFromLabel derives an avatar initial from a resolved assignee label
-// (e.g. "@minhanh" -> "M"). Falls back to the first char of whatever label is
-// passed (raw id as a last resort).
-function initialsFromLabel(label: string): string {
-    const cleaned = label.replace(/^@/, '').trim();
-    return (cleaned[0] || '?').toUpperCase();
 }
 
 // statusLabel maps a status to its localized label.
