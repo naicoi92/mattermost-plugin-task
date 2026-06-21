@@ -121,6 +121,7 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
                         onBack={backToList}
                         currentUserID={hostUserID}
                         channelID={hostChannelID}
+                        onOpenSubtask={(id) => dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})}
                     />
                 )}
                 {slice.rhsView === 'list' && (
