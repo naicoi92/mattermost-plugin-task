@@ -77,10 +77,14 @@ export function useResolvedUser(userID: string): {label: string; user: UserProfi
 // useResolvedUsers resolves a set of user ids in one hook (for lists). Returns
 // a map id → label where a *missing* key means "still resolving" (the caller
 // should show a muted placeholder, NOT the raw id — that avoids flashing an
-// opaque value). Resolved users map to "@username". The host store is checked
-// via useSelector elsewhere when a single id is needed; this hook fetches any
-// ids it can't satisfy from the store passed through the closure-free fetch
-// path below.
+// opaque value). Resolved users map to "@username".
+//
+// NOTE: unlike useResolvedUser (single id), this batch hook does NOT consult
+// the host Redux store — it fetches every id via client.getUser. That is a
+// deliberate trade-off: subscribing the whole users slice for a list would be
+// wasteful, and the list view tolerates the brief fetch latency behind the
+// muted placeholder. If a list is dominated by already-cached users, prefer
+// useResolvedUser per row or wire a store read here.
 export function useResolvedUsers(userIDs: string[]): Record<string, string> {
     const [labels, setLabels] = useState<Record<string, string>>({});
 

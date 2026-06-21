@@ -70,36 +70,40 @@ export default function QuickList({channelID, onSelectTask, onNewTask}: QuickLis
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    // fetchingRef tracks whether a first-page fetch is in flight. It's a ref
-    // (not state) so mutating it never changes loadFirst's identity or re-fires
-    // the effect below — adding `loading` to useCallback deps caused a loop
-    // (every fetch-completion flipped loading, recreating loadFirst, re-firing
-    // the effect, starting another fetch). The ref gates concurrent calls
-    // without that side effect.
-    const fetchingRef = React.useRef(false);
+    // latestRequestRef tracks the most recent first-page fetch. Each fetch
+    // bumps the counter; when a response arrives we discard it unless its
+    // counter still matches the latest. This lets a filter change while an
+    // earlier request is in flight win: the new fetch issues immediately and
+    // the stale response is ignored, so the list always reflects the latest
+    // filter set (no "old response populates the newly selected view" bug).
+    const latestRequestRef = React.useRef(0);
 
     // loadFirst resets the list and fetches the first page. Memoized so the
-    // effect below depends on a stable reference across renders. It bails out
-    // when a fetch is already in flight so rapid tab/filter changes can't stack
-    // concurrent requests (the last response would otherwise win out of order).
+    // effect below depends on a stable reference across renders.
     const loadFirst = useCallback(async (scope: QuickListTab, status: string, due: string) => {
-        if (fetchingRef.current) {
-            return;
-        }
-        fetchingRef.current = true;
+        const myRequest = ++latestRequestRef.current;
         setLoading(true);
         setError('');
         try {
             const page = await client.listTasks(buildParams(scope, status, due, channelID, ''));
+
+            // Drop stale responses: only the latest request's result lands.
+            if (myRequest !== latestRequestRef.current) {
+                return;
+            }
             const list = page ?? [];
             setTasks(list);
             setAfterOrderKey(list.length > 0 ? list[list.length - 1].order_key : '');
             setHasMore(list.length >= pageLimit);
         } catch (err) {
+            if (myRequest !== latestRequestRef.current) {
+                return;
+            }
             setError(messageFor(err));
         } finally {
-            fetchingRef.current = false;
-            setLoading(false);
+            if (myRequest === latestRequestRef.current) {
+                setLoading(false);
+            }
         }
     }, [channelID]);
 

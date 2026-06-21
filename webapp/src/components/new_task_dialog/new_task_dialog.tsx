@@ -179,6 +179,12 @@ export default function NewTaskDialog({
     const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
 
     const submit = async () => {
+        // Guard against rapid re-trigger (double Enter / fast click) firing
+        // duplicate createTask requests before the disabled button state
+        // commits.
+        if (submitting) {
+            return;
+        }
         const summary = form.summary.trim();
         if (!summary) {
             setError(t('webapp.error.required'));

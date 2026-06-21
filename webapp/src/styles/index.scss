@@ -696,7 +696,7 @@
         color: var(--task-fg);
         line-height: 1.45;
         white-space: pre-wrap;
-        word-break: break-word;
+        overflow-wrap: break-word;
     }
 
     &__comment-input,

@@ -54,15 +54,12 @@ export interface TaskDetailPanelProps {
     // currentUserID gates the delete control (creator/assignee may delete).
     currentUserID?: string;
 
-    // channelID scopes the assignee picker to the task's channel members.
-    channelID?: string;
-
     // onOpenSubtask opens a subtask's detail view (the subtask is itself a
     // Task). When omitted, subtask rows are not navigable.
     onOpenSubtask?: (taskID: string) => void;
 }
 
-export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUserID, channelID, onOpenSubtask}: TaskDetailPanelProps): JSX.Element | null {
+export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUserID, onOpenSubtask}: TaskDetailPanelProps): JSX.Element | null {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const locale = useActiveLocale();
@@ -309,7 +306,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     className='task-detail__status-pill'
                     onClick={cycleStatus}
                     type='button'
-                    aria-label={t('webapp.task.filter.status')}
+                    aria-label={`${t('webapp.task.filter.status')}: ${statusLabel(full.status, t)}`}
                 >
                     <span className={`task-detail__status-dot task-detail__status-dot--${full.status}`}/>
                     {statusLabel(full.status, t)}
@@ -354,7 +351,13 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     <UserPicker
                         value={full.assignee_id}
                         valueLabel={assigneeLabel}
-                        channelID={full.channel_id || channelID}
+
+                        // Scope the picker only to the task's own channel. A
+                        // personal task has no channel_id, so we pass undefined
+                        // (global search) rather than the host's active channel
+                        // — otherwise personal-task assignee search would be
+                        // wrongly restricted to the currently open channel.
+                        channelID={full.channel_id || undefined}
                         onSelect={(u) => setAssignee(u ? u.id : '')}
                     />
                 </div>
@@ -405,32 +408,41 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                                 key={s.id}
                                 className={`task-detail__subtask task-detail__subtask--${s.status}`}
                             >
-                                <span
-                                    className={`task-detail__subtask-check ${subDone ? 'quick-list__check--done' : ''}`}
-                                    role='checkbox'
-                                    aria-checked={subDone}
-                                    tabIndex={0}
-                                    onClick={() => toggleSubtaskDone(s)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                            e.preventDefault();
-                                            toggleSubtaskDone(s);
-                                        }
-                                    }}
-                                >
-                                    <CheckIcon/>
-                                </span>
-                                {onOpenSubtask ? (
-                                    <button
-                                        type='button'
-                                        className='task-detail__subtask-link'
-                                        onClick={() => onOpenSubtask(s.id)}
-                                    >
-                                        {s.summary}
-                                    </button>
-                                ) : (
-                                    <span>{s.summary}</span>
-                                )}
+                                {(() => {
+                                    const labelID = `task-subtask-${s.id}-label`;
+                                    return (
+                                        <>
+                                            <span
+                                                className={`task-detail__subtask-check ${subDone ? 'quick-list__check--done' : ''}`}
+                                                role='checkbox'
+                                                aria-checked={subDone}
+                                                aria-labelledby={labelID}
+                                                tabIndex={0}
+                                                onClick={() => toggleSubtaskDone(s)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        toggleSubtaskDone(s);
+                                                    }
+                                                }}
+                                            >
+                                                <CheckIcon/>
+                                            </span>
+                                            {onOpenSubtask ? (
+                                                <button
+                                                    id={labelID}
+                                                    type='button'
+                                                    className='task-detail__subtask-link'
+                                                    onClick={() => onOpenSubtask(s.id)}
+                                                >
+                                                    {s.summary}
+                                                </button>
+                                            ) : (
+                                                <span id={labelID}>{s.summary}</span>
+                                            )}
+                                        </>
+                                    );
+                                })()}
                             </li>
                         );
                     })}
