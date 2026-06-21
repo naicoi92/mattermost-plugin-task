@@ -196,6 +196,14 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         changeStatus(next);
     };
 
+    // toggleCheckboxStatus is the checkbox behavior: Done ↔ In Progress only.
+    // Open (todo/in_progress) → Done; terminal (done/cancelled) → In Progress.
+    // Other transitions are done via the status pill's cycleStatus.
+    const toggleCheckboxStatus = () => {
+        const terminal = full.status === 'done' || full.status === 'cancelled';
+        changeStatus(terminal ? 'in_progress' : 'done');
+    };
+
     // cyclePriority advances the priority pill to the next value.
     const cyclePriority = async () => {
         const idx = PRIORITY_CYCLE.indexOf(full.priority || 'standard');
@@ -353,11 +361,11 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         role='checkbox'
                         aria-checked={full.status === 'done' || full.status === 'cancelled'}
                         tabIndex={0}
-                        onClick={cycleStatus}
+                        onClick={toggleCheckboxStatus}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                                 e.preventDefault();
-                                cycleStatus();
+                                toggleCheckboxStatus();
                             }
                         }}
                     >

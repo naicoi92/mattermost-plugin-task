@@ -392,7 +392,9 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 			// Parent-done guard: clear, actionable message listing the open subtasks.
 			p.writeError(w, http.StatusConflict, err.Error())
 		default:
-			p.writeError(w, http.StatusInternalServerError, err.Error())
+			p.API.LogError("Failed to set task status",
+				"task_id", id, "status", req.Status, "actor", currentUserID(r), "error", err.Error())
+			p.writeError(w, http.StatusInternalServerError, "failed to update status")
 		}
 		return
 	}

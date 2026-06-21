@@ -154,10 +154,14 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
         onSelectTask?.(taskID);
     };
 
-    // toggleDone flips a task between done and its previous open status.
+    // toggleDone flips a task between Done and In Progress via the checkbox.
+    // Open statuses (todo/in_progress) → Done. Terminal statuses (done/cancelled)
+    // → In Progress. Other transitions (todo↔cancelled, etc.) must be done from
+    // the Task Detail's status pill, not the checkbox.
     const toggleDone = async (e: React.MouseEvent, task: Task) => {
         e.stopPropagation();
-        const next = task.status === 'done' ? 'todo' : 'done';
+        const terminal = task.status === 'done' || task.status === 'cancelled';
+        const next = terminal ? 'in_progress' : 'done';
         const prev = task.status;
         setTasks((cur) => cur.map((x) => (x.id === task.id ? {...x, status: next} : x)));
         try {

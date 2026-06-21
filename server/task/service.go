@@ -156,6 +156,18 @@ type CreateInput struct {
 	Priority string
 }
 
+// ensurePriority normalizes an empty priority to the default. Tasks created
+// before the priority migration (000008) are backfilled to 'standard' by the
+// DEFAULT clause, but defensive reads can still surface an empty string in
+// edge cases (e.g. a row cached before the migration ran). Calling this before
+// any UpdateTask prevents a NOT NULL constraint violation.
+func ensurePriority(p string) string {
+	if p == "" {
+		return model.PriorityStandard
+	}
+	return p
+}
+
 // Create persists a new task atomically: the task row, its creator + assignee
 // member edges, an optional reminder, and a "created" audit event all commit
 // together via WithTx. A subtask inherits its parent's channel and (as default)
@@ -526,6 +538,7 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 
 	now := nowFunc()
 	taskutil.ApplyStatus(row, newStatus, now)
+	row.Priority = ensurePriority(row.Priority)
 
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
@@ -672,6 +685,7 @@ func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, par
 		}
 		oldStatus := sub.Status
 		taskutil.ApplyStatus(&sub, model.StatusCancelled, now)
+		sub.Priority = ensurePriority(sub.Priority)
 		if _, err := tx.UpdateTask(ctx, sub); err != nil {
 			return err
 		}
@@ -878,6 +892,7 @@ func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) 
 
 	now := nowFunc()
 	row.UpdatedAt = now
+	row.Priority = ensurePriority(row.Priority)
 
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
