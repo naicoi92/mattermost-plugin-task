@@ -4,5 +4,11 @@
   "webapp.task.quicklist": "Quick List",
   "webapp.task.subtasks.progress": "%s/%s done",
   "webapp.task.empty": "No tasks found.",
-  "webapp.task.create": "Create"
+  "webapp.task.create": "Create",
+  "webapp.task.search": "Search tasks...",
+  "webapp.task.filter.all": "All",
+  "webapp.task.filter.done": "Done",
+  "webapp.task.empty.search": "No tasks match this filter.",
+  "webapp.task.comments.post": "Post",
+  "webapp.task.assignee.placeholder": "Select assignee"
 }

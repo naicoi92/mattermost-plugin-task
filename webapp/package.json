@@ -81,7 +81,9 @@
       "^.*i18n.*\\.(json)$": "<rootDir>/tests/i18n_mock.json",
       "^bundle-loader\\?lazy\\!(.*)$": "$1",
       "^react-bootstrap$": "<rootDir>/tests/react-bootstrap-mock.js",
-      "^mattermost-redux/client$": "<rootDir>/tests/mattermost-redux-client-mock.js"
+      "^mattermost-redux/client$": "<rootDir>/tests/mattermost-redux-client-mock.js",
+      "^mattermost-redux/selectors/entities/channels$": "<rootDir>/tests/mattermost-redux-selectors-mock.js",
+      "^mattermost-redux/selectors/entities/users$": "<rootDir>/tests/mattermost-redux-selectors-mock.js"
     },
     "moduleDirectories": [
       "src",

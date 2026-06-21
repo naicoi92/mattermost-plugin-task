@@ -1,18 +1,27 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// TaskSidebar is the Right-Hand Sidebar container (issue #27 registration;
-// issue #28 builds out the Quick List + detail navigation). It is the component
-// passed to registerRightHandSidebarComponent. It renders the Quick List by
-// default; selecting a task swaps in the TaskDetailPanel, and the "+ New Task"
-// button opens the NewTaskDialog (host-driven via the onNewTask prop or the
-// NewTaskDialog root component toggled in Redux).
+// TaskSidebar is the Right-Hand Sidebar container (issue #27 registration). It
+// is the component passed to registerRightHandSidebarComponent. It renders one
+// of three views based on the Redux slice's `rhsView`:
+//   - 'list'   → QuickList
+//   - 'detail' → TaskDetailPanel (the currently selected task)
+//   - 'new'    → NewTaskDialog inline (the former desktop popup, now an RHS view)
+//
+// The current channel + user are read from the host Redux store so the New Task
+// form can derive its scope (personal vs channel) automatically.
 
-import {useFormatMessage} from 'i18n_utils';
-import React, {useEffect, useState} from 'react';
+import React, {useEffect} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import type {Channel} from '@mattermost/types/channels';
+import type {GlobalState} from '@mattermost/types/store';
+
+import {getChannel, getCurrentChannelId} from 'mattermost-redux/selectors/entities/channels';
+import {getCurrentUserId} from 'mattermost-redux/selectors/entities/users';
+
+import NewTaskDialog from 'components/new_task_dialog/new_task_dialog';
 import TaskDetailPanel from 'components/task_detail_panel/task_detail_panel';
 import QuickList from 'components/task_sidebar/quick_list';
 
@@ -21,37 +30,50 @@ import QuickList from 'components/task_sidebar/quick_list';
 const PLUGIN_STATE_KEY = 'plugins-com.mattermost.plugin-task';
 
 interface PluginState {
+    rhsView: 'list' | 'detail' | 'new';
     selectedTaskID: string;
+    newTaskDialog: {open: boolean; prefillSummary?: string; prefillDescription?: string; channelID?: string};
 }
 
-type GlobalStateWithPlugin = Record<string, unknown> & {
+type GlobalStateWithPlugin = GlobalState & {
     [PLUGIN_STATE_KEY]?: PluginState;
 };
 
-function selectSelectedTaskID(state: GlobalStateWithPlugin): string {
-    return state[PLUGIN_STATE_KEY]?.selectedTaskID ?? '';
+function selectSlice(state: GlobalStateWithPlugin): PluginState {
+    return state[PLUGIN_STATE_KEY] ?? {
+        rhsView: 'list',
+        selectedTaskID: '',
+        newTaskDialog: {open: false},
+    };
 }
 
 export interface TaskSidebarProps {
 
-    // channelID is the context channel passed to QuickList / NewTaskDialog.
+    // channelID overrides the host-derived current channel (e.g. when the host
+    // pins the RHS to a specific channel).
     channelID?: string;
 
-    // currentUserID gates task detail delete and drives the "mine" scope.
+    // currentUserID overrides the host-derived current user.
     currentUserID?: string;
 
-    // onNewTask opens the New Task dialog (host-driven).
+    // onNewTask opens the New Task view (host-driven). When omitted the sidebar
+    // dispatches OPEN_NEW_TASK_DIALOG itself.
     onNewTask?: () => void;
 }
 
 export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskSidebarProps): JSX.Element {
     const dispatch = useDispatch();
-    const t = useFormatMessage();
-    const selectedTaskID = useSelector(selectSelectedTaskID);
+    const slice = useSelector(selectSlice);
 
-    // Local view state so clicking a task swaps to detail even before the store
-    // selection lands; the store is the source of truth for cross-view sync.
-    const [detailID, setDetailID] = useState('');
+    // Current channel + user from the host store. Falls back to the prop when
+    // the host store isn't populated (tests / edge cases). Hooks are called
+    // unconditionally (rules-of-hooks); the channel selector returns undefined
+    // when the id is empty, which getChannel handles gracefully.
+    const hostChannelID = useSelector(getCurrentChannelId) || channelID || '';
+    const hostUserID = useSelector(getCurrentUserId) || currentUserID || '';
+    const channel: Channel | undefined = useSelector((s: GlobalStateWithPlugin) =>
+        (hostChannelID ? getChannel(s, hostChannelID) : undefined),
+    );
 
     // The RHS is considered open while it is mounted; record that so the
     // channel header button reflects state and the detail panel knows it can
@@ -63,37 +85,49 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
         };
     }, [dispatch]);
 
-    const showDetailID = detailID || selectedTaskID;
+    const openNewTask = onNewTask ?? (() => dispatch({
+        type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+        channelID: hostChannelID,
+    }));
 
     const backToList = () => {
-        setDetailID('');
+        if (slice.rhsView === 'new') {
+            dispatch({type: ACTION_TYPES.CLOSE_NEW_TASK_DIALOG});
+            return;
+        }
         dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: ''});
     };
 
-    // openNewTask opens the New Task dialog. When the host supplies onNewTask
-    // (legacy/imperative path), defer to it; otherwise dispatch into the store so
-    // the ConnectedNewTaskDialog root component opens, passing the channel context
-    // so the dialog keeps channel scope when opened from a channel RHS.
-    const openNewTask = onNewTask ?? (() => dispatch({
-        type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
-        channelID,
-    }));
-
     return (
-        <div className='task-rhs'>
-            <div className='task-rhs__title'>{t('webapp.task.title')}</div>
+        <div
+            className='task-rhs'
+            data-theme={undefined}
+        >
             <div className='task-rhs__body'>
-                {showDetailID ? (
-                    <TaskDetailPanel
-                        taskID={showDetailID}
-                        onBack={backToList}
-                        currentUserID={currentUserID}
+                {slice.rhsView === 'new' && (
+                    <NewTaskDialog
+                        visible={true}
+                        channelID={slice.newTaskDialog.channelID ?? hostChannelID}
+                        channel={channel ?? null}
+                        currentUserID={hostUserID}
+                        initialSummary={slice.newTaskDialog.prefillSummary}
+                        initialDescription={slice.newTaskDialog.prefillDescription}
+                        onClose={backToList}
                     />
-                ) : (
+                )}
+                {slice.rhsView === 'detail' && (
+                    <TaskDetailPanel
+                        taskID={slice.selectedTaskID}
+                        onBack={backToList}
+                        currentUserID={hostUserID}
+                        onOpenSubtask={(id) => dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})}
+                    />
+                )}
+                {slice.rhsView === 'list' && (
                     <QuickList
-                        channelID={channelID}
-                        currentUserID={currentUserID}
-                        onSelectTask={(id) => setDetailID(id)}
+                        channelID={hostChannelID}
+                        currentUserID={hostUserID}
+                        onSelectTask={(id) => dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})}
                         onNewTask={openNewTask}
                     />
                 )}

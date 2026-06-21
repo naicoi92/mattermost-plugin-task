@@ -41,6 +41,12 @@ import vi from '../i18n/vi.json';
 // and Task Detail panel render with no styling at all.
 import './styles/index.scss';
 
+// rhsOpener opens the plugin's Right-Hand Sidebar. It is captured during
+// initialize (registry is only safely usable there) so the composer "New Task"
+// button and the post-dropdown "Tạo task" action can open the RHS and route the
+// New Task form into it. Default no-op until initialize runs.
+let rhsOpener: () => void = () => {};
+
 // getTranslationsForLocale returns the JSON bundle for the requested locale, or
 // the English bundle as a safe fallback. Used by registerTranslations (#33);
 // the same files are the single source of truth copied from assets/i18n/ by the
@@ -81,6 +87,10 @@ export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Eleme
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const onClick = () => {
+        // Open the RHS first so the inline New Task form has somewhere to
+        // render, then dispatch the open-new-task action with the draft's
+        // channel id so the form derives the right scope.
+        rhsOpener();
         dispatch({
             type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
             channelID: draft?.channelId,
@@ -117,9 +127,13 @@ export default class Plugin {
     public async initialize(registry: PluginRegistry, store: Store<GlobalState>) {
         this.store = store;
 
-        // Register the RHS. The returned toggle action opens/closes the sidebar;
-        // the channel header button below dispatches it.
+        // Register the RHS. The returned action creators open/close/toggle the
+        // sidebar; showRHSPlugin is captured at module scope so the composer
+        // "New Task" button and the post-dropdown "Tạo task" action can open the
+        // RHS (and route the New Task form into it) without re-deriving it —
+        // registry is only safely usable inside initialize.
         const {showRHSPlugin} = registry.registerRightHandSidebarComponent(TaskSidebar, 'Tasks');
+        rhsOpener = () => store.dispatch(showRHSPlugin);
 
         // Channel header button: opens the RHS. The icon is a simple checkmark
         // glyph; a richer SVG can replace it without changing the contract.
@@ -197,6 +211,12 @@ export function openNewTaskFromMessage(store: Store<GlobalState>, postId?: strin
     const post = postId ? resolvePost(store.getState(), postId) : undefined;
     const message = post?.message ?? '';
     const {summary, description} = splitMessageForTask(message);
+
+    // Open the RHS so the inline New Task form (now an RHS view) has somewhere
+    // to render, then dispatch the open-new-task action with the prefilled
+    // summary/description and the source channel id so the form derives the
+    // right scope.
+    rhsOpener();
     store.dispatch({
         type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
         prefillSummary: summary,

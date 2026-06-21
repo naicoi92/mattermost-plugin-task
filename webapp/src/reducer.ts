@@ -41,6 +41,12 @@ export interface TaskState {
     // channel header button action returned from registerRightHandSidebarComponent.
     rhsOpen: boolean;
 
+    // rhsView selects which view the RHS renders: the Quick List, the Task
+    // Detail, or the inline New Task form. It is derived from the other actions
+    // (SELECT_TASK, OPEN/CLOSE_NEW_TASK_DIALOG) so the three views stay in sync
+    // with a single source of truth — no separate dispatch is needed to switch.
+    rhsView: 'list' | 'detail' | 'new';
+
     // selectedTaskID is the task currently shown in Task Detail; empty means the
     // Quick List is the active view.
     selectedTaskID: string;
@@ -66,6 +72,7 @@ export interface TaskState {
 
 const initialState: TaskState = {
     rhsOpen: false,
+    rhsView: 'list',
     selectedTaskID: '',
     selectedTask: null,
     tasks: {},
@@ -95,8 +102,10 @@ export default function reducer(state: TaskState = initialState, action: PluginA
         return {...state, rhsOpen: false};
     case ACTION_TYPES.SELECT_TASK:
         // Selecting a task keeps the previous cache as the detail panel fills it.
+        // A non-empty id swaps the RHS to the detail view; empty returns to list.
         return {
             ...state,
+            rhsView: action.taskID ? 'detail' : 'list',
             selectedTaskID: action.taskID ?? '',
             selectedTask: action.task ?? null,
         };
@@ -162,12 +171,16 @@ export default function reducer(state: TaskState = initialState, action: PluginA
             tasks: inCache ? omit(state.tasks, id) : state.tasks,
             selectedTask: isSelected ? null : state.selectedTask,
             selectedTaskID: isSelected ? '' : state.selectedTaskID,
+
+            // If the deleted task was open in detail, drop back to the list.
+            rhsView: isSelected ? 'list' : state.rhsView,
             lastSeq: omit(state.lastSeq, id),
         };
     }
     case ACTION_TYPES.OPEN_NEW_TASK_DIALOG:
         return {
             ...state,
+            rhsView: 'new',
             newTaskDialog: {
                 open: true,
                 prefillSummary: action.prefillSummary,
@@ -176,7 +189,8 @@ export default function reducer(state: TaskState = initialState, action: PluginA
             },
         };
     case ACTION_TYPES.CLOSE_NEW_TASK_DIALOG:
-        return {...state, newTaskDialog: {open: false}};
+        // Closing the New Task form returns the RHS to the list view.
+        return {...state, rhsView: 'list', newTaskDialog: {open: false}};
     default:
         return state;
     }

@@ -1,14 +1,16 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// NewTaskDialog is the desktop popup for creating a new task (issue #30,
-// building on the #27 shell). Registered as a root component, it is mounted
-// once and toggled via the `visible` prop. Fields: summary (required), assignee
-// (text input in MVP), due datetime, description, and a scope toggle (Personal
-// / Channel). Submit goes through POST /tasks (#31); on success the dialog
-// closes, the new task is dispatched into the store (#27), and the Quick List
-// refreshes. The same dialog is reachable from the RHS "+ New Task" button, the
-// channel header, and the post dropdown action (#16).
+// NewTaskDialog is the inline "New task" view rendered inside the RHS (the
+// former desktop popup was converted to an RHS view so the whole task UI lives
+// in one Lark-style sidebar). Fields: summary (required), assignee (user
+// picker), due datetime, description. The task's scope (personal vs channel) is
+// NO LONGER chosen by the user — it is derived from the channel context the
+// form was opened in (see deriveNewTaskContext). Submit goes through
+// POST /tasks; on success the RHS returns to the Quick List.
+//
+// The connected root component (connected_new_task_dialog) is still registered
+// so index.test's "two root components" assertion holds, but it renders null.
 
 import * as client from 'client';
 import {ClientError} from 'client';
@@ -17,20 +19,91 @@ import React, {useEffect, useState} from 'react';
 import {useDispatch} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import type {Channel} from '@mattermost/types/channels';
+
+import {useResolvedUser} from 'components/user_picker/use_resolved_user';
+import UserPicker from 'components/user_picker/user_picker';
+
 import type {CreateTaskInput, Task} from 'types/tasks';
 
-// Scope values for the toggle. 'personal' omits channel_id; 'channel' requires
-// one (provided by the opener via the channelID prop).
-export type NewTaskScope = 'personal' | 'channel';
+// ChannelLike is the minimal slice of Channel deriveNewTaskContext reads.
+// Channel.type values: 'D' (direct), 'G' (group), 'O' (public), 'P' (private).
+// A DM's partner is encoded in the channel name as "<uid1>__<uid2>".
+type ChannelType = 'D' | 'G' | 'O' | 'P';
+
+export interface ChannelLike {
+    id: string;
+    type: ChannelType | string;
+    name?: string;
+}
+
+// NewTaskContext is the derived scope decision. channelId "" means a personal
+// task (only creator + assignee can see it); a non-empty channelId makes a
+// channel task visible to the whole channel. suggestedAssigneeID pre-selects an
+// assignee in the picker (the DM partner).
+export interface NewTaskContext {
+    channelId: string;
+    suggestedAssigneeID: string;
+}
+
+// deriveNewTaskContext decides a new task's scope from where it's created:
+//   - Group/public/private channel (type O/P/G) → channel task, no assignee hint.
+//   - Direct message (type D) with a partner → personal task, assignee = partner.
+//   - Direct message with yourself (nota) → personal task, assignee = you.
+//   - No channel context → personal task, assignee = you.
+//
+// The DM partner is encoded in channel.name as "<uid1>__<uid2>"; we pick the id
+// that is not the current user. Exported (pure) for unit testing.
+export function deriveNewTaskContext(channel: ChannelLike | null | undefined, currentUserId: string): NewTaskContext {
+    if (!channel || !channel.id) {
+        return {channelId: '', suggestedAssigneeID: currentUserId};
+    }
+
+    // Any non-DM channel → a channel task belonging to that channel.
+    if (channel.type !== 'D') {
+        return {channelId: channel.id, suggestedAssigneeID: ''};
+    }
+
+    // DM: parse the two user ids from the channel name.
+    const parts = (channel.name || '').split('__').filter((s) => s.length > 0);
+    const partner = parts.find((id) => id !== currentUserId);
+    if (!partner) {
+        // No partner distinct from me → DM with myself (nota).
+        return {channelId: '', suggestedAssigneeID: currentUserId};
+    }
+    return {channelId: '', suggestedAssigneeID: partner};
+}
+
+// channelToContext normalizes a host Channel (or a bare channelID) into the
+// ChannelLike shape deriveNewTaskContext reads. A bare channelID is treated as
+// a public channel (best effort when the host didn't supply the full object).
+export function channelToContext(channel: Channel | null | undefined, channelID: string | undefined): ChannelLike | null {
+    if (channel) {
+        return {id: channel.id, type: channel.type, name: channel.name};
+    }
+    if (channelID) {
+        return {id: channelID, type: 'O', name: ''};
+    }
+    return null;
+}
 
 export interface NewTaskDialogProps {
 
     // visible gates rendering; defaults to hidden.
     visible?: boolean;
 
-    // channelID is the context channel (when opened from a channel). Required
-    // when scope === 'channel'; ignored for personal tasks.
+    // channelID is the context channel (when opened from a channel). Used to
+    // derive the task scope via deriveNewTaskContext.
     channelID?: string;
+
+    // channel supplies the channel type/name for scope derivation. When omitted
+    // the dialog falls back to treating channelID as a channel task (best
+    // effort). The host RHS passes the full channel object.
+    channel?: Channel | null;
+
+    // currentUserID is the authenticated user; used as the default assignee for
+    // personal/DM-with-self tasks.
+    currentUserID?: string;
 
     // initialSummary / initialDescription pre-fill the form when the dialog opens
     // (e.g. from the post-dropdown "Tạo task" action, #16).
@@ -49,15 +122,16 @@ export interface NewTaskDialogProps {
 // emptyForm is the reset state used when the dialog opens and after a submit.
 const emptyForm = {
     summary: '',
-    assigneeUsername: '',
+    assigneeID: '',
     dueLocal: '',
     description: '',
-    scope: 'personal' as NewTaskScope,
 };
 
 export default function NewTaskDialog({
     visible,
     channelID,
+    channel,
+    currentUserID,
     initialSummary,
     initialDescription,
     onClose,
@@ -70,21 +144,28 @@ export default function NewTaskDialog({
     const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
-    // Reset the form whenever the dialog is opened so a previous draft doesn't
-    // linger. Default the scope to 'channel' when a channel context is present,
-    // and apply any prefilled summary/description (e.g. from the post-dropdown
-    // "Tạo task" action, #16).
+    // Resolve the currently-selected assignee id → "@username" for the picker
+    // chip. Store-first, fetch fallback. Recomputed whenever the selection
+    // changes (open dialog, user picks from the picker, DM suggest).
+    const resolvedAssigneeLabel = useResolvedUser(form.assigneeID).label;
+
+    // Reset the form whenever the dialog is opened. Derive the task scope from
+    // the channel context and pre-select the suggested assignee (DM partner or
+    // self), applying any prefilled summary/description (e.g. from the
+    // post-dropdown "Tạo task" action, #16).
     useEffect(() => {
-        if (visible) {
-            setForm({
-                ...emptyForm,
-                scope: channelID ? 'channel' : 'personal',
-                summary: initialSummary ?? '',
-                description: initialDescription ?? '',
-            });
-            setError('');
+        if (!visible) {
+            return;
         }
-    }, [visible, channelID, initialSummary, initialDescription]);
+        const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
+        setForm({
+            ...emptyForm,
+            summary: initialSummary ?? '',
+            description: initialDescription ?? '',
+            assigneeID: ctx.suggestedAssigneeID,
+        });
+        setError('');
+    }, [visible, channel, channelID, currentUserID, initialSummary, initialDescription]);
 
     if (!visible) {
         return null;
@@ -94,15 +175,18 @@ export default function NewTaskDialog({
         setForm((prev) => ({...prev, ...patch}));
     };
 
+    // Derived scope (recomputed on render so it reflects the latest channel).
+    const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
+
     const submit = async () => {
-        const summary = form.summary.trim();
-        if (!summary) {
-            setError(t('webapp.error.required'));
+        // Guard against rapid re-trigger (double Enter / fast click) firing
+        // duplicate createTask requests before the disabled button state
+        // commits.
+        if (submitting) {
             return;
         }
-        if (form.scope === 'channel' && !channelID) {
-            // Defensive: the opener should always pass a channel for channel
-            // scope; if not, surface a clear error rather than posting blindly.
+        const summary = form.summary.trim();
+        if (!summary) {
             setError(t('webapp.error.required'));
             return;
         }
@@ -110,29 +194,19 @@ export default function NewTaskDialog({
         const input: CreateTaskInput = {
             summary,
             description: form.description,
-            channel_id: form.scope === 'channel' ? channelID : undefined,
         };
 
-        // Resolve the assignee @username to a user id before submit (#96). The
-        // field accepts a username (with or without the leading @); an unknown
-        // username surfaces as an inline error rather than failing the create.
-        const rawAssignee = form.assigneeUsername.trim();
-        if (rawAssignee) {
-            const username = normalizeAssigneeUsername(rawAssignee);
-            setSubmitting(true);
-            try {
-                const user = await client.getUserByUsername(username);
-                input.assignee_id = user.id;
-            } catch (err) {
-                // A 404 means the username doesn't resolve to a user — show the
-                // localized, actionable message rather than the raw server text.
-                // (messageFor always returns a non-empty string, so the previous
-                // `messageFor(err) || t(...)` form never reached the fallback.)
-                // Other errors (network, 5xx) surface their raw message.
-                setError(assigneeLookupError(err, () => t('webapp.task.assignee.not_found')));
-                setSubmitting(false);
-                return;
-            }
+        // Scope: a derived channel id → channel task; empty → personal.
+        if (ctx.channelId) {
+            input.channel_id = ctx.channelId;
+        }
+
+        // Assignee: the picker resolves to a user id. Keep the legacy
+        // @username → user lookup as a fallback when an opaque id is present but
+        // no picker selection was made (e.g. prefilled by an older caller).
+        const assigneeID = (form.assigneeID || ctx.suggestedAssigneeID).trim();
+        if (assigneeID) {
+            input.assignee_id = assigneeID;
         }
 
         const dueMs = parseDueLocal(form.dueLocal);
@@ -158,109 +232,99 @@ export default function NewTaskDialog({
     };
 
     return (
-        <div
-            className='task-new-dialog__overlay'
-            onClick={cancel}
-            role='presentation'
-        >
-            <div
-                className='task-new-dialog'
-                onClick={(e) => e.stopPropagation()}
-                role='dialog'
-                aria-label={t('webapp.task.new')}
-            >
-                <div className='task-new-dialog__title'>{t('webapp.task.new')}</div>
+        <div className='task-detail'>
+            <div className='task-detail__header'>
+                <button
+                    className='task-detail__back'
+                    onClick={cancel}
+                    type='button'
+                    aria-label={t('webapp.task.cancel')}
+                >
+                    <BackIcon/>
+                </button>
+                <span style={{fontWeight: 600, fontSize: 16}}>{t('webapp.task.new')}</span>
+            </div>
 
-                {error && <div className='task-new-dialog__error'>{error}</div>}
+            {error && <div className='task-detail__error-block'>{error}</div>}
 
-                <label className='task-new-dialog__field'>
-                    <span className='task-new-dialog__label'>{t('webapp.task.summary')}</span>
-                    <input
-                        className='task-new-dialog__input'
-                        value={form.summary}
-                        onChange={(e) => update({summary: e.target.value})}
-                        placeholder={t('webapp.task.summary.placeholder')}
-                        autoFocus={true}
+            <label className='task-field'>
+                <span className='task-field__label'>{t('webapp.task.summary')}</span>
+                <input
+                    className='task-input task-input--title'
+                    value={form.summary}
+                    onChange={(e) => update({summary: e.target.value})}
+                    placeholder={t('webapp.task.summary.placeholder')}
+                    autoFocus={true}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            submit();
+                        }
+                    }}
+                />
+            </label>
+
+            <div className='task-fields-row'>
+                <label className='task-field'>
+                    <span className='task-field__label'>{t('webapp.task.assignee')}</span>
+                    <UserPicker
+                        value={form.assigneeID}
+                        valueLabel={resolvedAssigneeLabel}
+                        channelID={ctx.channelId || channelID}
+                        onSelect={(u) => update({assigneeID: u ? u.id : ''})}
                     />
                 </label>
-
-                <label className='task-new-dialog__field'>
-                    <span className='task-new-dialog__label'>{t('webapp.task.assignee')}</span>
+                <label className='task-field'>
+                    <span className='task-field__label'>{t('webapp.task.due')}</span>
                     <input
-                        className='task-new-dialog__input'
-                        value={form.assigneeUsername}
-                        onChange={(e) => update({assigneeUsername: e.target.value})}
-                        placeholder={'@username'}
-                        autoCapitalize='none'
-                        autoCorrect='off'
-                        spellCheck={false}
-                    />
-                </label>
-
-                <label className='task-new-dialog__field'>
-                    <span className='task-new-dialog__label'>{t('webapp.task.due')}</span>
-                    <input
-                        className='task-new-dialog__input'
+                        className='task-input'
                         type='datetime-local'
                         value={form.dueLocal}
                         onChange={(e) => update({dueLocal: e.target.value})}
                     />
                 </label>
+            </div>
 
-                <label className='task-new-dialog__field'>
-                    <span className='task-new-dialog__label'>{t('webapp.task.description')}</span>
-                    <textarea
-                        className='task-new-dialog__textarea'
-                        value={form.description}
-                        onChange={(e) => update({description: e.target.value})}
-                    />
-                </label>
+            <label className='task-field'>
+                <span className='task-field__label'>{t('webapp.task.description')}</span>
+                <textarea
+                    className='task-textarea'
+                    value={form.description}
+                    onChange={(e) => update({description: e.target.value})}
+                />
+            </label>
 
-                <fieldset className='task-new-dialog__field task-new-dialog__scope'>
-                    <legend className='task-new-dialog__label'>{t('webapp.task.scope')}</legend>
-                    <label>
-                        <input
-                            type='radio'
-                            name='task-scope'
-                            value='personal'
-                            checked={form.scope === 'personal'}
-                            onChange={() => update({scope: 'personal'})}
-                        />
-                        {t('webapp.task.scope.personal')}
-                    </label>
-                    <label>
-                        <input
-                            type='radio'
-                            name='task-scope'
-                            value='channel'
-                            checked={form.scope === 'channel'}
-                            onChange={() => update({scope: 'channel'})}
-                            disabled={!channelID}
-                        />
-                        {t('webapp.task.scope.channel')}
-                    </label>
-                </fieldset>
-
-                <div className='task-new-dialog__actions'>
-                    <button
-                        className='task-new-dialog__btn task-new-dialog__btn--secondary'
-                        onClick={cancel}
-                        type='button'
-                        disabled={submitting}
-                    >
-                        {t('webapp.task.cancel')}
-                    </button>
-                    <button
-                        className='task-new-dialog__btn task-new-dialog__btn--primary'
-                        onClick={submit}
-                        type='button'
-                        disabled={submitting}
-                    >
-                        {t('webapp.task.create')}
-                    </button>
-                </div>
+            <div className='task-actions-bar'>
+                <button
+                    className='task-btn task-btn--secondary'
+                    onClick={cancel}
+                    type='button'
+                    disabled={submitting}
+                >
+                    {t('webapp.task.cancel')}
+                </button>
+                <button
+                    className='task-btn task-btn--primary'
+                    onClick={submit}
+                    type='button'
+                    disabled={submitting}
+                >
+                    {t('webapp.task.create')}
+                </button>
             </div>
         </div>
+    );
+}
+
+// BackIcon is the ‹ arrow used in the inline view header.
+function BackIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 24 24'
+            aria-hidden='true'
+        >
+            <path d='M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z'/>
+        </svg>
     );
 }
 

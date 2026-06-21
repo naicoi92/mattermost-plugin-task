@@ -7,7 +7,7 @@
 
 import {ClientError} from 'client';
 
-import {buildParams, formatDueShort, isOverdue, messageFor} from 'components/task_sidebar/quick_list';
+import {buildParams, formatDueShort, isOverdue, messageFor, truncateDescription} from 'components/task_sidebar/quick_list';
 
 import type {Task} from 'types/tasks';
 
@@ -133,5 +133,43 @@ describe('messageFor', () => {
 
     test('a non-Error value falls back', () => {
         expect(messageFor(null)).toBe('request failed');
+    });
+});
+
+describe('truncateDescription', () => {
+    test('short text is returned unchanged', () => {
+        expect(truncateDescription('Fix the login bug')).toBe('Fix the login bug');
+    });
+
+    test('whitespace runs (including newlines) collapse to single spaces', () => {
+        expect(truncateDescription('line one\n\nline two\ttabbed')).toBe('line one line two tabbed');
+    });
+
+    test('text over the limit is cut at a word boundary and suffixed with ellipsis', () => {
+        const text = 'This is a fairly long description that definitely exceeds the one hundred character limit we set for the preview row';
+        const out = truncateDescription(text);
+        expect(out.length).toBeLessThan(text.length);
+        expect(out.endsWith('…')).toBe(true);
+
+        // The cut lands at a word boundary: the full word right before the
+        // ellipsis must also appear in the original text (not a partial token).
+        const lastWord = out.slice(0, -1).split(' ').pop() || '';
+        expect(text).toContain(lastWord);
+    });
+
+    test('a single long token with no spaces falls back to a hard cut', () => {
+        const token = 'a'.repeat(200);
+        const out = truncateDescription(token);
+        expect(out.length).toBe(101); // 100 chars + ellipsis
+        expect(out.endsWith('…')).toBe(true);
+    });
+
+    test('a custom maxChars is honored', () => {
+        expect(truncateDescription('one two three four', 10)).toBe('one two…');
+    });
+
+    test('empty/whitespace-only input collapses to empty', () => {
+        expect(truncateDescription('   ')).toBe('');
+        expect(truncateDescription('\n\t')).toBe('');
     });
 });
