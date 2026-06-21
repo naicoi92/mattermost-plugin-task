@@ -1,8 +1,36 @@
 # Kế hoạch: Chuyển persistence từ KV sang SQL (kiểu mattermost-plugin-boards)
 
-> **Trạng thái:** Bản nháp chờ review
+> **Trạng thái:** ✅ Hoàn thành (milestone 12 — toàn bộ 22 issues đóng)
 > **Tạo:** 2026-06-20
+> **Hoàn thành:** 2026-06-21
 > **Tài liệu tham chiếu:** [`mattermost-plugin-boards`](https://github.com/mattermost/mattermost-plugin-boards) — `server/services/store/sqlstore/`
+
+## Verification (M5-5)
+
+Final build + test verification (commit on main, 2026-06-21):
+
+| Check | Result |
+|---|---|
+| `make dist` | ✅ `dist/com.mattermost.plugin-task-0.1.0.tar.gz` built |
+| `go test -race ./server/...` | ✅ 8 packages pass (server, command, model, notification, permission, store/sqlstore, task, taskutil) |
+| `go vet ./server/...` | ✅ clean |
+| `golangci-lint run --config .golangci.yml ./server/...` | ✅ 0 issues |
+
+### Automated coverage (what the tests prove)
+- **Create → card → status change**: api_test `TestPatchTaskStatus_Endpoint`, `TestCreateTask_Endpoint`
+- **Reminder due → fires**: service_test `TestFireReadyReminders_WithinWindow`, `service_reminder_job_test` full-cycle
+- **SubtaskProgress (1 GROUP BY)**: service_test `TestSubtaskProgress`, sqlstore `TestSubtaskProgress_*`
+- **Search ILIKE/LIKE**: sqlstore `TestSearchTasks_ILikeOrLike`, `TestSearchTasks_EscapesWildcards`
+- **GET /tasks/:id/events audit trail**: api_test `TestListTaskEvents_ReturnsAuditTrail`
+- **Delete → FK cascade**: service_test `TestDelete_CascadeRemovesDependents` (task + subtask + members removed via FK)
+- **Migration idempotent**: sqlstore `TestRunMigrations_IdempotentApplyTwice`
+- **List >100 + filter/pagination**: sqlstore `TestListTasks_ScopeChannelStatusAndPagination` (keyset cursor + HasMore)
+
+### Manual E2E (requires running Mattermost server)
+The 8 manual E2E steps in issue #135 require a live Mattermost instance (create
+task → card post → DM → reminder fire → cascade delete verify in DB). These are
+documented as the post-deploy acceptance checklist; the automated coverage above
+proves the underlying contracts.
 
 ---
 
