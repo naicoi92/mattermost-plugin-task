@@ -500,8 +500,16 @@ func TestListTaskEvents_ReturnsAuditTrail(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &events))
 	// created + status_changed + assigned (at minimum).
 	assert.GreaterOrEqual(t, len(events), 3, "expected created + status_changed + assigned events")
-	// Newest-first ordering.
-	assert.True(t, events[0].CreatedAt >= events[len(events)-1].CreatedAt)
+	// Newest-first ordering across the entire slice (pairwise, ID tie-break).
+	for i := 1; i < len(events); i++ {
+		prev, cur := events[i-1], events[i]
+		assert.True(
+			t,
+			prev.CreatedAt > cur.CreatedAt ||
+				(prev.CreatedAt == cur.CreatedAt && prev.ID >= cur.ID),
+			"events not newest-first at index %d", i,
+		)
+	}
 }
 
 func TestListTaskEvents_ForbiddenForNonParticipant(t *testing.T) {
