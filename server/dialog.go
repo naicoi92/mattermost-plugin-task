@@ -394,21 +394,21 @@ func (p *Plugin) submitTaskDetailDialog(w http.ResponseWriter, r *http.Request) 
 	var failed string
 
 	if len(update.Patch.UpdateFields) > 0 {
-		if _, err := p.taskService.Patch(taskID, update.Patch); err != nil {
+		if _, err := p.taskService.Patch(req.UserId, taskID, update.Patch); err != nil {
 			failed = "save fields"
 		} else {
 			applied = append(applied, "fields")
 		}
 	}
 	if failed == "" && update.NewStatus != "" {
-		if _, err := p.taskService.SetStatus(taskID, update.NewStatus); err != nil {
+		if _, err := p.taskService.SetStatus(req.UserId, taskID, update.NewStatus); err != nil {
 			failed = "change status"
 		} else {
 			applied = append(applied, "status")
 		}
 	}
 	if failed == "" && update.AssigneeSet {
-		if _, _, err := p.taskService.Assign(taskID, update.NewAssignee); err != nil {
+		if _, _, err := p.taskService.Assign(req.UserId, taskID, update.NewAssignee); err != nil {
 			failed = "change assignee"
 		} else {
 			applied = append(applied, "assignee")

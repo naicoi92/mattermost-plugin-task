@@ -10,7 +10,10 @@ package task
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -245,12 +248,14 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 			}
 		}
 
+		createdSnapshot := snapshotTaskJSON(&row)
 		if err := tx.AppendTaskEvent(txCtx, model.TaskEvent{
 			ID:        taskutil.GenerateULID(),
 			TaskID:    row.ID,
 			ActorID:   in.CreatorID,
 			EventType: model.EventCreated,
 			CreatedAt: now,
+			ToValue:   &createdSnapshot,
 		}); err != nil {
 			return err
 		}
@@ -342,6 +347,7 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 			ActorID:   userID,
 			EventType: model.EventCommented,
 			CreatedAt: now,
+			ToValue:   ptrString(commentID),
 		})
 	}); err != nil {
 		return model.TaskComment{}, CommentEvent{}, err
@@ -402,10 +408,26 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 		return nil, err
 	}
 
-	ctx, cancel := s.ctx()
-	defer cancel()
-	if err := s.store.TouchTaskUpdatedAt(ctx, parentID, created.CreatedAt); err != nil {
-		s.logUnexpected("failed to touch parent UpdatedAt after subtask creation", err)
+	// Record a subtask_added audit event on the PARENT and bump its
+	// UpdatedAt, atomically. The parent's WS seq advancing lets a card show
+	// the new subtask progress immediately.
+	now := created.CreatedAt
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		if err := tx.TouchTaskUpdatedAt(txCtx, parentID, now); err != nil {
+			return err
+		}
+		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    parentID,
+			ActorID:   creatorID,
+			EventType: model.EventSubtaskAdded,
+			CreatedAt: now,
+			ToValue:   ptrString(created.ID),
+		})
+	}); err != nil {
+		s.logUnexpected("failed to record subtask_added event / touch parent", err)
 	}
 	return created, nil
 }
@@ -452,7 +474,7 @@ func (s *Service) SetPostIDs(id, channelPostID, dmPostID string) (*model.Task, e
 // A "status_changed" audit event is appended in the same transaction.
 var ErrInvalidStatus = errors.New("invalid status")
 
-func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
+func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) {
 	if !model.IsValidStatus(newStatus) {
 		return nil, ErrInvalidStatus
 	}
@@ -465,6 +487,7 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 	if row.Status == newStatus {
 		return s.assembleTask(ctx, row)
 	}
+	oldStatus := row.Status
 
 	// Parent-done guard: a parent can only reach done once all direct subtasks
 	// are terminal. Checked before the transition so the task isn't left
@@ -491,7 +514,7 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 
 		// Cascade-cancel open subtasks when the parent is cancelled.
 		if newStatus == model.StatusCancelled {
-			if err := s.cascadeCancelSubtasks(txCtx, tx, id); err != nil {
+			if err := s.cascadeCancelSubtasks(txCtx, tx, id, actorID, now); err != nil {
 				return err
 			}
 		}
@@ -519,8 +542,10 @@ func (s *Service) SetStatus(id, newStatus string) (*model.Task, error) {
 		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
 			ID:        taskutil.GenerateULID(),
 			TaskID:    id,
+			ActorID:   actorID,
 			EventType: model.EventStatusChanged,
 			CreatedAt: now,
+			FromValue: ptrString(oldStatus),
 			ToValue:   ptrString(newStatus),
 		})
 	}); err != nil {
@@ -611,19 +636,33 @@ var ErrSubtaskCycle = errors.New("subtask would form a cycle or exceed the nesti
 // cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
 // cancelled, issuing UpdateTask per subtask inside the already-open tx. Already
 // terminal subtasks are left untouched.
-func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID string) error {
+func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID, actorID string, now int64) error {
 	subs, err := tx.ListSubtasks(ctx, parentID)
 	if err != nil {
 		return errors.Wrap(err, "failed to list subtasks for cascade cancel")
 	}
-	now := nowFunc()
 	for i := range subs {
 		sub := subs[i]
 		if model.IsTerminalStatus(sub.Status) {
 			continue
 		}
+		oldStatus := sub.Status
 		taskutil.ApplyStatus(&sub, model.StatusCancelled, now)
 		if _, err := tx.UpdateTask(ctx, sub); err != nil {
+			return err
+		}
+		// Audit each cascade-cancelled subtask so the trail records the
+		// system-initiated cancellation (from open -> cancelled).
+		from, to := oldStatus, model.StatusCancelled
+		if err := tx.AppendTaskEvent(ctx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    sub.ID,
+			ActorID:   actorID,
+			EventType: model.EventStatusChanged,
+			CreatedAt: now,
+			FromValue: &from,
+			ToValue:   &to,
+		}); err != nil {
 			return err
 		}
 	}
@@ -633,7 +672,7 @@ func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, par
 // SetReminder sets the reminder offset (ms before due) on the task. The task
 // must have a due date; offset must be > 0. The reminder's fired_at is reset on
 // set (ON CONFLICT DO UPDATE in the store) so the reminder can fire fresh.
-func (s *Service) SetReminder(id string, offsetMS int64) (*model.Task, error) {
+func (s *Service) SetReminder(actorID, id string, offsetMS int64) (*model.Task, error) {
 	if offsetMS <= 0 {
 		return nil, errors.New("reminder offset must be positive")
 	}
@@ -660,9 +699,10 @@ func (s *Service) SetReminder(id string, offsetMS int64) (*model.Task, error) {
 		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
 			ID:        taskutil.GenerateULID(),
 			TaskID:    id,
+			ActorID:   actorID,
 			EventType: model.EventReminderSet,
 			CreatedAt: now,
-			ToValue:   ptrString("offset_ms"),
+			ToValue:   ptrString(strconv.FormatInt(offsetMS, 10)),
 		})
 	}); err != nil {
 		return nil, err
@@ -671,7 +711,7 @@ func (s *Service) SetReminder(id string, offsetMS int64) (*model.Task, error) {
 }
 
 // ClearReminder removes the reminder from the task.
-func (s *Service) ClearReminder(id string) (*model.Task, error) {
+func (s *Service) ClearReminder(actorID, id string) (*model.Task, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	if _, err := s.loadTaskRow(ctx, id); err != nil {
@@ -691,6 +731,7 @@ func (s *Service) ClearReminder(id string) (*model.Task, error) {
 		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
 			ID:        taskutil.GenerateULID(),
 			TaskID:    id,
+			ActorID:   actorID,
 			EventType: model.EventReminderCleared,
 			CreatedAt: now,
 		})
@@ -728,6 +769,7 @@ func (s *Service) MarkReminderFired(reminderID, taskID string) error {
 		return tx.AppendTaskEvent(ctx, model.TaskEvent{
 			ID:        taskutil.GenerateULID(),
 			TaskID:    taskID,
+			ActorID:   "system", // reminder job has no human actor
 			EventType: model.EventReminderSet,
 			CreatedAt: now,
 		})
@@ -747,8 +789,10 @@ type PatchInput struct {
 
 // Patch applies a partial update to the task identified by id. A due change
 // re-arms the reminder (resetting fired_at) if a reminder offset exists, or
-// leaves it cleared otherwise. All writes commit atomically via WithTx.
-func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
+// leaves it cleared otherwise. All writes commit atomically via WithTx, and a
+// per-field audit event (summary_changed/description_changed/due_changed) is
+// appended for each changed field with its from/to value.
+func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	row, err := s.loadTaskRow(ctx, id)
@@ -756,28 +800,36 @@ func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
 		return nil, err
 	}
 
-	changed := false
+	// Track per-field from/to so the audit events carry the real transitions.
+	type fieldChange struct {
+		eventType string
+		from, to  string
+	}
+	var changes []fieldChange
 	dueChanged := false
 	for _, field := range in.UpdateFields {
 		switch field {
 		case "summary":
 			if in.Summary != nil {
+				old := row.Summary
 				row.Summary = *in.Summary
-				changed = true
+				changes = append(changes, fieldChange{model.EventSummaryChanged, old, *in.Summary})
 			}
 		case "description":
+			old := row.Description
 			row.Description = derefStr(in.Description)
-			changed = true
+			changes = append(changes, fieldChange{model.EventDescriptionChanged, old, row.Description})
 		case "due":
+			oldDue := ptrStringOrEmpty(row.Due)
 			row.Due = in.Due
-			changed = true
+			newDue := ptrStringOrEmpty(row.Due)
 			dueChanged = true
+			changes = append(changes, fieldChange{model.EventDueChanged, oldDue, newDue})
 		case "is_all_day":
 			row.IsAllDay = derefBool(in.IsAllDay)
-			changed = true
 		}
 	}
-	if !changed {
+	if len(changes) == 0 && !containsField(in.UpdateFields, "is_all_day") {
 		return s.assembleTask(ctx, row)
 	}
 
@@ -806,16 +858,43 @@ func (s *Service) Patch(id string, in PatchInput) (*model.Task, error) {
 				}
 			}
 		}
-		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
-			ID:        taskutil.GenerateULID(),
-			TaskID:    id,
-			EventType: model.EventDueChanged,
-			CreatedAt: now,
-		})
+
+		// Append one audit event per changed field, each with its from/to.
+		for _, c := range changes {
+			from, to := c.from, c.to
+			ev := model.TaskEvent{
+				ID:        taskutil.GenerateULID(),
+				TaskID:    id,
+				ActorID:   actorID,
+				EventType: c.eventType,
+				CreatedAt: now,
+				FromValue: &from,
+				ToValue:   &to,
+			}
+			if err := tx.AppendTaskEvent(txCtx, ev); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
 	return s.assembleTask(ctx, row)
+}
+
+// ptrStringOrEmpty renders a *int64 as a decimal string, or "" when nil. Used
+// to populate audit FromValue/ToValue for due changes.
+func ptrStringOrEmpty(p *int64) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.FormatInt(*p, 10)
+}
+
+// containsField reports whether fields contains s. Thin wrapper over
+// slices.Contains to keep the Patch no-op check readable.
+func containsField(fields []string, s string) bool {
+	return slices.Contains(fields, s)
 }
 
 func derefStr(p *string) string {
@@ -858,7 +937,7 @@ type AssignEvent struct {
 // DeleteIndex+SaveIndex pair in one atomic statement; the reminder row no
 // longer needs resync because ListDueReminders JOINs the assignee at fire
 // time. An "assigned"/"unassigned" audit event is appended in the same tx.
-func (s *Service) Assign(id, newAssigneeID string) (*model.Task, AssignEvent, error) {
+func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, AssignEvent, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	row, loadErr := s.loadTaskRow(ctx, id)
@@ -890,7 +969,22 @@ func (s *Service) Assign(id, newAssigneeID string) (*model.Task, AssignEvent, er
 	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
 		// Empty new assignee means "unassign": remove the assignee edge.
 		if newAssigneeID == "" {
-			return tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee)
+			if err := tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee); err != nil {
+				return err
+			}
+			if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
+				return err
+			}
+			from, to := oldAssigneeID, ""
+			return tx.AppendTaskEvent(txCtx, model.TaskEvent{
+				ID:        taskutil.GenerateULID(),
+				TaskID:    id,
+				ActorID:   actorID,
+				EventType: model.EventUnassigned,
+				CreatedAt: now,
+				FromValue: &from,
+				ToValue:   &to,
+			})
 		}
 		if err := tx.SwapAssignee(txCtx, id, oldAssigneeID, newAssigneeID); err != nil {
 			return err
@@ -901,6 +995,7 @@ func (s *Service) Assign(id, newAssigneeID string) (*model.Task, AssignEvent, er
 		return tx.AppendTaskEvent(txCtx, model.TaskEvent{
 			ID:        taskutil.GenerateULID(),
 			TaskID:    id,
+			ActorID:   actorID,
 			EventType: eventType,
 			CreatedAt: now,
 			FromValue: ptrString(oldAssigneeID),
@@ -927,16 +1022,57 @@ func (s *Service) Assign(id, newAssigneeID string) (*model.Task, AssignEvent, er
 // CASCADE on task_members/task_reminders/task_posts/task_comments/task_events
 // and the self-FK on task_tasks (subtasks) remove all dependents in one call —
 // the KV store's manual N-step cascade is gone.
-func (s *Service) Delete(id string) error {
+func (s *Service) Delete(actorID, id string) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	if err := s.store.DeleteTask(ctx, id); err != nil {
-		if errors.Is(err, store.ErrTaskNotFound) {
-			return ErrNotFound
+	// Load the task snapshot for the audit event's FromValue BEFORE deleting.
+	// The event is appended inside the same tx as the delete so they commit
+	// atomically. Note: task_events has ON DELETE CASCADE, so the event is
+	// removed alongside the task by the same delete — it serves the immediate
+	// WS broadcast / notification, not long-term retention of deletes. A
+	// non-cascaded audit table is a future schema change if delete-history
+	// retention is needed.
+	row, loadErr := s.loadTaskRow(ctx, id)
+	if loadErr != nil {
+		return loadErr
+	}
+	snapshot := snapshotTaskJSON(row)
+
+	txCtx, txCancel := s.ctx()
+	defer txCancel()
+	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		if err := tx.AppendTaskEvent(txCtx, model.TaskEvent{
+			ID:        taskutil.GenerateULID(),
+			TaskID:    id,
+			ActorID:   actorID,
+			EventType: model.EventDeleted,
+			CreatedAt: nowFunc(),
+			FromValue: &snapshot,
+		}); err != nil {
+			return err
 		}
+		if err := tx.DeleteTask(txCtx, id); err != nil {
+			if errors.Is(err, store.ErrTaskNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	return nil
+}
+
+// snapshotTaskJSON renders a TaskRow as a compact JSON string for an audit
+// event's FromValue/ToValue. Best-effort: a marshal error yields the empty
+// string rather than failing the transition.
+func snapshotTaskJSON(row *model.TaskRow) string {
+	b, err := json.Marshal(row)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // Scope enumerates the list result scopes. These mirror store.Scope so the

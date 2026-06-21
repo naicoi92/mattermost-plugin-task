@@ -87,32 +87,32 @@ type fakeStatusService struct {
 	createErr   error
 }
 
-func (f *fakeStatusService) SetStatus(id, status string) (*taskmodel.Task, error) {
+func (f *fakeStatusService) SetStatus(actorID, id, status string) (*taskmodel.Task, error) {
 	f.lastID = id
 	f.lastStatus = status
 	return f.result, f.err
 }
 
-func (f *fakeStatusService) Patch(id string, in task.PatchInput) (*taskmodel.Task, error) {
+func (f *fakeStatusService) Patch(actorID, id string, in task.PatchInput) (*taskmodel.Task, error) {
 	f.lastPatchID = id
 	f.lastPatch = in
 	return f.patchResult, f.patchErr
 }
 
-func (f *fakeStatusService) SetReminder(id string, offsetMS int64) (*taskmodel.Task, error) {
+func (f *fakeStatusService) SetReminder(actorID, id string, offsetMS int64) (*taskmodel.Task, error) {
 	f.reminderID = id
 	f.reminderOffset = offsetMS
 	f.reminderCleared = false
 	return f.reminderResult, f.reminderErr
 }
 
-func (f *fakeStatusService) ClearReminder(id string) (*taskmodel.Task, error) {
+func (f *fakeStatusService) ClearReminder(actorID, id string) (*taskmodel.Task, error) {
 	f.reminderID = id
 	f.reminderCleared = true
 	return f.reminderResult, f.reminderErr
 }
 
-func (f *fakeStatusService) Assign(id, newAssigneeID string) (*taskmodel.Task, task.AssignEvent, error) {
+func (f *fakeStatusService) Assign(actorID, id, newAssigneeID string) (*taskmodel.Task, task.AssignEvent, error) {
 	f.assignID = id
 	f.assignUserID = newAssigneeID
 	return f.assignResult, f.assignEvent, f.assignErr

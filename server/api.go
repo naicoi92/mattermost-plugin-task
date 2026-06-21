@@ -271,7 +271,7 @@ func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := p.taskService.Patch(id, task.PatchInput{
+	updated, err := p.taskService.Patch(currentUserID(r), id, task.PatchInput{
 		UpdateFields: req.UpdateFields,
 		Summary:      req.Summary,
 		Description:  req.Description,
@@ -300,7 +300,7 @@ func (p *Plugin) deleteTask(w http.ResponseWriter, r *http.Request) {
 	// right recipients (creator/assignee/channel) and clients can drop it.
 	snapshot, _ := p.taskService.Get(id)
 
-	if err := p.taskService.Delete(id); err != nil {
+	if err := p.taskService.Delete(currentUserID(r), id); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			p.writeError(w, http.StatusNotFound, "task not found")
 			return
@@ -334,7 +334,7 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := p.taskService.SetStatus(id, req.Status)
+	updated, err := p.taskService.SetStatus(currentUserID(r), id, req.Status)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
@@ -393,7 +393,7 @@ func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := p.taskService.SetReminder(id, req.OffsetMS)
+	updated, err := p.taskService.SetReminder(currentUserID(r), id, req.OffsetMS)
 	if err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
@@ -419,7 +419,7 @@ func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
 // deleteReminder handles DELETE /tasks/:id/reminder (turn reminders off).
 func (p *Plugin) deleteReminder(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	updated, err := p.taskService.ClearReminder(id)
+	updated, err := p.taskService.ClearReminder(currentUserID(r), id)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			p.writeError(w, http.StatusNotFound, "task not found")
@@ -454,7 +454,7 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, ev, err := p.taskService.Assign(id, req.UserID)
+	updated, ev, err := p.taskService.Assign(currentUserID(r), id, req.UserID)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			p.writeError(w, http.StatusNotFound, "task not found")
@@ -481,7 +481,7 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 // notification is sent on unassign.
 func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	updated, _, err := p.taskService.Assign(id, "")
+	updated, _, err := p.taskService.Assign(currentUserID(r), id, "")
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			p.writeError(w, http.StatusNotFound, "task not found")
@@ -754,6 +754,11 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 
 	action, _ := req.Context["action"].(string)
 	taskID, _ := req.Context["task_id"].(string)
+	actorID := req.UserId
+	if actorID == "" {
+		p.writeError(w, http.StatusUnauthorized, "not authorized")
+		return
+	}
 	if taskID == "" || action == "" {
 		p.writeError(w, http.StatusBadRequest, "missing action or task_id")
 		return
@@ -765,7 +770,7 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 		if action == string(actionCancel) {
 			status = taskmodel.StatusCancelled
 		}
-		updated, err := p.taskService.SetStatus(taskID, status)
+		updated, err := p.taskService.SetStatus(actorID, taskID, status)
 		if err != nil {
 			writeCardResponse(w, fmt.Sprintf("⚠️ Could not update task: %s", err.Error()))
 			return
