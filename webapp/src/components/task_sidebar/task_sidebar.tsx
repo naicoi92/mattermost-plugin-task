@@ -11,7 +11,6 @@
 // The current channel + user are read from the host Redux store so the New Task
 // form can derive its scope (personal vs channel) automatically.
 
-import {useFormatMessage} from 'i18n_utils';
 import React, {useEffect} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
@@ -64,7 +63,6 @@ export interface TaskSidebarProps {
 
 export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskSidebarProps): JSX.Element {
     const dispatch = useDispatch();
-    const t = useFormatMessage();
     const slice = useSelector(selectSlice);
 
     // Current channel + user from the host store. Falls back to the prop when
@@ -105,12 +103,6 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
             className='task-rhs'
             data-theme={undefined}
         >
-            <header className='task-rhs__header'>
-                <div className='task-rhs__title'>
-                    <TasksIcon/>
-                    {t('webapp.task.title')}
-                </div>
-            </header>
             <div className='task-rhs__body'>
                 {slice.rhsView === 'new' && (
                     <NewTaskDialog
@@ -141,17 +133,5 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
                 )}
             </div>
         </div>
-    );
-}
-
-// TasksIcon is the checkmark-in-circle glyph used in the panel title.
-function TasksIcon(): JSX.Element {
-    return (
-        <svg
-            viewBox='0 0 24 24'
-            aria-hidden='true'
-        >
-            <path d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z'/>
-        </svg>
     );
 }
