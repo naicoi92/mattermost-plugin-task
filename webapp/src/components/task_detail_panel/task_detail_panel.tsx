@@ -311,7 +311,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     type='button'
                     aria-label={t('webapp.task.filter.status')}
                 >
-                    <span className={`quick-list__status-dot quick-list__status-dot--${full.status}`}/>
+                    <span className={`task-detail__status-dot task-detail__status-dot--${full.status}`}/>
                     {statusLabel(full.status, t)}
                 </button>
             </div>
