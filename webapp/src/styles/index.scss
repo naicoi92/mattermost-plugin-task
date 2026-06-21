@@ -772,11 +772,6 @@
         align-items: center;
         gap: 6px;
         cursor: pointer;
-        transition: background 0.12s;
-
-        &:hover {
-            background: var(--task-surface);
-        }
 
         &--overdue {
             color: var(--task-danger);
@@ -805,12 +800,9 @@
             color: var(--task-muted);
         }
 
-        // Assignee cell wraps the UserPicker; neutralize its own background so
-        // the meta-value hover tint is the only fill.
+        // Assignee cell wraps the UserPicker; no hover fill (the picker has
+        // its own interaction styling).
         &--picker {
-            &:hover {
-                background: var(--task-surface);
-            }
         }
     }
 
