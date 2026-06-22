@@ -197,8 +197,12 @@ func (p *Plugin) postCard(channelID string, t *taskmodel.Task) string {
 // the post id. Used to notify an assignee when a task is created/assigned.
 func (p *Plugin) postCardDM(assigneeID string, t *taskmodel.Task) string {
 	channel, err := p.API.GetDirectChannel(assigneeID, p.botUserID)
-	if err != nil {
-		p.API.LogError("Failed to open DM for task card", "assignee_id", assigneeID, "error", err)
+	if err != nil || channel == nil {
+		// GetDirectChannel can return (nil, nil) during RPC shutdown; guard
+		// against a nil-pointer on channel.Id below.
+		if err != nil {
+			p.API.LogError("Failed to open DM for task card", "assignee_id", assigneeID, "error", err)
+		}
 		return ""
 	}
 	return p.postCard(channel.Id, t)
