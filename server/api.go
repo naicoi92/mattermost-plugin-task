@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -857,10 +856,11 @@ func (p *Plugin) channelMembership() permission.ChannelMembershipChecker {
 // post id, and the context {action, task_id} the chip was built with.
 //
 // "status" cycles todo→in_progress→done→todo. "priority" cycles
-// standard→important→urgent→standard. The source card is refreshed in place
-// (and every other tracked copy) so the chip labels and colors update
-// immediately. The response is the {ephemeral_text, update} JSON Mattermost
-// expects; an empty ephemeral_text keeps the interaction silent.
+// standard→important→urgent→standard. The source card is updated in the DB and
+// every tracked post copy is refreshed. The HTTP response carries an `update`
+// field with the freshly-rendered props so the Mattermost client re-renders
+// the source post immediately — without it, the post in the user's view only
+// refreshes on the next WebSocket event, which can lag.
 func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 	var req mmmodel.PostActionIntegrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -880,68 +880,81 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var (
+		updated *taskmodel.Task
+		errMsg  string
+	)
 	switch action {
 	case string(actionStatus):
-		// Load the task to read its current status, then advance it.
 		t, err := p.taskService.Get(taskID)
 		if err != nil {
-			writeCardResponse(w, fmt.Sprintf("⚠️ Could not find task."))
-			return
+			errMsg = "⚠️ Could not find task."
+			break
 		}
 		next := nextStatus(t.Status)
 		if next == t.Status {
 			// Cancelled is terminal in the cycle — nothing to do.
-			writeCardResponse(w, "Reopen the task from Task Details.")
+			writeCardResponse(w, "Reopen the task from Task Details.", nil)
 			return
 		}
-		updated, err := p.taskService.SetStatus(actorID, taskID, next)
+		updated, err = p.taskService.SetStatus(actorID, taskID, next)
 		if err != nil {
-			writeCardResponse(w, fmt.Sprintf("⚠️ Could not update status: %s", err.Error()))
-			return
+			errMsg = "⚠️ Could not update status: " + err.Error()
+			break
 		}
-		// Update the source post's card in place, then refresh all tracked
-		// copies (channel/DM/any future location) so every copy stays current.
-		p.updateCard(req.PostId, updated)
+		// Refresh every tracked card copy (channel + DM) so all stay current.
 		p.updateTaskCards(updated)
-		// Terminal status notifies the participants (excluding the actor).
 		if next == taskmodel.StatusDone || next == taskmodel.StatusCancelled {
 			p.notifyTerminalStatus(updated, next, actorID)
 		}
 		p.broadcastTaskUpdated(updated, []string{"status"})
-		writeCardResponse(w, "")
 
 	case string(actionPriority):
-		// Priority is part of the generic Patch surface: patch the priority to
-		// the next value in the cycle. PatchInput takes the priority as *string
-		// and the "priority" update field flag.
 		t, err := p.taskService.Get(taskID)
 		if err != nil {
-			writeCardResponse(w, "⚠️ Could not find task.")
-			return
+			errMsg = "⚠️ Could not find task."
+			break
 		}
 		next := nextPriority(t.Priority)
-		updated, err := p.taskService.Patch(actorID, taskID, task.PatchInput{
+		updated, err = p.taskService.Patch(actorID, taskID, task.PatchInput{
 			UpdateFields: []string{"priority"},
 			Priority:     &next,
 		})
 		if err != nil {
-			writeCardResponse(w, fmt.Sprintf("⚠️ Could not update priority: %s", err.Error()))
-			return
+			errMsg = "⚠️ Could not update priority: " + err.Error()
+			break
 		}
-		p.updateCard(req.PostId, updated)
 		p.updateTaskCards(updated)
 		p.broadcastTaskUpdated(updated, []string{"priority"})
-		writeCardResponse(w, "")
 
 	default:
-		writeCardResponse(w, "Unknown action.")
+		writeCardResponse(w, "Unknown action.", nil)
+		return
 	}
+
+	if errMsg != "" {
+		writeCardResponse(w, errMsg, nil)
+		return
+	}
+
+	// Build the refreshed attachment for the response `update`. Mattermost's
+	// action callback accepts {update: {props: {attachments: [...]}}} and
+	// patches the source post's props in the client view immediately.
+	attachment := p.renderCard(updated)
+	writeCardResponse(w, "", map[string]any{
+		"props": taskCardProps(updated, &attachment),
+	})
 }
 
 // writeCardResponse responds with the JSON body Mattermost expects from an
-// interactive action callback: {ephemeral_text}. An empty string updates the
-// post silently (no ephemeral message shown).
-func writeCardResponse(w http.ResponseWriter, ephemeralText string) {
+// interactive action callback: {ephemeral_text, update}. ephemeralText empty
+// keeps the interaction silent; update (when non-nil) is the {props: ...}
+// patch Mattermost applies to the source post so it re-renders immediately.
+func writeCardResponse(w http.ResponseWriter, ephemeralText string, update map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ephemeral_text": ephemeralText})
+	body := map[string]any{"ephemeral_text": ephemeralText}
+	if update != nil {
+		body["update"] = update
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }

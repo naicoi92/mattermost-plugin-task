@@ -49,7 +49,7 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 	card := buildCard(task, 1_500_000_000_000, 1, 3, 2,
 		userRef{mention: "@alice"}, userRef{mention: "@bob"})
 
-	// No AuthorName row — both people live in the footer.
+	// No AuthorName row — people live in the Actions row as 👤 chips.
 	assert.Empty(t, card.AuthorName)
 	assert.Empty(t, card.AuthorIcon)
 	assert.Empty(t, card.Pretext)
@@ -59,8 +59,9 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 	assert.Equal(t, "OAuth login flow", card.Text, "description preview lives in Text")
 	assert.Empty(t, card.Fields)
 
-	// Actions: both Status and Priority chips are present and clickable.
-	require.Len(t, card.Actions, 2)
+	// Actions: 4 chips — Status, Priority (clickable), then 👤 creator, 👤 assignee (decorative).
+	require.Len(t, card.Actions, 4)
+	// [0] Status chip — clickable.
 	assert.Equal(t, "To Do", card.Actions[0].Name, "chip shows the current value only")
 	assert.Equal(t, "primary", card.Actions[0].Style)
 	require.NotNil(t, card.Actions[0].Integration)
@@ -68,27 +69,43 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 	assert.Equal(t, "status", card.Actions[0].Integration.Context["action"])
 	assert.Equal(t, "T1", card.Actions[0].Integration.Context["task_id"])
 	assert.False(t, card.Actions[0].Disabled)
-
+	// [1] Priority chip — clickable.
 	assert.Equal(t, "Standard", card.Actions[1].Name)
 	assert.Equal(t, "default", card.Actions[1].Style, "standard priority → default style chip")
 	require.NotNil(t, card.Actions[1].Integration)
 	assert.Equal(t, "priority", card.Actions[1].Integration.Context["action"])
+	// [2] Creator chip — decorative.
+	assert.Equal(t, "👤 @alice", card.Actions[2].Name)
+	assert.Equal(t, "default", card.Actions[2].Style)
+	assert.True(t, card.Actions[2].Disabled, "creator chip is decorative")
+	// [3] Assignee chip — decorative.
+	assert.Equal(t, "👤 @bob", card.Actions[3].Name)
+	assert.True(t, card.Actions[3].Disabled, "assignee chip is decorative")
 
-	// Footer: people chain → due → progress.
-	assert.Contains(t, card.Footer, "👤 @alice")
-	assert.Contains(t, card.Footer, "→ 👤 @bob")
+	// Footer: due + progress only — people are chips now.
+	assert.NotContains(t, card.Footer, "👤", "people moved out of the footer")
 	assert.Contains(t, card.Footer, "📅")
 	assert.Contains(t, card.Footer, "✓ 1/3")
 	assert.Contains(t, card.Footer, "💬 2")
 }
 
-func TestBuildTaskCard_SelfAssignedHasNoArrow(t *testing.T) {
-	// When creator == assignee, the footer reads just one 👤 entry (no "→ 👤").
+func TestBuildTaskCard_SelfAssignedOnePeopleChip(t *testing.T) {
+	// When creator == assignee, only one 👤 chip is rendered (no redundant
+	// duplicate for the same person).
 	task := sampleTask(taskmodel.StatusTodo, nil)
 	card := buildCard(task, 0, 0, 0, 0,
 		userRef{mention: "@alice"}, userRef{mention: "@alice"})
-	assert.Contains(t, card.Footer, "👤 @alice")
-	assert.NotContains(t, card.Footer, "→")
+	// 3 chips: Status + Priority + 1 creator (= assignee).
+	require.Len(t, card.Actions, 3)
+	assert.Equal(t, "👤 @alice", card.Actions[2].Name)
+}
+
+func TestBuildTaskCard_NoPeopleNoPeopleChips(t *testing.T) {
+	// Personal task (no creator mention, no assignee) → no 👤 chips.
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0, userRef{}, userRef{})
+	// 2 chips: Status + Priority only.
+	require.Len(t, card.Actions, 2)
 }
 
 func TestBuildTaskCard_NoPeopleInFooter(t *testing.T) {
@@ -131,12 +148,13 @@ func TestBuildTaskCard_EmptyDescription(t *testing.T) {
 	assert.Empty(t, card.Text)
 }
 
-func TestCardActions_AlwaysTwoChips(t *testing.T) {
-	// Both chips are always present: Status + Priority. Priority chip stays
-	// even for standard priority so the user can promote the task.
-	actions := cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
-		ID: "T9", Status: taskmodel.StatusTodo, Priority: taskmodel.PriorityStandard,
-	}})
+func TestCardActions_MinimumTwoChipsWhenNoPeople(t *testing.T) {
+	// Status + Priority are always present. People chips only when set.
+	actions := cardActions(cardInput{
+		task: &taskmodel.Task{TaskRow: taskmodel.TaskRow{
+			ID: "T9", Status: taskmodel.StatusTodo, Priority: taskmodel.PriorityStandard,
+		}},
+	})
 	require.Len(t, actions, 2)
 	assert.NotNil(t, actions[0].Integration, "Status chip is clickable")
 	assert.NotNil(t, actions[1].Integration, "Priority chip is clickable")
@@ -156,9 +174,11 @@ func TestCardActions_StatusChipsByStatus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.status, func(t *testing.T) {
-			actions := cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
-				Status: tc.status, Priority: taskmodel.PriorityStandard,
-			}})
+			actions := cardActions(cardInput{
+				task: &taskmodel.Task{TaskRow: taskmodel.TaskRow{
+					Status: tc.status, Priority: taskmodel.PriorityStandard,
+				}},
+			})
 			assert.Equal(t, tc.style, actions[0].Style)
 		})
 	}
@@ -175,9 +195,11 @@ func TestCardActions_PriorityChipStyles(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.priority, func(t *testing.T) {
-			actions := cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
-				Status: taskmodel.StatusTodo, Priority: tc.priority,
-			}})
+			actions := cardActions(cardInput{
+				task: &taskmodel.Task{TaskRow: taskmodel.TaskRow{
+					Status: taskmodel.StatusTodo, Priority: tc.priority,
+				}},
+			})
 			assert.Equal(t, tc.style, actions[1].Style)
 		})
 	}
@@ -197,26 +219,6 @@ func TestNextPriority(t *testing.T) {
 	assert.Equal(t, taskmodel.PriorityStandard, nextPriority(taskmodel.PriorityUrgent))
 }
 
-func TestPeopleLine(t *testing.T) {
-	cases := []struct {
-		name    string
-		creator userRef
-		assigne userRef
-		want    string
-	}{
-		{"both distinct", userRef{mention: "@alice"}, userRef{mention: "@bob"}, "👤 @alice → 👤 @bob"},
-		{"self-assigned", userRef{mention: "@alice"}, userRef{mention: "@alice"}, "👤 @alice"},
-		{"creator only", userRef{mention: "@alice"}, userRef{}, "👤 @alice"},
-		{"assignee only", userRef{}, userRef{mention: "@bob"}, "👤 @bob"},
-		{"neither", userRef{}, userRef{}, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, peopleLine(tc.creator, tc.assigne))
-		})
-	}
-}
-
 func TestCardFooter_FullSet(t *testing.T) {
 	due := int64(1_800_000_000_000)
 	task := sampleTask(taskmodel.StatusTodo, &due)
@@ -226,8 +228,9 @@ func TestCardFooter_FullSet(t *testing.T) {
 		assignee:     userRef{mention: "@bob"},
 		subtaskDone:  2, subtaskTotal: 5, commentCount: 3,
 	})
-	assert.Contains(t, footer, "👤 @alice")
-	assert.Contains(t, footer, "→ 👤 @bob")
+	// Footer no longer carries people — only due + progress.
+	assert.NotContains(t, footer, "👤")
+	assert.NotContains(t, footer, "@")
 	assert.Contains(t, footer, "📅")
 	assert.Contains(t, footer, "✓ 2/5")
 	assert.Contains(t, footer, "💬 3")

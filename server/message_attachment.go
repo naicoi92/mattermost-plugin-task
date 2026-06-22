@@ -80,22 +80,15 @@ type cardInput struct {
 }
 
 // buildTaskCard builds the SlackAttachment that renders a task as a compact
-// card. Both the creator and the assignee are shown in the footer, prefixed
-// with a 👤 emoji so each reads as a small "author" entry. Status and Priority
-// are colored chips in the Actions row that the user can click to cycle the
-// value (todo→in_progress→done→todo; standard→important→urgent→standard).
+// card. The Actions row carries four chips: two clickable (Status, Priority)
+// that cycle on click, and two decorative (Creator, Assignee) that surface who
+// the task belongs to.
 //
 //	Title     = task summary (struck through when done/cancelled)
 //	TitleLink = task permalink (when site URL is configured)
 //	Text      = description preview (muted, single line)
-//	Actions   = [ Status chip ] [ Priority chip ] (clickable, cycle on click)
-//	Footer    = "👤 @creator → 👤 @assignee · 📅 Tomorrow · ✓ 2/5 · 💬 3"
-//
-// Conditional items are skipped (no due, standard priority, no description),
-// so a minimal task card stays compact. Other interactions happen in the Task
-// Details panel (opened by clicking the card). The card is rendered natively
-// by Mattermost's SlackAttachment renderer, so it works on mobile too. nowMs
-// lets the overdue check be deterministic in tests.
+//	Actions   = [ Status ] [ Priority ] [ 👤 creator ] [ 👤 assignee ]
+//	Footer    = "📅 Tomorrow · ✓ 2/5 · 💬 3" (metadata, no people — they're chips)
 func buildTaskCard(in cardInput) model.SlackAttachment {
 	t := in.task
 	card := model.SlackAttachment{
@@ -103,43 +96,29 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 		Fallback:  cardTitle(t),
 		Text:      descriptionPreview(t.Description),
 		Color:     cardColor(t, in.nowMs),
-		Actions:   cardActions(t),
+		Actions:   cardActions(in),
 		Timestamp: t.CreatedAt / 1000,
 	}
 
-	// Title is clickable so it visibly invites interaction. The webapp's
-	// delegated click handler already opens Task Details for custom_task posts;
-	// the link is a fallback for plain-text contexts (mobile push, search
-	// results) where the JS handler doesn't run.
 	if in.taskPermalink != "" {
 		card.TitleLink = in.taskPermalink
 	}
-
-	// Footer carries the people and the metadata in a single small line at the
-	// bottom: "👤 @creator → 👤 @assignee · 📅 Tomorrow · ✓ 2/5 · 💬 3". Both
-	// the creator and assignee are prefixed with a 👤 emoji so each reads like
-	// a small author entry (SlackAttachment only allows one real AuthorIcon, so
-	// the footer uses emoji placeholders). Each part is skipped when empty.
+	// Footer: due + progress only — people live in the Actions row now.
 	if footer := cardFooter(t, in); footer != "" {
 		card.Footer = footer
 	}
-
 	return card
 }
 
-// cardFooter assembles the single-line footer. The people come first — the
-// creator, then an arrow, then the assignee (when distinct) — so the chain of
-// custody reads left-to-right. Due date, subtask progress, and comment count
-// follow, each skipped when empty. Returns "" when nothing is set.
-func cardFooter(t *taskmodel.Task, in cardInput) string {
-	parts := make([]string, 0, 5)
+// buildTaskCard is defined just above (cardInput carries creator + assignee so
+// the Actions row can render 👤 chips for both). buildTaskCard stays a pure fn
+// for tests; renderCard resolves the user refs via GetUser.
 
-	// People: "👤 @creator → 👤 @assignee". The arrow is dropped when the two
-	// are the same (or the assignee is empty), so a self-assigned task reads
-	// just "👤 @creator" with no redundant self-arrow.
-	if in.creator.mention != "" || in.assignee.mention != "" {
-		parts = append(parts, peopleLine(in.creator, in.assignee))
-	}
+// cardFooter assembles the single-line footer with due date + subtask/comment
+// progress. People are NOT included here — they surface as 👤 chips in the
+// Actions row. Each part is skipped when empty; returns "" when nothing is set.
+func cardFooter(t *taskmodel.Task, in cardInput) string {
+	parts := make([]string, 0, 3)
 	if t.DueAt != nil {
 		parts = append(parts, "📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
 	}
@@ -150,27 +129,6 @@ func cardFooter(t *taskmodel.Task, in cardInput) string {
 		parts = append(parts, fmt.Sprintf("💬 %d", in.commentCount))
 	}
 	return strings.Join(parts, metaSeparator)
-}
-
-// peopleLine renders the creator → assignee chain for the footer. The arrow is
-// omitted when the two mentions are equal (self-assigned) or when the assignee
-// is empty, so the line never reads "👤 @alice → 👤 @alice". Returns "" when
-// neither mention is set so the caller can skip the people part entirely.
-func peopleLine(creator, assignee userRef) string {
-	if creator.mention == "" && assignee.mention == "" {
-		return ""
-	}
-	if assignee.mention == "" || creator.mention == assignee.mention {
-		// Only the creator, or self-assigned → single entry.
-		if creator.mention != "" {
-			return "👤 " + creator.mention
-		}
-		return "👤 " + assignee.mention
-	}
-	if creator.mention == "" {
-		return "👤 " + assignee.mention
-	}
-	return "👤 " + creator.mention + " → 👤 " + assignee.mention
 }
 
 // cardActionCallbackPath is the plugin-scoped URL the Status/Priority chips
@@ -188,14 +146,14 @@ const (
 	actionPriority cardActionKind = "priority"
 )
 
-// cardActions builds the clickable chip row. Each chip shows the task's
-// CURRENT value and, on click, advances to the next one in the cycle
-// (todo→in_progress→done→todo; standard→important→urgent→standard). The label
-// never telegraphs the next value — clicking is the affordance, and the card
-// refreshes in place to reveal it. Both POST to /api/v1/actions with
-// {action, task_id} in context.
-func cardActions(t *taskmodel.Task) []*model.PostAction {
-	return []*model.PostAction{
+// cardActions builds the Actions row. Status and Priority chips are clickable
+// (cycle on click). Creator and Assignee chips are decorative (Disabled) — they
+// surface who filed the task and who owes it as compact 👤 chips, mirroring the
+// clickable chips visually. The assignee chip is omitted when it equals the
+// creator (self-assigned) to avoid a redundant chip.
+func cardActions(in cardInput) []*model.PostAction {
+	t := in.task
+	actions := []*model.PostAction{
 		{
 			Name:        statusLabel(t.Status),
 			Type:        "button",
@@ -209,6 +167,25 @@ func cardActions(t *taskmodel.Task) []*model.PostAction {
 			Integration: cardIntegration(actionPriority, t.ID),
 		},
 	}
+	if in.creator.mention != "" {
+		actions = append(actions, &model.PostAction{
+			Name:     "👤 " + in.creator.mention,
+			Type:     "button",
+			Style:    "default",
+			Disabled: true,
+		})
+	}
+	// Assignee chip only when distinct from creator (no redundant chip for
+	// self-assigned tasks).
+	if in.assignee.mention != "" && in.assignee.mention != in.creator.mention {
+		actions = append(actions, &model.PostAction{
+			Name:     "👤 " + in.assignee.mention,
+			Type:     "button",
+			Style:    "default",
+			Disabled: true,
+		})
+	}
+	return actions
 }
 
 // cardIntegration builds the PostActionIntegration pointing at the chip-action
