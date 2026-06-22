@@ -24,6 +24,40 @@ var statusColors = map[string]string{
 // metaSeparator is the middot used to join inline meta items in the card body.
 const metaSeparator = " · "
 
+// statusActionStyle maps a task status to a SlackAttachment button style.
+// These style the decorative status chip rendered as a disabled PostAction at
+// the front of the Actions row: Mattermost maps good/warning/danger/primary/
+// default to the active theme's semantic colors, so the chip reads at a glance
+// without any bold text label.
+func statusActionStyle(status string) string {
+	switch status {
+	case taskmodel.StatusDone:
+		return "good" // green
+	case taskmodel.StatusInProgress:
+		return "warning" // amber
+	case taskmodel.StatusCancelled:
+		return "default" // grey
+	case taskmodel.StatusTodo:
+		fallthrough
+	default:
+		return "primary" // blue
+	}
+}
+
+// priorityActionStyle maps an elevated priority to a button style, or "" when
+// the priority is standard (no chip rendered). Urgent → danger (red), Important
+// → warning (amber), mirroring the Quick List PriorityDot.
+func priorityActionStyle(priority string) string {
+	switch priority {
+	case taskmodel.PriorityUrgent:
+		return "danger"
+	case taskmodel.PriorityImportant:
+		return "warning"
+	default:
+		return ""
+	}
+}
+
 // cardInput is the resolved payload the pure card builder consumes. The Plugin
 // method renderCard resolves the assignee mention (an I/O step) and hands the
 // rest off to buildTaskCard so the builder stays a pure, easily-tested fn.
@@ -37,22 +71,19 @@ type cardInput struct {
 }
 
 // buildTaskCard builds the SlackAttachment that renders a task as a compact
-// message card. The layout follows the Matterpoll pattern: Title + a multi-
-// line markdown Text body, one piece of metadata per line, each with a bold
-// label. This reads cleanly in the SlackAttachment renderer instead of the
-// boxy label/value grid that Short:true Fields produce.
+// message card. Status and Priority are shown as colored chips in the Actions
+// row (disabled buttons styled good/warning/danger/primary by the active
+// theme), so they read at a glance without bold text labels. The remaining
+// metadata (Due, Assignee, subtask/comment progress) lives in a short
+// markdown Text body underneath the Title.
 //
-//	Title = task summary (struck through when done/cancelled)
-//	Text  = "---" rule, then one bold-labeled line per metadata item:
-//	          **Status**: To Do  (urgent/important appended to this line)
-//	          **Due**: 📅 Tomorrow
-//	          **Assignee**: @alice
-//	          **Subtasks**: 2/5 done  (comment count appended)
+//	Title   = task summary (struck through when done/cancelled)
+//	Text    = "📅 Tomorrow · @alice · 2/5 subtasks · 3 comments" (one line)
+//	Actions = [ Status chip ] [ Priority chip? ]
 //
-// Conditional items (no due, standard priority, no subtasks) are omitted so
-// the body has only the lines that carry information. There are NO action
-// buttons — like the Quick List row, all interactions happen in the Task
-// Details panel (opened by clicking the card).
+// Conditional items are skipped, so a minimal task shows just its status chip.
+// The Status and Priority chips are decorative (Disabled: true) — all
+// interactions happen in the Task Details panel (opened by clicking the card).
 //
 // The card is rendered natively by Mattermost's SlackAttachment renderer, so
 // it works on mobile too. nowMs lets the overdue check be deterministic in
@@ -64,58 +95,53 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 		Fallback:  cardTitle(t),
 		Text:      metaBody(t, in),
 		Color:     cardColor(t, in.nowMs),
+		Actions:   cardActions(t),
 		Timestamp: t.CreatedAt / 1000,
 	}
 }
 
-// metaBody assembles the markdown Text body: a leading "---" rule, then one
-// line per metadata item, each formatted as "**Label**: value". Lines are
-// skipped when their value is empty, so a minimal task (open, no due, no
-// assignee) still shows just its Status line under the rule.
-func metaBody(t *taskmodel.Task, in cardInput) string {
-	lines := []string{"---"}
-
-	if l := statusLine(t); l != "" {
-		lines = append(lines, l)
+// cardActions builds the decorative chip row: a colored Status chip, then a
+// colored Priority chip when the priority is elevated (urgent/important). Both
+// are disabled — they convey state visually, they don't trigger callbacks.
+func cardActions(t *taskmodel.Task) []*model.PostAction {
+	actions := []*model.PostAction{
+		{
+			Name:     statusLabel(t.Status),
+			Type:     "button",
+			Style:    statusActionStyle(t.Status),
+			Disabled: true,
+		},
 	}
+	if style := priorityActionStyle(t.Priority); style != "" {
+		actions = append(actions, &model.PostAction{
+			Name:     priorityLabel(t.Priority),
+			Type:     "button",
+			Style:    style,
+			Disabled: true,
+		})
+	}
+	return actions
+}
+
+// metaBody assembles the markdown Text body as a single compact line joining
+// the remaining metadata: due (with calendar emoji), assignee mention, and a
+// "x/y subtasks · N comments" progress suffix. Each item is skipped when
+// empty, so the line carries only what's set.
+func metaBody(t *taskmodel.Task, in cardInput) string {
+	parts := make([]string, 0, 4)
 	if t.DueAt != nil {
-		lines = append(lines, "**Due**: 📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
+		parts = append(parts, "📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
 	}
 	if in.assigneeMention != "" {
-		lines = append(lines, "**Assignee**: "+in.assigneeMention)
+		parts = append(parts, in.assigneeMention)
 	}
-	if in.subtaskTotal > 0 || in.commentCount > 0 {
-		lines = append(lines, progressLine(in))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// statusLine formats the Status line, folding priority into it so the two
-// attributes share one line instead of two: "**Status**: To Do · 🔴 Urgent".
-// Returns "" only if status is somehow unknown.
-func statusLine(t *taskmodel.Task) string {
-	s := "**Status**: " + statusLabel(t.Status)
-	if p := priorityLabel(t.Priority); p != "" {
-		s += metaSeparator + p
-	}
-	return s
-}
-
-// progressLine combines the subtask progress and comment count into a single
-// "**Progress**" line, since neither alone merits its own row. Omits the parts
-// that are zero.
-func progressLine(in cardInput) string {
-	parts := make([]string, 0, 2)
 	if in.subtaskTotal > 0 {
-		parts = append(parts, fmt.Sprintf("%d/%d done", in.subtaskDone, in.subtaskTotal))
+		parts = append(parts, fmt.Sprintf("%d/%d subtasks", in.subtaskDone, in.subtaskTotal))
 	}
 	if in.commentCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d comments", in.commentCount))
 	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "**Progress**: " + strings.Join(parts, metaSeparator)
+	return strings.Join(parts, metaSeparator)
 }
 
 // cardTitle renders the card title, struck through for terminal statuses —

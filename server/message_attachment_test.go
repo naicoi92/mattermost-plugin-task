@@ -37,97 +37,114 @@ func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commen
 	})
 }
 
-// bodyLines returns the Text body split into its individual lines, dropping
-// the leading "---" rule so assertions can focus on the metadata lines.
-func bodyLines(card model.SlackAttachment) []string {
-	parts := strings.Split(card.Text, "\n")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "---" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func TestBuildTaskCard_TitleAndBody(t *testing.T) {
+func TestBuildTaskCard_TitleTextAndChips(t *testing.T) {
 	due := int64(1_800_000_000_000)
 	card := buildCard(sampleTask(taskmodel.StatusTodo, &due), 1_500_000_000_000, 1, 3, 2, "@bob")
 
 	assert.Equal(t, "Review PR", card.Title)
-	// No Fields grid — the card uses a multi-line markdown Text body.
-	assert.Empty(t, card.Fields, "card uses Text body, not a Fields grid")
-	assert.Empty(t, card.Actions, "card has no action buttons")
+	// No Fields grid — metadata lives in Text + colored Action chips.
+	assert.Empty(t, card.Fields, "card uses Text + Action chips, not a Fields grid")
 
-	// Body = "---" rule + one bold-labeled line per metadata item, in order:
-	// Status, Due, Assignee, Progress (subtasks + comments).
-	lines := bodyLines(card)
-	require.Len(t, lines, 4)
-	assert.Contains(t, lines[0], "**Status**", "Status line is bold-labeled")
-	assert.Contains(t, lines[0], "To Do")
-	assert.Contains(t, lines[1], "**Due**")
-	assert.Contains(t, lines[2], "**Assignee**")
-	assert.Contains(t, lines[2], "@bob")
-	assert.Contains(t, lines[3], "**Progress**")
-	assert.Contains(t, lines[3], "1/3 done")
-	assert.Contains(t, lines[3], "2 comments")
+	// Actions: exactly one Status chip (standard priority → no priority chip).
+	require.Len(t, card.Actions, 1)
+	assert.Equal(t, "To Do", card.Actions[0].Name)
+	assert.Equal(t, "primary", card.Actions[0].Style, "todo status → primary/blue chip")
+	assert.True(t, card.Actions[0].Disabled, "status chip is decorative")
+
+	// Text body: one compact line joining due, assignee, subtasks, comments.
+	assert.NotContains(t, card.Text, "**", "no bold meta-labels in the body")
+	assert.Contains(t, card.Text, "📅", "due has a calendar emoji")
+	assert.Contains(t, card.Text, "@bob", "assignee mention present")
+	assert.Contains(t, card.Text, "1/3 subtasks", "subtask progress present")
+	assert.Contains(t, card.Text, "2 comments", "comment count present")
 }
 
-func TestBuildTaskCard_StatusLineFoldsPriority(t *testing.T) {
-	// Urgent/important share the Status line instead of taking a separate row.
-	task := sampleTask(taskmodel.StatusInProgress, nil)
-	task.Priority = taskmodel.PriorityUrgent
-	task.AssigneeID = ""
-	card := buildCard(task, 0, 0, 0, 0, "")
-	lines := bodyLines(card)
-	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "In Progress")
-	assert.Contains(t, lines[0], "🔴 Urgent")
+func TestCardActions_StatusChipsByStatus(t *testing.T) {
+	cases := []struct {
+		status string
+		style  string
+		name   string
+	}{
+		{taskmodel.StatusTodo, "primary", "To Do"},
+		{taskmodel.StatusInProgress, "warning", "In Progress"},
+		{taskmodel.StatusDone, "good", "✅ Done"},
+		{taskmodel.StatusCancelled, "default", "🚫 Cancelled"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.status, func(t *testing.T) {
+			actions := cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
+				Status: tc.status, Priority: taskmodel.PriorityStandard,
+			}})
+			require.Len(t, actions, 1, "standard priority → only status chip")
+			assert.Equal(t, tc.style, actions[0].Style)
+			assert.Equal(t, tc.name, actions[0].Name)
+			assert.True(t, actions[0].Disabled, "chip is decorative")
+		})
+	}
 }
 
-func TestBuildTaskCard_PriorityStandardOmitted(t *testing.T) {
+func TestCardActions_PriorityChipWhenElevated(t *testing.T) {
+	// Urgent → danger chip appended after the status chip.
+	actions := cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
+		Status: taskmodel.StatusTodo, Priority: taskmodel.PriorityUrgent,
+	}})
+	require.Len(t, actions, 2)
+	assert.Equal(t, "primary", actions[0].Style, "status chip first")
+	assert.Equal(t, "danger", actions[1].Style, "urgent → danger/red chip")
+	assert.Equal(t, "🔴 Urgent", actions[1].Name)
+	assert.True(t, actions[1].Disabled)
+
+	// Important → warning chip.
+	actions = cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
+		Status: taskmodel.StatusTodo, Priority: taskmodel.PriorityImportant,
+	}})
+	require.Len(t, actions, 2)
+	assert.Equal(t, "warning", actions[1].Style)
+	assert.Equal(t, "🟠 Important", actions[1].Name)
+
+	// Standard → no priority chip.
+	actions = cardActions(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
+		Status: taskmodel.StatusTodo, Priority: taskmodel.PriorityStandard,
+	}})
+	require.Len(t, actions, 1, "standard priority → no priority chip")
+}
+
+func TestMetaBody_SkipsEmptyItems(t *testing.T) {
+	// No due, no assignee, no subtasks, no comments → empty body.
 	task := sampleTask(taskmodel.StatusTodo, nil)
 	task.AssigneeID = ""
-	card := buildCard(task, 0, 0, 0, 0, "")
-	assert.NotContains(t, card.Text, "Urgent")
-	assert.NotContains(t, card.Text, "Important")
+	body := metaBody(task, cardInput{})
+	assert.Empty(t, body, "empty task yields an empty meta line")
 }
 
-func TestBuildTaskCard_MinimalBody(t *testing.T) {
-	// A task with only a status still renders a body: the rule + Status line.
+func TestMetaBody_PartialItems(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, nil)
 	task.AssigneeID = ""
-	card := buildCard(task, 0, 0, 0, 0, "")
-	lines := bodyLines(card)
-	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "To Do")
+	body := metaBody(task, cardInput{assigneeMention: "@alice"})
+	assert.Equal(t, "@alice", body, "only the assignee line when nothing else is set")
 }
 
-func TestBuildTaskCard_ProgressOmittedWhenZero(t *testing.T) {
-	task := sampleTask(taskmodel.StatusTodo, nil)
-	task.AssigneeID = ""
-	card := buildCard(task, 0, 0, 0, 0, "")
-	assert.NotContains(t, card.Text, "Progress", "no Progress line when no subtasks and no comments")
-}
-
-func TestBuildTaskCard_ProgressOnlyComments(t *testing.T) {
-	task := sampleTask(taskmodel.StatusTodo, nil)
-	task.AssigneeID = ""
-	card := buildCard(task, 0, 0, 0, 3, "")
-	lines := bodyLines(card)
-	progressLine := lines[len(lines)-1]
-	assert.Contains(t, progressLine, "3 comments")
-	assert.NotContains(t, progressLine, "done", "no subtask part when total is 0")
+func TestMetaBody_JoinsWithMiddot(t *testing.T) {
+	due := int64(1_800_000_000_000)
+	task := sampleTask(taskmodel.StatusTodo, &due)
+	body := metaBody(task, cardInput{
+		assigneeMention: "@bob", subtaskDone: 1, subtaskTotal: 3, commentCount: 2,
+	})
+	parts := strings.Split(body, metaSeparator)
+	require.Len(t, parts, 4, "due + assignee + subtasks + comments")
+	assert.Contains(t, parts[0], "📅")
+	assert.Equal(t, "@bob", parts[1])
+	assert.Contains(t, parts[2], "1/3 subtasks")
+	assert.Contains(t, parts[3], "2 comments")
 }
 
 func TestBuildTaskCard_NoDescription(t *testing.T) {
-	// The card deliberately omits the description from the body — it lives in
-	// Task Details. So the body never carries the description text.
+	// The description is never rendered in the card — it lives in Task Details.
 	task := sampleTask(taskmodel.StatusTodo, nil)
-	task.Description = "This is a long description that should NOT appear in the card."
+	task.Description = "Long description that must NOT appear in the card body."
 	task.AssigneeID = ""
 	card := buildCard(task, 0, 0, 0, 0, "")
-	assert.NotContains(t, card.Text, task.Description, "description is not rendered in the card body")
+	assert.NotContains(t, card.Text, task.Description)
 }
 
 func TestBuildTaskCard_DoneStrikesThroughTitle(t *testing.T) {
@@ -214,36 +231,16 @@ func TestDueLabel_FutureOtherYear(t *testing.T) {
 	assert.Equal(t, "Mon, 4 Jan 2027", lbl)
 }
 
-func TestStatusLine(t *testing.T) {
-	t.Run("standard", func(t *testing.T) {
-		s := statusLine(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
-			Status: taskmodel.StatusTodo, Priority: taskmodel.PriorityStandard,
-		}})
-		assert.Equal(t, "**Status**: To Do", s)
-	})
-	t.Run("urgent appends to status", func(t *testing.T) {
-		s := statusLine(&taskmodel.Task{TaskRow: taskmodel.TaskRow{
-			Status: taskmodel.StatusInProgress, Priority: taskmodel.PriorityUrgent,
-		}})
-		assert.Contains(t, s, "In Progress")
-		assert.Contains(t, s, "🔴 Urgent")
-	})
+func TestStatusActionStyle(t *testing.T) {
+	assert.Equal(t, "primary", statusActionStyle(taskmodel.StatusTodo))
+	assert.Equal(t, "warning", statusActionStyle(taskmodel.StatusInProgress))
+	assert.Equal(t, "good", statusActionStyle(taskmodel.StatusDone))
+	assert.Equal(t, "default", statusActionStyle(taskmodel.StatusCancelled))
+	assert.Equal(t, "primary", statusActionStyle("unknown"), "unknown falls back to primary")
 }
 
-func TestProgressLine(t *testing.T) {
-	t.Run("both zero", func(t *testing.T) {
-		assert.Equal(t, "", progressLine(cardInput{}))
-	})
-	t.Run("subtasks only", func(t *testing.T) {
-		s := progressLine(cardInput{subtaskDone: 2, subtaskTotal: 5, commentCount: 0})
-		assert.Equal(t, "**Progress**: 2/5 done", s)
-	})
-	t.Run("comments only", func(t *testing.T) {
-		s := progressLine(cardInput{subtaskDone: 0, subtaskTotal: 0, commentCount: 3})
-		assert.Equal(t, "**Progress**: 3 comments", s)
-	})
-	t.Run("both", func(t *testing.T) {
-		s := progressLine(cardInput{subtaskDone: 1, subtaskTotal: 4, commentCount: 2})
-		assert.Equal(t, "**Progress**: 1/4 done · 2 comments", s)
-	})
+func TestPriorityActionStyle(t *testing.T) {
+	assert.Equal(t, "danger", priorityActionStyle(taskmodel.PriorityUrgent))
+	assert.Equal(t, "warning", priorityActionStyle(taskmodel.PriorityImportant))
+	assert.Equal(t, "", priorityActionStyle(taskmodel.PriorityStandard), "standard → no chip")
 }
