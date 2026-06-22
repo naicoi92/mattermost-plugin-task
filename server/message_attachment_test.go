@@ -224,9 +224,9 @@ func TestCardFooter_FullSet(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, &due)
 	footer := cardFooter(task, cardInput{
 		task: task, nowMs: 1_500_000_000_000,
-		creator:      userRef{mention: "@alice"},
-		assignee:     userRef{mention: "@bob"},
-		subtaskDone:  2, subtaskTotal: 5, commentCount: 3,
+		creator:     userRef{mention: "@alice"},
+		assignee:    userRef{mention: "@bob"},
+		subtaskDone: 2, subtaskTotal: 5, commentCount: 3,
 	})
 	// Footer no longer carries people — only due + progress.
 	assert.NotContains(t, footer, "👤")

@@ -293,19 +293,8 @@ func statusLabel(status string) string {
 	}
 }
 
-// priorityLabel returns a card-friendly priority label, or "" when the priority
-// is the default (standard) — mirroring the Quick List's PriorityDot, which is
-// not rendered for standard tasks.
-func priorityLabel(priority string) string {
-	switch priority {
-	case taskmodel.PriorityUrgent:
-		return "🔴 Urgent"
-	case taskmodel.PriorityImportant:
-		return "🟠 Important"
-	default:
-		return ""
-	}
-}
+// priorityLabel was removed; priorityChipLabel replaces it (the chip is always
+// present, even at standard, so the label never returns "" anymore).
 
 // dueLabel renders the due date as a short relative string, with an "Nd
 // overdue" suffix when past and the task is still open. Mirrors the Quick

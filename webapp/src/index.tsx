@@ -146,6 +146,7 @@ export default class Plugin {
                 if (!target) {
                     return;
                 }
+
                 // Walk up to the post root. Mattermost wraps each post in an element
                 // carrying data-postid (and an id like "post_<id>").
                 const postEl = target.closest('[data-postid], [id^="post_"]') as HTMLElement | null;
@@ -164,6 +165,7 @@ export default class Plugin {
                 if (!taskID) {
                     return;
                 }
+
                 // Don't hijack clicks on interactive bits inside the post (links,
                 // buttons, the reaction picker) — let those do their own thing.
                 if ((e.target as HTMLElement).closest('a, button, input, textarea, select, [role="button"]')) {
@@ -175,8 +177,6 @@ export default class Plugin {
             };
             document.addEventListener('click', this.clickListener);
         }
-
-
 
         // Register the RHS. The returned action creators open/close/toggle the
         // sidebar; showRHSPlugin is captured at module scope so the composer
