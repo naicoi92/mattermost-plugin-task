@@ -66,12 +66,12 @@ func priorityActionStyle(priority string) string {
 }
 
 // cardInput is the resolved payload the pure card builder consumes. The Plugin
-// method renderCard resolves the user mentions/avatars (an I/O step) and hands
-// the rest off to buildTaskCard so the builder stays a pure, easily-tested fn.
+// method renderCard resolves the assignee mention/avatar (an I/O step) and
+// hands the rest off to buildTaskCard so the builder stays a pure, easily-
+// tested fn.
 type cardInput struct {
 	task         *taskmodel.Task
 	nowMs        int64
-	creator      userRef
 	assignee     userRef
 	taskPermalink string // absolute URL to the task; "" omits TitleLink
 	subtaskDone  int
@@ -79,18 +79,18 @@ type cardInput struct {
 	commentCount int
 }
 
-// buildTaskCard builds the SlackAttachment that renders a task as a compact,
-// information-rich card. It uses several attachment elements together so the
-// card reads cleanly at a glance:
+// buildTaskCard builds the SlackAttachment that renders a task as a compact
+// card centred on who is doing the work and when it's due:
 //
-//	Pretext     = "@creator created a task" (lifecycle line above the card)
-//	AuthorName  = @creator (with avatar)
-//	Title       = task summary (struck through when done/cancelled)
-//	TitleLink   = task permalink
-//	Text        = description preview (muted, single line)
-//	Actions     = [ Status chip ] [ Priority chip? ] (colored, decorative)
-//	Footer      = "📅 Due Tomorrow" / "@assignee" / "✓ 2/5 · 💬 3"
+//	AuthorName + AuthorIcon = @assignee (with avatar) — the person who owes the
+//	                          task, not the creator. Rendered above the title.
+//	Title     = task summary (struck through when done/cancelled)
+//	TitleLink = task permalink (when site URL is configured)
+//	Text      = description preview (muted, single line)
+//	Actions   = [ Status chip ] [ Priority chip? ] (colored, decorative)
+//	Footer    = "📅 Due Tomorrow · ✓ 2/5 · 💬 3" (metadata, small type)
 //
+// The creator is deliberately omitted from the card — it lives in Task Details.
 // Conditional elements are skipped (no due, standard priority, no description),
 // so a minimal task card stays compact. The Status and Priority chips are
 // decorative (Disabled: true) — all interactions happen in the Task Details
@@ -108,16 +108,12 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 		Timestamp: t.CreatedAt / 1000,
 	}
 
-	// Lifecycle pretext: "@creator created a task". Subtle, sits above the card.
-	if in.creator.mention != "" {
-		card.Pretext = in.creator.mention + " created a task"
-	}
-
-	// Author row: creator @mention + avatar, rendered above the title in small
-	// type. Same pattern the GitHub/Jira plugins use to attribute a card.
-	if in.creator.mention != "" {
-		card.AuthorName = in.creator.mention
-		card.AuthorIcon = in.creator.avatarURL
+	// Author row: the assignee — the person the task belongs to — with avatar.
+	// Putting the assignee here (instead of the creator) keeps the card focused
+	// on "who owes this" rather than "who filed it".
+	if in.assignee.mention != "" {
+		card.AuthorName = in.assignee.mention
+		card.AuthorIcon = in.assignee.avatarURL
 	}
 
 	// Title is clickable so it visibly invites interaction. The webapp's
@@ -128,9 +124,9 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 		card.TitleLink = in.taskPermalink
 	}
 
-	// Footer carries the rest of the metadata in a single small line at the
-	// bottom of the card: due, assignee, progress. Each piece is skipped when
-	// empty so the footer only shows what's set.
+	// Footer carries the remaining metadata in a single small line at the
+	// bottom of the card: due, subtask progress, comment count. The assignee is
+	// not repeated here (it's already in the author row).
 	if footer := cardFooter(t, in); footer != "" {
 		card.Footer = footer
 	}
@@ -138,16 +134,14 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 	return card
 }
 
-// cardFooter assembles the single-line footer: due (with calendar emoji),
-// assignee mention, and a "x/y subtasks · N comments" progress suffix. Each
-// part is skipped when empty; returns "" when nothing is set (no footer row).
+// cardFooter assembles the single-line footer: due (with calendar emoji) and a
+// "✓ x/y · 💬 N" progress suffix. The assignee is NOT included here — it's
+// already shown as the author row. Each part is skipped when empty; returns ""
+// when nothing is set (no footer row).
 func cardFooter(t *taskmodel.Task, in cardInput) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 3)
 	if t.DueAt != nil {
 		parts = append(parts, "📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
-	}
-	if in.assignee.mention != "" {
-		parts = append(parts, in.assignee.mention)
 	}
 	if in.subtaskTotal > 0 {
 		parts = append(parts, fmt.Sprintf("✓ %d/%d", in.subtaskDone, in.subtaskTotal))
@@ -345,20 +339,19 @@ func (p *Plugin) getSiteURL() string {
 	return strings.TrimRight(siteURL, "/")
 }
 
-// renderCard builds the task card with the creator + assignee resolved. Used
-// by the post/update paths so mentions and avatars are always current;
-// buildTaskCard itself stays a pure function for tests.
+// renderCard builds the task card with the assignee mention + avatar resolved.
+// Used by the post/update paths so the author row stays current; buildTaskCard
+// itself stays a pure function for tests.
 func (p *Plugin) renderCard(t *taskmodel.Task) model.SlackAttachment {
 	done, total := p.subtaskProgress(t.ID)
 	comments := p.commentCount(t.ID)
 	return buildTaskCard(cardInput{
-		task:          t,
-		nowMs:         nowMillis(),
-		creator:       p.resolveUser(t.CreatorID),
-		assignee:      p.resolveUser(t.AssigneeID),
-		subtaskDone:   done,
-		subtaskTotal:  total,
-		commentCount:  comments,
+		task:         t,
+		nowMs:        nowMillis(),
+		assignee:     p.resolveUser(t.AssigneeID),
+		subtaskDone:  done,
+		subtaskTotal: total,
+		commentCount: comments,
 	})
 }
 

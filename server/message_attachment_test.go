@@ -23,13 +23,12 @@ func sampleTask(status string, due *int64) *taskmodel.Task {
 }
 
 // buildCard is a thin test helper that assembles a cardInput with the common
-// defaults (resolved creator + assignee mentions, no subtasks/comments) so
-// individual tests can override just the fields they care about.
-func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int, creator, assignee userRef) model.SlackAttachment {
+// defaults (resolved assignee mention, no subtasks/comments) so individual
+// tests can override just the fields they care about.
+func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int, assignee userRef) model.SlackAttachment {
 	return buildTaskCard(cardInput{
 		task:         t,
 		nowMs:        nowMs,
-		creator:      creator,
 		assignee:     assignee,
 		subtaskDone:  subtaskDone,
 		subtaskTotal: subtaskTotal,
@@ -42,15 +41,14 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, &due)
 	task.Description = "OAuth login flow"
 	card := buildCard(task, 1_500_000_000_000, 1, 3, 2,
-		userRef{mention: "@alice", avatarURL: "https://site/alice.png"},
 		userRef{mention: "@bob", avatarURL: "https://site/bob.png"})
 
-	// Pretext: lifecycle line above the card.
-	assert.Equal(t, "@alice created a task", card.Pretext)
+	// No Pretext — the lifecycle line was removed.
+	assert.Empty(t, card.Pretext)
 
-	// Author row: creator mention + avatar.
-	assert.Equal(t, "@alice", card.AuthorName)
-	assert.Equal(t, "https://site/alice.png", card.AuthorIcon)
+	// Author row: assignee mention + avatar.
+	assert.Equal(t, "@bob", card.AuthorName)
+	assert.Equal(t, "https://site/bob.png", card.AuthorIcon)
 
 	// Title + description preview body.
 	assert.Equal(t, "Review PR", card.Title)
@@ -65,41 +63,41 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 	assert.Equal(t, "primary", card.Actions[0].Style)
 	assert.True(t, card.Actions[0].Disabled)
 
-	// Footer: due + assignee + progress.
+	// Footer: due + progress (assignee NOT repeated — it's the author).
 	assert.Contains(t, card.Footer, "📅")
-	assert.Contains(t, card.Footer, "@bob")
 	assert.Contains(t, card.Footer, "✓ 1/3")
 	assert.Contains(t, card.Footer, "💬 2")
+	assert.NotContains(t, card.Footer, "@bob", "assignee is not repeated in the footer")
 }
 
-func TestBuildTaskCard_PretextLifecycleLine(t *testing.T) {
-	// With a creator, the pretext reads "@creator created a task".
+func TestBuildTaskCard_NoPretext(t *testing.T) {
+	// The lifecycle pretext was removed — even with an assignee, no pretext.
 	task := sampleTask(taskmodel.StatusTodo, nil)
-	card := buildCard(task, 0, 0, 0, 0,
-		userRef{mention: "@alice"}, userRef{})
-	assert.Equal(t, "@alice created a task", card.Pretext)
-}
-
-func TestBuildTaskCard_NoPretextWithoutCreator(t *testing.T) {
-	// An empty creator ref omits the pretext entirely.
-	task := sampleTask(taskmodel.StatusTodo, nil)
-	card := buildCard(task, 0, 0, 0, 0, userRef{}, userRef{})
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@alice"})
 	assert.Empty(t, card.Pretext)
 }
 
-func TestBuildTaskCard_AuthorRow(t *testing.T) {
+func TestBuildTaskCard_AuthorRowIsAssignee(t *testing.T) {
+	// The author row shows the assignee (who owes the task), not the creator.
 	task := sampleTask(taskmodel.StatusTodo, nil)
 	card := buildCard(task, 0, 0, 0, 0,
-		userRef{mention: "@alice", avatarURL: "https://site/a.png"}, userRef{})
-	assert.Equal(t, "@alice", card.AuthorName)
-	assert.Equal(t, "https://site/a.png", card.AuthorIcon)
+		userRef{mention: "@bob", avatarURL: "https://site/b.png"})
+	assert.Equal(t, "@bob", card.AuthorName)
+	assert.Equal(t, "https://site/b.png", card.AuthorIcon)
+}
+
+func TestBuildTaskCard_NoAuthorRowWithoutAssignee(t *testing.T) {
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0, userRef{})
+	assert.Empty(t, card.AuthorName)
+	assert.Empty(t, card.AuthorIcon)
 }
 
 func TestBuildTaskCard_TitleLink(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, nil)
 	in := cardInput{
 		task:          task,
-		creator:       userRef{mention: "@alice"},
+		assignee:      userRef{mention: "@alice"},
 		taskPermalink: "https://site/pl/task123",
 	}
 	card := buildTaskCard(in)
@@ -108,20 +106,20 @@ func TestBuildTaskCard_TitleLink(t *testing.T) {
 
 func TestBuildTaskCard_NoTitleLinkWhenEmpty(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, nil)
-	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@alice"}, userRef{})
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@alice"})
 	assert.Empty(t, card.TitleLink)
 }
 
 func TestBuildTaskCard_DescriptionPreview(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, nil)
 	task.Description = "Short description."
-	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@a"}, userRef{})
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@a"})
 	assert.Equal(t, "Short description.", card.Text)
 }
 
 func TestBuildTaskCard_EmptyDescription(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, nil)
-	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@a"}, userRef{})
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@a"})
 	assert.Empty(t, card.Text)
 }
 
@@ -180,13 +178,12 @@ func TestCardFooter_FullSet(t *testing.T) {
 	task := sampleTask(taskmodel.StatusTodo, &due)
 	footer := cardFooter(task, cardInput{
 		task: task, nowMs: 1_500_000_000_000,
-		assignee:     userRef{mention: "@bob"},
-		subtaskDone:  2, subtaskTotal: 5, commentCount: 3,
+		subtaskDone: 2, subtaskTotal: 5, commentCount: 3,
 	})
 	assert.Contains(t, footer, "📅")
-	assert.Contains(t, footer, "@bob")
 	assert.Contains(t, footer, "✓ 2/5")
 	assert.Contains(t, footer, "💬 3")
+	assert.NotContains(t, footer, "@", "assignee is not in the footer (it's the author row)")
 }
 
 func TestCardFooter_SkipsEmptyItems(t *testing.T) {
@@ -207,14 +204,14 @@ func TestCardFooter_OnlyDue(t *testing.T) {
 
 func TestBuildTaskCard_DoneStrikesThroughTitle(t *testing.T) {
 	card := buildCard(sampleTask(taskmodel.StatusDone, nil), 0, 0, 0, 0,
-		userRef{mention: "@a"}, userRef{})
+		userRef{mention: "@a"})
 	assert.Equal(t, "~~Review PR~~", card.Title)
 }
 
 func TestBuildTaskCard_OverdueOpenTaskIsRed(t *testing.T) {
 	pastDue := int64(1_000) // before now
 	card := buildCard(sampleTask(taskmodel.StatusTodo, &pastDue), 2_000, 0, 0, 0,
-		userRef{}, userRef{})
+		userRef{})
 	assert.Equal(t, "#D92D20", card.Color)
 }
 
@@ -222,7 +219,7 @@ func TestBuildTaskCard_OverdueDoneTaskNotRed(t *testing.T) {
 	// A done task is not flagged overdue even if its due is in the past.
 	pastDue := int64(1_000)
 	card := buildCard(sampleTask(taskmodel.StatusDone, &pastDue), 2_000, 0, 0, 0,
-		userRef{}, userRef{})
+		userRef{})
 	assert.NotEqual(t, "#D92D20", card.Color)
 	assert.Equal(t, "#1A7140", card.Color, "done status color")
 }
