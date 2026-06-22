@@ -55,6 +55,19 @@ func newTestPlugin(t *testing.T) (*Plugin, store.Store) {
 	}).Maybe()
 	api.On("UpdatePost", mock.Anything).Return(&mmmodel.Post{}, nil).Maybe()
 	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
+	// GetUser backs resolveMention: any id maps to a user whose username echoes
+	// the id so the Assignee field renders "@<id>" in tests. The real resolve
+	// path hits the server; tests don't care about a real username.
+	api.On("GetUser", mock.Anything).Return(func(userID string) (*mmmodel.User, *mmmodel.AppError) {
+		return &mmmodel.User{Id: userID, Username: userID}, nil
+	}).Maybe()
+	// GetConfig backs getSiteURL/resolveUser: return a config with an empty
+	// SiteURL so the avatar/permalink builders return "" and the card renders
+	// without external URLs in tests.
+	emptySiteURL := ""
+	api.On("GetConfig").Return(&mmmodel.Config{
+		ServiceSettings: mmmodel.ServiceSettings{SiteURL: &emptySiteURL},
+	}).Maybe()
 	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&mmmodel.Channel{Id: "dm-channel"}, nil).Maybe()
 	api.On("PublishWebSocketEvent", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	api.On("SendEphemeralPost", mock.Anything, mock.Anything).Return(&mmmodel.Post{}).Maybe()
@@ -653,7 +666,7 @@ func TestAuthenticatedRoutes_StillRequireHeader(t *testing.T) {
 	}{
 		{"task create", http.MethodPost, "/api/v1/tasks", `{"summary":"x"}`},
 		{"task list", http.MethodGet, "/api/v1/tasks", ""},
-		{"card action", http.MethodPost, "/api/v1/actions", `{}`},
+		{"task patch", http.MethodPatch, "/api/v1/tasks/ghost", `{"summary":"x"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
