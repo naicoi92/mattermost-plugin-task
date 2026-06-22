@@ -61,6 +61,13 @@ func newTestPlugin(t *testing.T) (*Plugin, store.Store) {
 	api.On("GetUser", mock.Anything).Return(func(userID string) (*mmmodel.User, *mmmodel.AppError) {
 		return &mmmodel.User{Id: userID, Username: userID}, nil
 	}).Maybe()
+	// GetConfig backs getSiteURL/resolveUser: return a config with an empty
+	// SiteURL so the avatar/permalink builders return "" and the card renders
+	// without external URLs in tests.
+	emptySiteURL := ""
+	api.On("GetConfig").Return(&mmmodel.Config{
+		ServiceSettings: mmmodel.ServiceSettings{SiteURL: &emptySiteURL},
+	}).Maybe()
 	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&mmmodel.Channel{Id: "dm-channel"}, nil).Maybe()
 	api.On("PublishWebSocketEvent", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
 	api.On("SendEphemeralPost", mock.Anything, mock.Anything).Return(&mmmodel.Post{}).Maybe()

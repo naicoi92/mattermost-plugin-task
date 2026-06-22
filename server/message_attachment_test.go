@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -24,39 +23,106 @@ func sampleTask(status string, due *int64) *taskmodel.Task {
 }
 
 // buildCard is a thin test helper that assembles a cardInput with the common
-// defaults (resolved assignee mention, no subtasks/comments) so individual
-// tests can override just the fields they care about.
-func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int, assigneeMention string) model.SlackAttachment {
+// defaults (resolved creator + assignee mentions, no subtasks/comments) so
+// individual tests can override just the fields they care about.
+func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int, creator, assignee userRef) model.SlackAttachment {
 	return buildTaskCard(cardInput{
-		task:            t,
-		nowMs:           nowMs,
-		assigneeMention: assigneeMention,
-		subtaskDone:     subtaskDone,
-		subtaskTotal:    subtaskTotal,
-		commentCount:    commentCount,
+		task:         t,
+		nowMs:        nowMs,
+		creator:      creator,
+		assignee:     assignee,
+		subtaskDone:  subtaskDone,
+		subtaskTotal: subtaskTotal,
+		commentCount: commentCount,
 	})
 }
 
-func TestBuildTaskCard_TitleTextAndChips(t *testing.T) {
+func TestBuildTaskCard_FullCard(t *testing.T) {
 	due := int64(1_800_000_000_000)
-	card := buildCard(sampleTask(taskmodel.StatusTodo, &due), 1_500_000_000_000, 1, 3, 2, "@bob")
+	task := sampleTask(taskmodel.StatusTodo, &due)
+	task.Description = "OAuth login flow"
+	card := buildCard(task, 1_500_000_000_000, 1, 3, 2,
+		userRef{mention: "@alice", avatarURL: "https://site/alice.png"},
+		userRef{mention: "@bob", avatarURL: "https://site/bob.png"})
 
+	// Pretext: lifecycle line above the card.
+	assert.Equal(t, "@alice created a task", card.Pretext)
+
+	// Author row: creator mention + avatar.
+	assert.Equal(t, "@alice", card.AuthorName)
+	assert.Equal(t, "https://site/alice.png", card.AuthorIcon)
+
+	// Title + description preview body.
 	assert.Equal(t, "Review PR", card.Title)
-	// No Fields grid — metadata lives in Text + colored Action chips.
-	assert.Empty(t, card.Fields, "card uses Text + Action chips, not a Fields grid")
+	assert.Equal(t, "OAuth login flow", card.Text, "description preview lives in Text")
 
-	// Actions: exactly one Status chip (standard priority → no priority chip).
+	// No Fields grid.
+	assert.Empty(t, card.Fields)
+
+	// Actions: status chip only (standard priority).
 	require.Len(t, card.Actions, 1)
 	assert.Equal(t, "To Do", card.Actions[0].Name)
-	assert.Equal(t, "primary", card.Actions[0].Style, "todo status → primary/blue chip")
-	assert.True(t, card.Actions[0].Disabled, "status chip is decorative")
+	assert.Equal(t, "primary", card.Actions[0].Style)
+	assert.True(t, card.Actions[0].Disabled)
 
-	// Text body: one compact line joining due, assignee, subtasks, comments.
-	assert.NotContains(t, card.Text, "**", "no bold meta-labels in the body")
-	assert.Contains(t, card.Text, "📅", "due has a calendar emoji")
-	assert.Contains(t, card.Text, "@bob", "assignee mention present")
-	assert.Contains(t, card.Text, "1/3 subtasks", "subtask progress present")
-	assert.Contains(t, card.Text, "2 comments", "comment count present")
+	// Footer: due + assignee + progress.
+	assert.Contains(t, card.Footer, "📅")
+	assert.Contains(t, card.Footer, "@bob")
+	assert.Contains(t, card.Footer, "✓ 1/3")
+	assert.Contains(t, card.Footer, "💬 2")
+}
+
+func TestBuildTaskCard_PretextLifecycleLine(t *testing.T) {
+	// With a creator, the pretext reads "@creator created a task".
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0,
+		userRef{mention: "@alice"}, userRef{})
+	assert.Equal(t, "@alice created a task", card.Pretext)
+}
+
+func TestBuildTaskCard_NoPretextWithoutCreator(t *testing.T) {
+	// An empty creator ref omits the pretext entirely.
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0, userRef{}, userRef{})
+	assert.Empty(t, card.Pretext)
+}
+
+func TestBuildTaskCard_AuthorRow(t *testing.T) {
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0,
+		userRef{mention: "@alice", avatarURL: "https://site/a.png"}, userRef{})
+	assert.Equal(t, "@alice", card.AuthorName)
+	assert.Equal(t, "https://site/a.png", card.AuthorIcon)
+}
+
+func TestBuildTaskCard_TitleLink(t *testing.T) {
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	in := cardInput{
+		task:          task,
+		creator:       userRef{mention: "@alice"},
+		taskPermalink: "https://site/pl/task123",
+	}
+	card := buildTaskCard(in)
+	assert.Equal(t, "https://site/pl/task123", card.TitleLink)
+}
+
+func TestBuildTaskCard_NoTitleLinkWhenEmpty(t *testing.T) {
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@alice"}, userRef{})
+	assert.Empty(t, card.TitleLink)
+}
+
+func TestBuildTaskCard_DescriptionPreview(t *testing.T) {
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	task.Description = "Short description."
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@a"}, userRef{})
+	assert.Equal(t, "Short description.", card.Text)
+}
+
+func TestBuildTaskCard_EmptyDescription(t *testing.T) {
+	task := sampleTask(taskmodel.StatusTodo, nil)
+	card := buildCard(task, 0, 0, 0, 0, userRef{mention: "@a"}, userRef{})
+	assert.Empty(t, card.Text)
 }
 
 func TestCardActions_StatusChipsByStatus(t *testing.T) {
@@ -109,59 +175,54 @@ func TestCardActions_PriorityChipWhenElevated(t *testing.T) {
 	require.Len(t, actions, 1, "standard priority → no priority chip")
 }
 
-func TestMetaBody_SkipsEmptyItems(t *testing.T) {
-	// No due, no assignee, no subtasks, no comments → empty body.
-	task := sampleTask(taskmodel.StatusTodo, nil)
-	task.AssigneeID = ""
-	body := metaBody(task, cardInput{})
-	assert.Empty(t, body, "empty task yields an empty meta line")
-}
-
-func TestMetaBody_PartialItems(t *testing.T) {
-	task := sampleTask(taskmodel.StatusTodo, nil)
-	task.AssigneeID = ""
-	body := metaBody(task, cardInput{assigneeMention: "@alice"})
-	assert.Equal(t, "@alice", body, "only the assignee line when nothing else is set")
-}
-
-func TestMetaBody_JoinsWithMiddot(t *testing.T) {
+func TestCardFooter_FullSet(t *testing.T) {
 	due := int64(1_800_000_000_000)
 	task := sampleTask(taskmodel.StatusTodo, &due)
-	body := metaBody(task, cardInput{
-		assigneeMention: "@bob", subtaskDone: 1, subtaskTotal: 3, commentCount: 2,
+	footer := cardFooter(task, cardInput{
+		task: task, nowMs: 1_500_000_000_000,
+		assignee:     userRef{mention: "@bob"},
+		subtaskDone:  2, subtaskTotal: 5, commentCount: 3,
 	})
-	parts := strings.Split(body, metaSeparator)
-	require.Len(t, parts, 4, "due + assignee + subtasks + comments")
-	assert.Contains(t, parts[0], "📅")
-	assert.Equal(t, "@bob", parts[1])
-	assert.Contains(t, parts[2], "1/3 subtasks")
-	assert.Contains(t, parts[3], "2 comments")
+	assert.Contains(t, footer, "📅")
+	assert.Contains(t, footer, "@bob")
+	assert.Contains(t, footer, "✓ 2/5")
+	assert.Contains(t, footer, "💬 3")
 }
 
-func TestBuildTaskCard_NoDescription(t *testing.T) {
-	// The description is never rendered in the card — it lives in Task Details.
+func TestCardFooter_SkipsEmptyItems(t *testing.T) {
+	// No due, no assignee, no subtasks, no comments → empty footer.
 	task := sampleTask(taskmodel.StatusTodo, nil)
-	task.Description = "Long description that must NOT appear in the card body."
-	task.AssigneeID = ""
-	card := buildCard(task, 0, 0, 0, 0, "")
-	assert.NotContains(t, card.Text, task.Description)
+	assert.Empty(t, cardFooter(task, cardInput{task: task}))
+}
+
+func TestCardFooter_OnlyDue(t *testing.T) {
+	due := int64(1_800_000_000_000)
+	task := sampleTask(taskmodel.StatusTodo, &due)
+	footer := cardFooter(task, cardInput{task: task, nowMs: 1_500_000_000_000})
+	assert.Contains(t, footer, "📅")
+	assert.NotContains(t, footer, "@")
+	assert.NotContains(t, footer, "✓")
+	assert.NotContains(t, footer, "💬")
 }
 
 func TestBuildTaskCard_DoneStrikesThroughTitle(t *testing.T) {
-	card := buildCard(sampleTask(taskmodel.StatusDone, nil), 0, 0, 0, 0, "")
+	card := buildCard(sampleTask(taskmodel.StatusDone, nil), 0, 0, 0, 0,
+		userRef{mention: "@a"}, userRef{})
 	assert.Equal(t, "~~Review PR~~", card.Title)
 }
 
 func TestBuildTaskCard_OverdueOpenTaskIsRed(t *testing.T) {
 	pastDue := int64(1_000) // before now
-	card := buildCard(sampleTask(taskmodel.StatusTodo, &pastDue), 2_000, 0, 0, 0, "")
+	card := buildCard(sampleTask(taskmodel.StatusTodo, &pastDue), 2_000, 0, 0, 0,
+		userRef{}, userRef{})
 	assert.Equal(t, "#D92D20", card.Color)
 }
 
 func TestBuildTaskCard_OverdueDoneTaskNotRed(t *testing.T) {
 	// A done task is not flagged overdue even if its due is in the past.
 	pastDue := int64(1_000)
-	card := buildCard(sampleTask(taskmodel.StatusDone, &pastDue), 2_000, 0, 0, 0, "")
+	card := buildCard(sampleTask(taskmodel.StatusDone, &pastDue), 2_000, 0, 0, 0,
+		userRef{}, userRef{})
 	assert.NotEqual(t, "#D92D20", card.Color)
 	assert.Equal(t, "#1A7140", card.Color, "done status color")
 }
