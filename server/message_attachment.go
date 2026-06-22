@@ -66,37 +66,36 @@ func priorityActionStyle(priority string) string {
 }
 
 // cardInput is the resolved payload the pure card builder consumes. The Plugin
-// method renderCard resolves the assignee mention/avatar (an I/O step) and
-// hands the rest off to buildTaskCard so the builder stays a pure, easily-
-// tested fn.
+// method renderCard resolves the user mentions (an I/O step) and hands the
+// rest off to buildTaskCard so the builder stays a pure, easily-tested fn.
 type cardInput struct {
-	task         *taskmodel.Task
-	nowMs        int64
-	assignee     userRef
+	task          *taskmodel.Task
+	nowMs         int64
+	creator       userRef
+	assignee      userRef
 	taskPermalink string // absolute URL to the task; "" omits TitleLink
-	subtaskDone  int
-	subtaskTotal int
-	commentCount int
+	subtaskDone   int
+	subtaskTotal  int
+	commentCount  int
 }
 
 // buildTaskCard builds the SlackAttachment that renders a task as a compact
-// card centred on who is doing the work and when it's due:
+// card. Both the creator and the assignee are shown in the footer, prefixed
+// with a 👤 emoji so each reads as a small "author" entry. Status and Priority
+// are colored chips in the Actions row that the user can click to cycle the
+// value (todo→in_progress→done→todo; standard→important→urgent→standard).
 //
-//	AuthorName + AuthorIcon = @assignee (with avatar) — the person who owes the
-//	                          task, not the creator. Rendered above the title.
 //	Title     = task summary (struck through when done/cancelled)
 //	TitleLink = task permalink (when site URL is configured)
 //	Text      = description preview (muted, single line)
-//	Actions   = [ Status chip ] [ Priority chip? ] (colored, decorative)
-//	Footer    = "📅 Due Tomorrow · ✓ 2/5 · 💬 3" (metadata, small type)
+//	Actions   = [ Status chip ] [ Priority chip ] (clickable, cycle on click)
+//	Footer    = "👤 @creator → 👤 @assignee · 📅 Tomorrow · ✓ 2/5 · 💬 3"
 //
-// The creator is deliberately omitted from the card — it lives in Task Details.
-// Conditional elements are skipped (no due, standard priority, no description),
-// so a minimal task card stays compact. The Status and Priority chips are
-// decorative (Disabled: true) — all interactions happen in the Task Details
-// panel (opened by clicking the card). The card is rendered natively by
-// Mattermost's SlackAttachment renderer, so it works on mobile too. nowMs lets
-// the overdue check be deterministic in tests.
+// Conditional items are skipped (no due, standard priority, no description),
+// so a minimal task card stays compact. Other interactions happen in the Task
+// Details panel (opened by clicking the card). The card is rendered natively
+// by Mattermost's SlackAttachment renderer, so it works on mobile too. nowMs
+// lets the overdue check be deterministic in tests.
 func buildTaskCard(in cardInput) model.SlackAttachment {
 	t := in.task
 	card := model.SlackAttachment{
@@ -108,14 +107,6 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 		Timestamp: t.CreatedAt / 1000,
 	}
 
-	// Author row: the assignee — the person the task belongs to — with avatar.
-	// Putting the assignee here (instead of the creator) keeps the card focused
-	// on "who owes this" rather than "who filed it".
-	if in.assignee.mention != "" {
-		card.AuthorName = in.assignee.mention
-		card.AuthorIcon = in.assignee.avatarURL
-	}
-
 	// Title is clickable so it visibly invites interaction. The webapp's
 	// delegated click handler already opens Task Details for custom_task posts;
 	// the link is a fallback for plain-text contexts (mobile push, search
@@ -124,9 +115,11 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 		card.TitleLink = in.taskPermalink
 	}
 
-	// Footer carries the remaining metadata in a single small line at the
-	// bottom of the card: due, subtask progress, comment count. The assignee is
-	// not repeated here (it's already in the author row).
+	// Footer carries the people and the metadata in a single small line at the
+	// bottom: "👤 @creator → 👤 @assignee · 📅 Tomorrow · ✓ 2/5 · 💬 3". Both
+	// the creator and assignee are prefixed with a 👤 emoji so each reads like
+	// a small author entry (SlackAttachment only allows one real AuthorIcon, so
+	// the footer uses emoji placeholders). Each part is skipped when empty.
 	if footer := cardFooter(t, in); footer != "" {
 		card.Footer = footer
 	}
@@ -134,12 +127,19 @@ func buildTaskCard(in cardInput) model.SlackAttachment {
 	return card
 }
 
-// cardFooter assembles the single-line footer: due (with calendar emoji) and a
-// "✓ x/y · 💬 N" progress suffix. The assignee is NOT included here — it's
-// already shown as the author row. Each part is skipped when empty; returns ""
-// when nothing is set (no footer row).
+// cardFooter assembles the single-line footer. The people come first — the
+// creator, then an arrow, then the assignee (when distinct) — so the chain of
+// custody reads left-to-right. Due date, subtask progress, and comment count
+// follow, each skipped when empty. Returns "" when nothing is set.
 func cardFooter(t *taskmodel.Task, in cardInput) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 5)
+
+	// People: "👤 @creator → 👤 @assignee". The arrow is dropped when the two
+	// are the same (or the assignee is empty), so a self-assigned task reads
+	// just "👤 @creator" with no redundant self-arrow.
+	if in.creator.mention != "" || in.assignee.mention != "" {
+		parts = append(parts, peopleLine(in.creator, in.assignee))
+	}
 	if t.DueAt != nil {
 		parts = append(parts, "📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
 	}
@@ -152,27 +152,129 @@ func cardFooter(t *taskmodel.Task, in cardInput) string {
 	return strings.Join(parts, metaSeparator)
 }
 
-// cardActions builds the decorative chip row: a colored Status chip, then a
-// colored Priority chip when the priority is elevated (urgent/important). Both
-// are disabled — they convey state visually, they don't trigger callbacks.
+// peopleLine renders the creator → assignee chain for the footer. The arrow is
+// omitted when the two mentions are equal (self-assigned) or when the assignee
+// is empty, so the line never reads "👤 @alice → 👤 @alice". Returns "" when
+// neither mention is set so the caller can skip the people part entirely.
+func peopleLine(creator, assignee userRef) string {
+	if creator.mention == "" && assignee.mention == "" {
+		return ""
+	}
+	if assignee.mention == "" || creator.mention == assignee.mention {
+		// Only the creator, or self-assigned → single entry.
+		if creator.mention != "" {
+			return "👤 " + creator.mention
+		}
+		return "👤 " + assignee.mention
+	}
+	if creator.mention == "" {
+		return "👤 " + assignee.mention
+	}
+	return "👤 " + creator.mention + " → 👤 " + assignee.mention
+}
+
+// cardActionCallbackPath is the plugin-scoped URL the Status/Priority chips
+// POST to. Mattermost requires PostActionIntegration URLs to use the
+// /plugins/{plugin_id}/... form for routing + internal auth. The handler
+// (handleCardAction) reads context.action + context.task_id and cycles the
+// corresponding value.
+const cardActionCallbackPath = "/plugins/com.mattermost.plugin-task/api/v1/actions"
+
+// cardActionKind identifies which value a chip cycles: status or priority.
+type cardActionKind string
+
+const (
+	actionStatus   cardActionKind = "status"
+	actionPriority cardActionKind = "priority"
+)
+
+// cardActions builds the clickable chip row. The Status chip always shows and
+// cycles todo→in_progress→done→todo on click. The Priority chip is shown even
+// for standard priority ("Standard", default style) and cycles
+// standard→important→urgent→standard on click. Both POST to
+// /api/v1/actions with {action, task_id} in context.
 func cardActions(t *taskmodel.Task) []*model.PostAction {
-	actions := []*model.PostAction{
+	statusNext := nextStatus(t.Status)
+	priorityNext := nextPriority(t.Priority)
+	return []*model.PostAction{
 		{
-			Name:     statusLabel(t.Status),
-			Type:     "button",
-			Style:    statusActionStyle(t.Status),
-			Disabled: true,
+			Name:        statusLabel(t.Status) + " → " + statusLabel(statusNext),
+			Type:        "button",
+			Style:       statusActionStyle(t.Status),
+			Integration: cardIntegration(actionStatus, t.ID),
+		},
+		{
+			Name:        priorityChipLabel(t.Priority) + " → " + priorityChipLabel(priorityNext),
+			Type:        "button",
+			Style:       priorityActionStyleOr(t.Priority),
+			Integration: cardIntegration(actionPriority, t.ID),
 		},
 	}
-	if style := priorityActionStyle(t.Priority); style != "" {
-		actions = append(actions, &model.PostAction{
-			Name:     priorityLabel(t.Priority),
-			Type:     "button",
-			Style:    style,
-			Disabled: true,
-		})
+}
+
+// cardIntegration builds the PostActionIntegration pointing at the chip-action
+// callback with the kind + task_id in context.
+func cardIntegration(kind cardActionKind, taskID string) *model.PostActionIntegration {
+	return &model.PostActionIntegration{
+		URL: cardActionCallbackPath,
+		Context: map[string]any{
+			"action":  string(kind),
+			"task_id": taskID,
+		},
 	}
-	return actions
+}
+
+// nextStatus returns the next status in the cycle todo→in_progress→done→todo.
+// Cancelled is terminal in the cycle (clicking a Cancelled chip does nothing),
+// matching the rule that reopening from cancelled must go via Task Details.
+func nextStatus(status string) string {
+	switch status {
+	case taskmodel.StatusTodo:
+		return taskmodel.StatusInProgress
+	case taskmodel.StatusInProgress:
+		return taskmodel.StatusDone
+	case taskmodel.StatusDone:
+		return taskmodel.StatusTodo
+	default:
+		return status
+	}
+}
+
+// nextPriority returns the next priority in the cycle
+// standard→important→urgent→standard.
+func nextPriority(priority string) string {
+	switch priority {
+	case taskmodel.PriorityImportant:
+		return taskmodel.PriorityUrgent
+	case taskmodel.PriorityUrgent:
+		return taskmodel.PriorityStandard
+	default:
+		return taskmodel.PriorityImportant
+	}
+}
+
+// priorityChipLabel returns the label shown on the Priority chip for every
+// priority (including Standard, which is rendered with a "default" style so
+// the chip is always present and clickable).
+func priorityChipLabel(priority string) string {
+	switch priority {
+	case taskmodel.PriorityUrgent:
+		return "🔴 Urgent"
+	case taskmodel.PriorityImportant:
+		return "🟠 Important"
+	default:
+		return "Standard"
+	}
+}
+
+// priorityActionStyleOr is like priorityActionStyle but returns "default" for
+// standard priority instead of "", so the Standard chip still renders with a
+// visible (neutral) style.
+func priorityActionStyleOr(priority string) string {
+	if s := priorityActionStyle(priority); s != "" {
+		return s
+	}
+	return "default"
 }
 
 // cardTitle renders the card title, struck through for terminal statuses —
@@ -339,15 +441,16 @@ func (p *Plugin) getSiteURL() string {
 	return strings.TrimRight(siteURL, "/")
 }
 
-// renderCard builds the task card with the assignee mention + avatar resolved.
-// Used by the post/update paths so the author row stays current; buildTaskCard
-// itself stays a pure function for tests.
+// renderCard builds the task card with the creator + assignee mentions
+// resolved. Used by the post/update paths so the footer stays current;
+// buildTaskCard itself stays a pure function for tests.
 func (p *Plugin) renderCard(t *taskmodel.Task) model.SlackAttachment {
 	done, total := p.subtaskProgress(t.ID)
 	comments := p.commentCount(t.ID)
 	return buildTaskCard(cardInput{
 		task:         t,
 		nowMs:        nowMillis(),
+		creator:      p.resolveUser(t.CreatorID),
 		assignee:     p.resolveUser(t.AssigneeID),
 		subtaskDone:  done,
 		subtaskTotal: total,
