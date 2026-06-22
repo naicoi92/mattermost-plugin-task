@@ -3,29 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
-)
-
-// cardActionCallbackPath is the plugin-scoped URL interactive card buttons POST
-// to. Mattermost requires PostActionIntegration URLs to use the
-// /plugins/{plugin_id}/... form for routing + internal auth (without it the
-// callback is treated as an external request and fails). The handler
-// (handleCardAction) reads context.action + context.task_id.
-const cardActionCallbackPath = "/plugins/com.mattermost.plugin-task/api/v1/actions"
-
-// cardAction is an interactive button on a task card.
-type cardAction string
-
-const (
-	actionDone    cardAction = "done"
-	actionCancel  cardAction = "cancel"
-	actionAssign  cardAction = "assign"
-	actionSubtask cardAction = "subtask"
-	actionComment cardAction = "comment"
 )
 
 // statusColors map a task status to a SlackAttachment color (predefined styles
@@ -38,50 +21,86 @@ var statusColors = map[string]string{
 	taskmodel.StatusCancelled:  "#8A8A8A", // grey
 }
 
-// buildTaskCard builds the SlackAttachment that renders a task as an interactive
-// message card (PLAN.md section 6.3 / issue #15). It shows summary, assignee,
-// due (red when overdue), status, subtask progress, comment count, and the
-// action buttons Done/Cancel/Assign/Subtask/Comment.
+// cardFieldOrder is the canonical order of card fields, mirroring the Quick
+// List task item's meta row (Status pill, Priority dot, Due chip, Assignee
+// mention, then the aggregate counters). Conditional fields are simply
+// omitted, so the visible order never changes.
+const (
+	cardFieldStatus    = "Status"
+	cardFieldPriority  = "Priority"
+	cardFieldDue       = "Due"
+	cardFieldAssignee  = "Assignee"
+	cardFieldSubtasks  = "Subtasks"
+	cardFieldComments  = "Comments"
+)
+
+// cardInput is the resolved, fully-resolved payload the pure card builder
+// consumes. The Plugin method renderCard resolves the assignee mention (an
+// I/O step) and hands the rest off to buildTaskCard so the builder stays a
+// pure, easily-tested function.
+type cardInput struct {
+	task            *taskmodel.Task
+	nowMs           int64
+	assigneeMention string
+	subtaskDone     int
+	subtaskTotal    int
+	commentCount    int
+}
+
+// buildTaskCard builds the SlackAttachment that renders a task as an
+// information-only message card matching the Quick List task item (PLAN.md
+// section 6.3 / issue #15). The card shows the summary, a description preview,
+// and a meta row of fields — Status, Priority, Due, Assignee, Subtasks,
+// Comments — in that order. There are NO action buttons: like the Quick List
+// row, all interactions happen in the Task Details panel (opened by clicking
+// the card).
 //
-// nowMs lets the overdue check be deterministic in tests; pass time.Now().UnixMilli().
-// subtaskDone/subtaskTotal render the "x/y" progress (pass 0/0 when none).
-// commentCount renders a "Comments: N" indicator when > 0 (issue #25).
-func buildTaskCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int) model.SlackAttachment {
+// The card is built on the server and rendered natively by Mattermost's
+// SlackAttachment renderer, so it works on mobile too. nowMs lets the overdue
+// and "due soon" checks be deterministic in tests; pass time.Now().UnixMilli().
+func buildTaskCard(in cardInput) model.SlackAttachment {
+	t := in.task
 	fields := []*model.SlackAttachmentField{
-		{Title: "Status", Value: statusLabel(t.Status), Short: true},
+		{Title: cardFieldStatus, Value: statusLabel(t.Status), Short: true},
 	}
-	if t.AssigneeID != "" {
+	if label := priorityLabel(t.Priority); label != "" {
 		fields = append(fields, &model.SlackAttachmentField{
-			Title: "Assignee", Value: mention(t.AssigneeID), Short: true,
+			Title: cardFieldPriority, Value: label, Short: true,
 		})
 	}
 	if t.DueAt != nil {
 		fields = append(fields, &model.SlackAttachmentField{
-			Title: "Due", Value: dueLabel(*t.DueAt, nowMs), Short: true,
+			Title: cardFieldDue, Value: dueLabel(*t.DueAt, in.nowMs, t.Status), Short: true,
 		})
 	}
-	if subtaskTotal > 0 {
+	if in.assigneeMention != "" {
 		fields = append(fields, &model.SlackAttachmentField{
-			Title: "Subtasks", Value: fmt.Sprintf("%d/%d done", subtaskDone, subtaskTotal), Short: true,
+			Title: cardFieldAssignee, Value: in.assigneeMention, Short: true,
 		})
 	}
-	if commentCount > 0 {
+	if in.subtaskTotal > 0 {
 		fields = append(fields, &model.SlackAttachmentField{
-			Title: "Comments", Value: fmt.Sprintf("%d", commentCount), Short: true,
+			Title: cardFieldSubtasks, Value: fmt.Sprintf("%d/%d done", in.subtaskDone, in.subtaskTotal), Short: true,
+		})
+	}
+	if in.commentCount > 0 {
+		fields = append(fields, &model.SlackAttachmentField{
+			Title: cardFieldComments, Value: fmt.Sprintf("%d", in.commentCount), Short: true,
 		})
 	}
 
 	return model.SlackAttachment{
 		Title:     cardTitle(t),
 		Fallback:  cardTitle(t),
-		Color:     cardColor(t, nowMs),
+		Text:      descriptionPreview(t.Description),
+		Color:     cardColor(t, in.nowMs),
 		Fields:    fields,
-		Actions:   taskCardActions(t.ID, t.Status),
 		Timestamp: t.CreatedAt / 1000,
 	}
 }
 
-// cardTitle renders the card title, struck through for terminal statuses.
+// cardTitle renders the card title, struck through for terminal statuses —
+// matches the Quick List row's line-through on done/cancelled summaries.
 func cardTitle(t *taskmodel.Task) string {
 	switch t.Status {
 	case taskmodel.StatusDone, taskmodel.StatusCancelled:
@@ -120,50 +139,125 @@ func statusLabel(status string) string {
 	}
 }
 
-// dueLabel renders the due date relative to now, with an "overdue" marker when
-// past. We render the absolute ms timestamp as a readable marker; full date
-// formatting by the client is a future enhancement.
-func dueLabel(dueMs, nowMs int64) string {
-	base := fmt.Sprintf("<!date^%d|due>", dueMs/1000)
-	if dueMs < nowMs {
-		return "🔴 " + base + " (overdue)"
+// priorityLabel returns a card-friendly priority label, or "" when the priority
+// is the default (standard) — mirroring the Quick List's PriorityDot, which is
+// not rendered for standard tasks.
+func priorityLabel(priority string) string {
+	switch priority {
+	case taskmodel.PriorityUrgent:
+		return "🔴 Urgent"
+	case taskmodel.PriorityImportant:
+		return "🟠 Important"
+	default:
+		return ""
 	}
-	return base
 }
 
-// mention renders an @mention marker for a user id. Mattermost renders the raw
-// id in posts; a real @mention needs the username, but the card is built on the
-// server where we only have the id — the client/user resolves it.
-func mention(userID string) string {
+// dueLabel renders the due date as a short relative string, with an "Nd
+// overdue" suffix when past and the task is still open. Mirrors the Quick
+// List's formatDueRelative as closely as Go's time formatting allows: same-day
+// → "Today, HH:MM", tomorrow → "Tomorrow", within 7 days → "Mon, 2 Jun", same
+// year → "Mon, 15 Jun", other years → "Mon, 15 Jun 2027".
+//
+// nowMs lets the overdue check be deterministic in tests.
+func dueLabel(dueMs, nowMs int64, status string) string {
+	due := time.UnixMilli(dueMs).Local()
+	now := time.UnixMilli(nowMs).Local()
+	today := startOfDay(now)
+	dueDay := startOfDay(due)
+	dayDiff := int(dueDay.Sub(today).Hours() / 24)
+
+	open := status == taskmodel.StatusTodo || status == taskmodel.StatusInProgress
+	if open && dayDiff < 0 {
+		return fmt.Sprintf("%d day%s overdue", -dayDiff, plural(-dayDiff))
+	}
+	switch dayDiff {
+	case 0:
+		return "Today, " + due.Format("15:04")
+	case 1:
+		return "Tomorrow"
+	case -1:
+		return "Yesterday"
+	}
+	if due.Year() == today.Year() {
+		return due.Format("Mon, 2 Jan")
+	}
+	return due.Format("Mon, 2 Jan 2006")
+}
+
+// plural returns "s" when n != 1, "" otherwise — used for "1 day overdue" vs
+// "3 days overdue".
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// startOfDay returns t clamped to local midnight, matching the TS helper used
+// by formatDueRelative so dayDiff is computed on calendar days, not 24h
+// windows.
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+// descriptionPreview collapses a description into a single short preview line
+// for the card body, mirroring the Quick List's truncateDescription. An empty
+// description yields "" (no Text body). Whitespace runs collapse to single
+// spaces; the cut lands on a word boundary with an ellipsis when truncated.
+const descriptionPreviewMax = 100
+
+func descriptionPreview(text string) string {
+	flat := strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+	if flat == "" {
+		return ""
+	}
+	if len(flat) <= descriptionPreviewMax {
+		return flat
+	}
+	slice := flat[:descriptionPreviewMax]
+	if i := strings.LastIndex(slice, " "); i > 0 {
+		slice = slice[:i]
+	}
+	return slice + "…"
+}
+
+// resolveMention returns a real "@username" mention for userID, falling back to
+// the raw "@<id>" form when the user can't be resolved (deleted user, RPC
+// error). The card previously rendered the raw id; resolving to the username
+// lets Mattermost render a real mention.
+func (p *Plugin) resolveMention(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	if u, err := p.API.GetUser(userID); err == nil && u != nil && u.Username != "" {
+		return "@" + u.Username
+	}
 	return "@" + userID
 }
 
-// taskCardActions builds the interactive buttons for a task card. Terminal
-// statuses disable the Done/Cancel actions to reflect that the task is final.
-func taskCardActions(taskID, status string) []*model.PostAction {
-	terminal := status == taskmodel.StatusDone || status == taskmodel.StatusCancelled
-	doneStyle, cancelStyle := "good", "danger"
-	if terminal {
-		doneStyle, cancelStyle = "default", "default"
-	}
-	return []*model.PostAction{
-		{Name: "✓ Done", Type: "button", Style: doneStyle, Disabled: terminal && status == taskmodel.StatusDone, Integration: cardIntegration(actionDone, taskID)},
-		{Name: "🚫 Cancel", Type: "button", Style: cancelStyle, Disabled: terminal && status == taskmodel.StatusCancelled, Integration: cardIntegration(actionCancel, taskID)},
-		{Name: "👤 Assign", Type: "button", Style: "default", Integration: cardIntegration(actionAssign, taskID)},
-		{Name: "➕ Subtask", Type: "button", Style: "default", Integration: cardIntegration(actionSubtask, taskID)},
-		{Name: "💬 Comment", Type: "button", Style: "default", Integration: cardIntegration(actionComment, taskID)},
-	}
+// renderCard builds the task card with the assignee mention resolved. Used by
+// the post/update paths so the mention is always current; buildTaskCard itself
+// stays a pure function for tests.
+func (p *Plugin) renderCard(t *taskmodel.Task) model.SlackAttachment {
+	done, total := p.subtaskProgress(t.ID)
+	comments := p.commentCount(t.ID)
+	return buildTaskCard(cardInput{
+		task:            t,
+		nowMs:           nowMillis(),
+		assigneeMention: p.resolveMention(t.AssigneeID),
+		subtaskDone:     done,
+		subtaskTotal:    total,
+		commentCount:    comments,
+	})
 }
 
-// cardIntegration builds the PostActionIntegration pointing at the card-action
-// callback with the action + task_id in context.
-func cardIntegration(action cardAction, taskID string) *model.PostActionIntegration {
-	return &model.PostActionIntegration{
-		URL: cardActionCallbackPath,
-		Context: map[string]any{
-			"action":  string(action),
-			"task_id": taskID,
-		},
+// taskCardProps builds the post.Props for a task card: the attachment plus the
+// task_id the webapp reads to open Task Details on click.
+func taskCardProps(t *taskmodel.Task, attachment *model.SlackAttachment) map[string]any {
+	return map[string]any{
+		"attachments": []*model.SlackAttachment{attachment},
+		"task_id":     t.ID,
 	}
 }
 
@@ -171,16 +265,12 @@ func cardIntegration(action cardAction, taskID string) *model.PostActionIntegrat
 // (author = bot) and returns the post id. Used to post the card when a task is
 // created in a channel.
 func (p *Plugin) postCard(channelID string, t *taskmodel.Task) string {
-	done, total := p.subtaskProgress(t.ID)
-	comments := p.commentCount(t.ID)
-	attachment := buildTaskCard(t, nowMillis(), done, total, comments)
+	attachment := p.renderCard(t)
 	post := &model.Post{
 		UserId:    p.botUserID,
 		ChannelId: channelID,
 		Type:      "custom_task",
-		Props: map[string]any{
-			"attachments": []*model.SlackAttachment{&attachment},
-		},
+		Props:     taskCardProps(t, &attachment),
 	}
 	created, err := p.API.CreatePost(post)
 	if err != nil {
@@ -208,9 +298,35 @@ func (p *Plugin) postCardDM(assigneeID string, t *taskmodel.Task) string {
 	return p.postCard(channel.Id, t)
 }
 
+// postCardReply posts the task card as a thread reply rooted at rootPostID in
+// channelID, and returns the reply post id. Used to post a subtask inside its
+// parent's thread so the parent's conversation groups the subtasks together.
+// A task with no parent card (empty rootPostID) is posted top-level instead,
+// matching the pre-subtask behaviour.
+func (p *Plugin) postCardReply(rootPostID, channelID string, t *taskmodel.Task) string {
+	attachment := p.renderCard(t)
+	post := &model.Post{
+		UserId:    p.botUserID,
+		ChannelId: channelID,
+		RootId:    rootPostID,
+		Type:      "custom_task",
+		Props:     taskCardProps(t, &attachment),
+	}
+	created, err := p.API.CreatePost(post)
+	if err != nil {
+		p.API.LogError("Failed to post task card reply",
+			"root_id", rootPostID, "channel_id", channelID, "task_id", t.ID, "error", err)
+		return ""
+	}
+	if created != nil {
+		return created.Id
+	}
+	return ""
+}
+
 // updateCard re-renders the task card and updates the existing post (identified
 // by postID) with the new attachment. No-op when postID is empty or the update
-// fails (logged). Used when a task's status changes.
+// fails (logged). Used when a task changes so the card stays in sync.
 func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 	if postID == "" {
 		return
@@ -220,10 +336,8 @@ func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 		p.API.LogError("Failed to load post for card update", "post_id", postID, "error", err)
 		return
 	}
-	done, total := p.subtaskProgress(t.ID)
-	comments := p.commentCount(t.ID)
-	attachment := buildTaskCard(t, nowMillis(), done, total, comments)
-	post.Props["attachments"] = []*model.SlackAttachment{&attachment}
+	attachment := p.renderCard(t)
+	post.Props = taskCardProps(t, &attachment)
 	if _, err := p.API.UpdatePost(post); err != nil {
 		p.API.LogError("Failed to update task card", "post_id", postID, "error", err)
 	}
@@ -231,10 +345,9 @@ func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 
 // updateTaskCards refreshes EVERY tracked card for the task (channel, DM, and
 // any future locations) by listing task_posts rather than hard-coding two
-// columns. This is the post-migration card-refresh path: a task may be posted
-// in several places, and a status/assignee change must update them all. A
-// deleted post is skipped (defensive self-heal) so one stale card can't block
-// the rest.
+// columns. A task may be posted in several places, and a status/assignee change
+// must update them all. A deleted post is skipped (defensive self-heal) so one
+// stale card can't block the rest.
 func (p *Plugin) updateTaskCards(t *taskmodel.Task) {
 	if t == nil {
 		return
@@ -280,11 +393,6 @@ func (p *Plugin) commentCount(taskID string) int {
 	return len(ids)
 }
 
-// recentComments returns up to limit most-recent comment bodies on taskID
-// (creation order), or nil on error. Used to seed the Task Detail dialog's
-// read-only comment preview (issue #25).
-//
-// In the comment-as-thread design the comment body lives in the Mattermost
 // subtaskProgress returns (done, total) for the task's subtasks, or (0, 0) on
 // error (best-effort — a card without progress is better than no card).
 func (p *Plugin) subtaskProgress(taskID string) (done, total int) {

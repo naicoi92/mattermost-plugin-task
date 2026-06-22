@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -31,10 +30,6 @@ func (p *Plugin) initRouter() *mux.Router {
 	apiRouter.Use(p.MattermostAuthorizationRequired)
 
 	apiRouter.HandleFunc("/hello", p.HelloWorld).Methods(http.MethodGet)
-
-	// Interactive task-card action callback (issue #15): Done/Cancel/Assign/
-	// Subtask/Comment buttons POST here with context {action, task_id}.
-	apiRouter.HandleFunc("/actions", p.handleCardAction).Methods(http.MethodPost)
 
 	// Task CRUD (issue #7).
 	tasks := apiRouter.PathPrefix("/tasks").Subrouter()
@@ -335,6 +330,11 @@ func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	p.writeJSON(w, updated)
 
+	// Refresh the interactive card (channel + DM) so summary/description/due/
+	// priority edits stay in sync with the DB — previously only status/subtask/
+	// comment changes refreshed it, so patched fields drifted.
+	p.updateTaskCards(updated)
+
 	// Real-time: summary/description/due/is_all_day changed (#32).
 	p.broadcastTaskUpdated(updated, req.UpdateFields)
 }
@@ -407,6 +407,16 @@ func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Real-time: status changed — Kanban column + Quick List badges refresh (#32).
 	p.broadcastTaskUpdated(updated, []string{"status"})
+
+	// When a subtask reaches a terminal status, refresh the parent's card so its
+	// "x/y done" progress reflects the change (SetStatus cascade-cancels open
+	// siblings too, so a single refresh keeps the parent consistent).
+	if updated.ParentTaskID != "" {
+		if parent, gErr := p.taskService.Get(updated.ParentTaskID); gErr == nil && parent != nil {
+			p.updateTaskCards(parent)
+			p.broadcastTaskUpdated(parent, []string{"subtasks"})
+		}
+	}
 }
 
 // notifyTerminalStatus fires the done/cancelled DM to creator + assignee (minus
@@ -518,6 +528,9 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 	}
 	p.writeJSON(w, updated)
 
+	// Refresh the interactive card so the Assignee field stays in sync.
+	p.updateTaskCards(updated)
+
 	// Real-time: assignee changed — Quick List "My Tasks" + avatars refresh (#32).
 	p.broadcastTaskUpdated(updated, []string{"assignee_id"})
 }
@@ -536,6 +549,9 @@ func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.writeJSON(w, updated)
+
+	// Refresh the interactive card so the Assignee field is cleared.
+	p.updateTaskCards(updated)
 
 	// Real-time: assignee cleared (#32).
 	p.broadcastTaskUpdated(updated, []string{"assignee_id"})
@@ -598,20 +614,28 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Post the subtask's own card in the inherited channel and DM the assignee
-	// when distinct from the creator. The subtask card is independent so its own
-	// status changes can update it later.
-	var channelPostID, dmPostID string
-	if created.ChannelID != "" {
-		channelPostID = p.postCard(created.ChannelID, created)
+	// Post the subtask's card as a thread reply inside the parent's card
+	// thread. The parent is posted in either a channel (ChannelPostID set) or a
+	// DM (DMPostID set); the subtask follows the same surface so the family of
+	// subtasks groups together under the parent's conversation. A task whose
+	// parent has no tracked card yet falls back to a top-level card in the
+	// inherited channel.
+	var subtaskPostID string
+	switch {
+	case parent.ChannelPostID != "":
+		subtaskPostID = p.postCardReply(parent.ChannelPostID, parent.ChannelID, created)
+	case parent.DMPostID != "":
+		// DM-only parent: post the reply in the bot↔assignee DM channel.
+		subtaskPostID = p.postCardReply(parent.DMPostID, created.ChannelID, created)
+	default:
+		if created.ChannelID != "" {
+			subtaskPostID = p.postCard(created.ChannelID, created)
+		}
 	}
-	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
-		dmPostID = p.postCardDM(created.AssigneeID, created)
-	}
-	if channelPostID != "" || dmPostID != "" {
-		updated, uerr := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID)
+	if subtaskPostID != "" {
+		updated, uerr := p.taskService.SetPostIDs(created.ID, subtaskPostID, "")
 		if uerr != nil {
-			p.API.LogError("Failed to persist subtask card post IDs",
+			p.API.LogError("Failed to persist subtask card post ID",
 				"task_id", created.ID, "error", uerr)
 		} else if updated != nil {
 			created = updated
@@ -820,66 +844,4 @@ func (p *Plugin) listTaskEvents(w http.ResponseWriter, r *http.Request) {
 // and channel tasks fall back to creator/assignee).
 func (p *Plugin) channelMembership() permission.ChannelMembershipChecker {
 	return channelMembershipChecker{api: p.API}
-}
-
-// handleCardAction handles the interactive task-card button callback
-// (POST /api/v1/actions). Mattermost sends a PostActionIntegrationRequest with
-// the user, channel, post, and context {action, task_id}.
-//
-// Done/Cancel apply a status transition; Assign/Subtask/Comment respond with an
-// ephemeral hint (their full dialog flows land with #8/#17). The response is a
-// JSON body Mattermost interprets to update the source post or show ephemeral
-// text.
-func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
-	var req mmmodel.PostActionIntegrationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		p.writeError(w, http.StatusBadRequest, "invalid action request")
-		return
-	}
-
-	action, _ := req.Context["action"].(string)
-	taskID, _ := req.Context["task_id"].(string)
-	actorID := req.UserId
-	if actorID == "" {
-		p.writeError(w, http.StatusUnauthorized, "not authorized")
-		return
-	}
-	if taskID == "" || action == "" {
-		p.writeError(w, http.StatusBadRequest, "missing action or task_id")
-		return
-	}
-
-	switch action {
-	case string(actionDone), string(actionCancel):
-		status := taskmodel.StatusDone
-		if action == string(actionCancel) {
-			status = taskmodel.StatusCancelled
-		}
-		updated, err := p.taskService.SetStatus(actorID, taskID, status)
-		if err != nil {
-			writeCardResponse(w, fmt.Sprintf("⚠️ Could not update task: %s", err.Error()))
-			return
-		}
-		// Update the source post's card in place, then refresh all tracked
-		// cards (channel/DM/any future location) so every copy stays current.
-		p.updateCard(req.PostId, updated)
-		p.updateTaskCards(updated)
-		p.notifyTerminalStatus(updated, status, req.UserId)
-		// Real-time: status changed via the interactive card (#32).
-		p.broadcastTaskUpdated(updated, []string{"status"})
-		// Empty ephemeral => Mattermost updates the post and shows nothing extra.
-		writeCardResponse(w, "")
-	case string(actionAssign), string(actionSubtask), string(actionComment):
-		writeCardResponse(w, "Use the /task command for this action (interactive dialogs arrive soon).")
-	default:
-		writeCardResponse(w, "Unknown action.")
-	}
-}
-
-// writeCardResponse responds with the JSON body Mattermost expects from an
-// interactive action callback: {ephemeral_text}. An empty string updates the
-// post without extra text.
-func writeCardResponse(w http.ResponseWriter, ephemeralText string) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ephemeral_text": ephemeralText})
 }

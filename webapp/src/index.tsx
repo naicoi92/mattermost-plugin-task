@@ -123,9 +123,60 @@ export default class Plugin {
     // imperative callbacks can dispatch without re-deriving it.
     private store?: Store<GlobalState>;
 
+    // clickListener is captured so uninitialize can detach it. It opens the
+    // Task Details panel when the user clicks anywhere on a custom_task post.
+    private clickListener?: (e: MouseEvent) => void;
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
     public async initialize(registry: PluginRegistry, store: Store<GlobalState>) {
         this.store = store;
+
+        // Click a task card in the channel → open its Task Details in the RHS.
+        // The card is a native SlackAttachment post with Type "custom_task" and
+        // a task_id prop (set by the server). Event delegation handles this
+        // without a custom post-type component, so the card keeps rendering
+        // natively (and on mobile). Desktop-only: the RHS doesn't exist on
+        // mobile, so the click is a harmless no-op there.
+        //
+        // Guarded for non-DOM environments (the Jest node test env) so importing
+        // the module never throws.
+        if (typeof document !== 'undefined') {
+            this.clickListener = (e: MouseEvent) => {
+                const target = e.target as HTMLElement | null;
+                if (!target) {
+                    return;
+                }
+                // Walk up to the post root. Mattermost wraps each post in an element
+                // carrying data-postid (and an id like "post_<id>").
+                const postEl = target.closest('[data-postid], [id^="post_"]') as HTMLElement | null;
+                if (!postEl) {
+                    return;
+                }
+                const postId = postEl.getAttribute('data-postid') ?? postEl.id?.replace(/^post_/, '');
+                if (!postId) {
+                    return;
+                }
+                const post = resolvePost(store.getState(), postId);
+                if (!post || post.type !== 'custom_task') {
+                    return;
+                }
+                const taskID = post.props?.task_id;
+                if (!taskID) {
+                    return;
+                }
+                // Don't hijack clicks on interactive bits inside the post (links,
+                // buttons, the reaction picker) — let those do their own thing.
+                if ((e.target as HTMLElement).closest('a, button, input, textarea, select, [role="button"]')) {
+                    return;
+                }
+                e.preventDefault();
+                rhsOpener();
+                store.dispatch({type: ACTION_TYPES.SELECT_TASK, taskID});
+            };
+            document.addEventListener('click', this.clickListener);
+        }
+
+
 
         // Register the RHS. The returned action creators open/close/toggle the
         // sidebar; showRHSPlugin is captured at module scope so the composer
@@ -199,6 +250,17 @@ export default class Plugin {
             () => true,
         );
     }
+
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    public uninitialize() {
+        // Detach the task-card click listener so a plugin reload doesn't stack
+        // duplicate handlers. The registry's other registrations are cleaned up
+        // by the host automatically.
+        if (this.clickListener && typeof document !== 'undefined') {
+            document.removeEventListener('click', this.clickListener);
+            this.clickListener = undefined;
+        }
+    }
 }
 
 // openNewTaskFromMessage is the post-dropdown handler (#16). It resolves the
@@ -229,6 +291,8 @@ export function openNewTaskFromMessage(store: Store<GlobalState>, postId?: strin
 interface PostLike {
     message?: string;
     channel_id?: string;
+    type?: string;
+    props?: Record<string, unknown> & {task_id?: string};
 }
 
 // resolvePost reads a post by id from the host Redux store. Mattermost stores
