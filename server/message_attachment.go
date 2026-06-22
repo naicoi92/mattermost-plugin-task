@@ -36,73 +36,86 @@ type cardInput struct {
 	commentCount    int
 }
 
-// buildTaskCard builds the SlackAttachment that renders a task as a compact,
-// information-only message card. The layout follows the Matterpoll pattern
-// (Title + markdown Text body) rather than a SlackAttachment Fields grid,
-// which renders as a boxy label/value table:
+// buildTaskCard builds the SlackAttachment that renders a task as a compact
+// message card. The layout follows the Matterpoll pattern: Title + a multi-
+// line markdown Text body, one piece of metadata per line, each with a bold
+// label. This reads cleanly in the SlackAttachment renderer instead of the
+// boxy label/value grid that Short:true Fields produce.
 //
 //	Title = task summary (struck through when done/cancelled)
-//	Text  = optional description preview, then a "---" rule, then a single
-//	        inline meta line: "**Status** · Priority · Due · @assignee ·
-//	        x/y subtasks · N comments"
+//	Text  = "---" rule, then one bold-labeled line per metadata item:
+//	          **Status**: To Do  (urgent/important appended to this line)
+//	          **Due**: 📅 Tomorrow
+//	          **Assignee**: @alice
+//	          **Subtasks**: 2/5 done  (comment count appended)
 //
-// The metadata order mirrors the Quick List task item's meta row. Conditional
-// items (no due, standard priority, no subtasks) are simply omitted. There are
-// NO action buttons — like the Quick List row, all interactions happen in the
-// Task Details panel (opened by clicking the card).
+// Conditional items (no due, standard priority, no subtasks) are omitted so
+// the body has only the lines that carry information. There are NO action
+// buttons — like the Quick List row, all interactions happen in the Task
+// Details panel (opened by clicking the card).
 //
 // The card is rendered natively by Mattermost's SlackAttachment renderer, so
-// it works on mobile too. nowMs lets the overdue and "due soon" checks be
-// deterministic in tests.
+// it works on mobile too. nowMs lets the overdue check be deterministic in
+// tests.
 func buildTaskCard(in cardInput) model.SlackAttachment {
 	t := in.task
 	return model.SlackAttachment{
 		Title:     cardTitle(t),
 		Fallback:  cardTitle(t),
-		Text:      cardBody(t, in),
+		Text:      metaBody(t, in),
 		Color:     cardColor(t, in.nowMs),
 		Timestamp: t.CreatedAt / 1000,
 	}
 }
 
-// cardBody assembles the markdown Text body. When the task has a description,
-// the body is: description preview, a "---" rule, then the inline meta line.
-// Without a description the body is just the meta line (no rule) so a bare
-// task doesn't render an empty divider.
-func cardBody(t *taskmodel.Task, in cardInput) string {
-	meta := metaLine(t, in)
-	desc := descriptionPreview(t.Description)
-	if desc == "" {
-		return meta
-	}
-	if meta == "" {
-		return desc
-	}
-	return desc + "\n---\n" + meta
-}
+// metaBody assembles the markdown Text body: a leading "---" rule, then one
+// line per metadata item, each formatted as "**Label**: value". Lines are
+// skipped when their value is empty, so a minimal task (open, no due, no
+// assignee) still shows just its Status line under the rule.
+func metaBody(t *taskmodel.Task, in cardInput) string {
+	lines := []string{"---"}
 
-// metaLine builds the single inline meta line in Quick List order: status,
-// priority, due, assignee, subtask progress, comment count. Empty items are
-// skipped so the line reads as a compact sentence.
-func metaLine(t *taskmodel.Task, in cardInput) string {
-	parts := make([]string, 0, 6)
-	parts = append(parts, statusLabel(t.Status))
-	if label := priorityLabel(t.Priority); label != "" {
-		parts = append(parts, label)
+	if l := statusLine(t); l != "" {
+		lines = append(lines, l)
 	}
 	if t.DueAt != nil {
-		parts = append(parts, "📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
+		lines = append(lines, "**Due**: 📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
 	}
 	if in.assigneeMention != "" {
-		parts = append(parts, in.assigneeMention)
+		lines = append(lines, "**Assignee**: "+in.assigneeMention)
 	}
+	if in.subtaskTotal > 0 || in.commentCount > 0 {
+		lines = append(lines, progressLine(in))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// statusLine formats the Status line, folding priority into it so the two
+// attributes share one line instead of two: "**Status**: To Do · 🔴 Urgent".
+// Returns "" only if status is somehow unknown.
+func statusLine(t *taskmodel.Task) string {
+	s := "**Status**: " + statusLabel(t.Status)
+	if p := priorityLabel(t.Priority); p != "" {
+		s += metaSeparator + p
+	}
+	return s
+}
+
+// progressLine combines the subtask progress and comment count into a single
+// "**Progress**" line, since neither alone merits its own row. Omits the parts
+// that are zero.
+func progressLine(in cardInput) string {
+	parts := make([]string, 0, 2)
 	if in.subtaskTotal > 0 {
-		parts = append(parts, fmt.Sprintf("✓ %d/%d", in.subtaskDone, in.subtaskTotal))
+		parts = append(parts, fmt.Sprintf("%d/%d done", in.subtaskDone, in.subtaskTotal))
 	}
 	if in.commentCount > 0 {
-		parts = append(parts, fmt.Sprintf("💬 %d", in.commentCount))
+		parts = append(parts, fmt.Sprintf("%d comments", in.commentCount))
 	}
-	return strings.Join(parts, metaSeparator)
+	if len(parts) == 0 {
+		return ""
+	}
+	return "**Progress**: " + strings.Join(parts, metaSeparator)
 }
 
 // cardTitle renders the card title, struck through for terminal statuses —
