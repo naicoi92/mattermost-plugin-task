@@ -188,23 +188,22 @@ const (
 	actionPriority cardActionKind = "priority"
 )
 
-// cardActions builds the clickable chip row. The Status chip always shows and
-// cycles todo→in_progress→done→todo on click. The Priority chip is shown even
-// for standard priority ("Standard", default style) and cycles
-// standard→important→urgent→standard on click. Both POST to
-// /api/v1/actions with {action, task_id} in context.
+// cardActions builds the clickable chip row. Each chip shows the task's
+// CURRENT value and, on click, advances to the next one in the cycle
+// (todo→in_progress→done→todo; standard→important→urgent→standard). The label
+// never telegraphs the next value — clicking is the affordance, and the card
+// refreshes in place to reveal it. Both POST to /api/v1/actions with
+// {action, task_id} in context.
 func cardActions(t *taskmodel.Task) []*model.PostAction {
-	statusNext := nextStatus(t.Status)
-	priorityNext := nextPriority(t.Priority)
 	return []*model.PostAction{
 		{
-			Name:        statusLabel(t.Status) + " → " + statusLabel(statusNext),
+			Name:        statusLabel(t.Status),
 			Type:        "button",
 			Style:       statusActionStyle(t.Status),
 			Integration: cardIntegration(actionStatus, t.ID),
 		},
 		{
-			Name:        priorityChipLabel(t.Priority) + " → " + priorityChipLabel(priorityNext),
+			Name:        priorityChipLabel(t.Priority),
 			Type:        "button",
 			Style:       priorityActionStyleOr(t.Priority),
 			Integration: cardIntegration(actionPriority, t.ID),

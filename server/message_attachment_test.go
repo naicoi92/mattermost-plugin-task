@@ -61,7 +61,7 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 
 	// Actions: both Status and Priority chips are present and clickable.
 	require.Len(t, card.Actions, 2)
-	assert.Equal(t, "To Do", card.Actions[0].Name[:5])
+	assert.Equal(t, "To Do", card.Actions[0].Name, "chip shows the current value only")
 	assert.Equal(t, "primary", card.Actions[0].Style)
 	require.NotNil(t, card.Actions[0].Integration)
 	assert.Equal(t, cardActionCallbackPath, card.Actions[0].Integration.URL)
@@ -69,7 +69,7 @@ func TestBuildTaskCard_FullCard(t *testing.T) {
 	assert.Equal(t, "T1", card.Actions[0].Integration.Context["task_id"])
 	assert.False(t, card.Actions[0].Disabled)
 
-	assert.Equal(t, "Standard", card.Actions[1].Name[:8])
+	assert.Equal(t, "Standard", card.Actions[1].Name)
 	assert.Equal(t, "default", card.Actions[1].Style, "standard priority → default style chip")
 	require.NotNil(t, card.Actions[1].Integration)
 	assert.Equal(t, "priority", card.Actions[1].Integration.Context["action"])
