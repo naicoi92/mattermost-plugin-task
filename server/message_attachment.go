@@ -21,23 +21,12 @@ var statusColors = map[string]string{
 	taskmodel.StatusCancelled:  "#8A8A8A", // grey
 }
 
-// cardFieldOrder is the canonical order of card fields, mirroring the Quick
-// List task item's meta row (Status pill, Priority dot, Due chip, Assignee
-// mention, then the aggregate counters). Conditional fields are simply
-// omitted, so the visible order never changes.
-const (
-	cardFieldStatus    = "Status"
-	cardFieldPriority  = "Priority"
-	cardFieldDue       = "Due"
-	cardFieldAssignee  = "Assignee"
-	cardFieldSubtasks  = "Subtasks"
-	cardFieldComments  = "Comments"
-)
+// metaSeparator is the middot used to join inline meta items in the card body.
+const metaSeparator = " · "
 
-// cardInput is the resolved, fully-resolved payload the pure card builder
-// consumes. The Plugin method renderCard resolves the assignee mention (an
-// I/O step) and hands the rest off to buildTaskCard so the builder stays a
-// pure, easily-tested function.
+// cardInput is the resolved payload the pure card builder consumes. The Plugin
+// method renderCard resolves the assignee mention (an I/O step) and hands the
+// rest off to buildTaskCard so the builder stays a pure, easily-tested fn.
 type cardInput struct {
 	task            *taskmodel.Task
 	nowMs           int64
@@ -47,56 +36,73 @@ type cardInput struct {
 	commentCount    int
 }
 
-// buildTaskCard builds the SlackAttachment that renders a task as an
-// information-only message card matching the Quick List task item (PLAN.md
-// section 6.3 / issue #15). The card shows the summary, a description preview,
-// and a meta row of fields — Status, Priority, Due, Assignee, Subtasks,
-// Comments — in that order. There are NO action buttons: like the Quick List
-// row, all interactions happen in the Task Details panel (opened by clicking
-// the card).
+// buildTaskCard builds the SlackAttachment that renders a task as a compact,
+// information-only message card. The layout follows the Matterpoll pattern
+// (Title + markdown Text body) rather than a SlackAttachment Fields grid,
+// which renders as a boxy label/value table:
 //
-// The card is built on the server and rendered natively by Mattermost's
-// SlackAttachment renderer, so it works on mobile too. nowMs lets the overdue
-// and "due soon" checks be deterministic in tests; pass time.Now().UnixMilli().
+//	Title = task summary (struck through when done/cancelled)
+//	Text  = optional description preview, then a "---" rule, then a single
+//	        inline meta line: "**Status** · Priority · Due · @assignee ·
+//	        x/y subtasks · N comments"
+//
+// The metadata order mirrors the Quick List task item's meta row. Conditional
+// items (no due, standard priority, no subtasks) are simply omitted. There are
+// NO action buttons — like the Quick List row, all interactions happen in the
+// Task Details panel (opened by clicking the card).
+//
+// The card is rendered natively by Mattermost's SlackAttachment renderer, so
+// it works on mobile too. nowMs lets the overdue and "due soon" checks be
+// deterministic in tests.
 func buildTaskCard(in cardInput) model.SlackAttachment {
 	t := in.task
-	fields := []*model.SlackAttachmentField{
-		{Title: cardFieldStatus, Value: statusLabel(t.Status), Short: true},
-	}
-	if label := priorityLabel(t.Priority); label != "" {
-		fields = append(fields, &model.SlackAttachmentField{
-			Title: cardFieldPriority, Value: label, Short: true,
-		})
-	}
-	if t.DueAt != nil {
-		fields = append(fields, &model.SlackAttachmentField{
-			Title: cardFieldDue, Value: dueLabel(*t.DueAt, in.nowMs, t.Status), Short: true,
-		})
-	}
-	if in.assigneeMention != "" {
-		fields = append(fields, &model.SlackAttachmentField{
-			Title: cardFieldAssignee, Value: in.assigneeMention, Short: true,
-		})
-	}
-	if in.subtaskTotal > 0 {
-		fields = append(fields, &model.SlackAttachmentField{
-			Title: cardFieldSubtasks, Value: fmt.Sprintf("%d/%d done", in.subtaskDone, in.subtaskTotal), Short: true,
-		})
-	}
-	if in.commentCount > 0 {
-		fields = append(fields, &model.SlackAttachmentField{
-			Title: cardFieldComments, Value: fmt.Sprintf("%d", in.commentCount), Short: true,
-		})
-	}
-
 	return model.SlackAttachment{
 		Title:     cardTitle(t),
 		Fallback:  cardTitle(t),
-		Text:      descriptionPreview(t.Description),
+		Text:      cardBody(t, in),
 		Color:     cardColor(t, in.nowMs),
-		Fields:    fields,
 		Timestamp: t.CreatedAt / 1000,
 	}
+}
+
+// cardBody assembles the markdown Text body. When the task has a description,
+// the body is: description preview, a "---" rule, then the inline meta line.
+// Without a description the body is just the meta line (no rule) so a bare
+// task doesn't render an empty divider.
+func cardBody(t *taskmodel.Task, in cardInput) string {
+	meta := metaLine(t, in)
+	desc := descriptionPreview(t.Description)
+	if desc == "" {
+		return meta
+	}
+	if meta == "" {
+		return desc
+	}
+	return desc + "\n---\n" + meta
+}
+
+// metaLine builds the single inline meta line in Quick List order: status,
+// priority, due, assignee, subtask progress, comment count. Empty items are
+// skipped so the line reads as a compact sentence.
+func metaLine(t *taskmodel.Task, in cardInput) string {
+	parts := make([]string, 0, 6)
+	parts = append(parts, statusLabel(t.Status))
+	if label := priorityLabel(t.Priority); label != "" {
+		parts = append(parts, label)
+	}
+	if t.DueAt != nil {
+		parts = append(parts, "📅 "+dueLabel(*t.DueAt, in.nowMs, t.Status))
+	}
+	if in.assigneeMention != "" {
+		parts = append(parts, in.assigneeMention)
+	}
+	if in.subtaskTotal > 0 {
+		parts = append(parts, fmt.Sprintf("✓ %d/%d", in.subtaskDone, in.subtaskTotal))
+	}
+	if in.commentCount > 0 {
+		parts = append(parts, fmt.Sprintf("💬 %d", in.commentCount))
+	}
+	return strings.Join(parts, metaSeparator)
 }
 
 // cardTitle renders the card title, struck through for terminal statuses —
