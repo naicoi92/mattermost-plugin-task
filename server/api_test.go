@@ -311,19 +311,129 @@ func TestListTasks_BadStatus(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestListTasks_ReturnsMine(t *testing.T) {
+// TestListTasks_ReturnsDirectScope verifies the DM scope returns only tasks
+// where BOTH the caller and the partner are members (mutual-membership). A
+// task created by u-me and assigned to u-partner has both as members → returned.
+// A task created by u-third and assigned to u-other has neither → hidden.
+func TestListTasks_ReturnsDirectScope(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	createTaskViaService(t, p, task.CreateInput{Summary: "mine", CreatorID: "u1", AssigneeID: "u-me"})
-	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u1", AssigneeID: "u-other"})
+	// Shared task: u-me is creator, u-partner is assignee → both are members.
+	createTaskViaService(t, p, task.CreateInput{Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
+	// Unrelated task: neither u-me nor u-partner is a member.
+	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u-third", AssigneeID: "u-other"})
 
 	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine", "", "u-me"))
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-partner", "", "u-me"))
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var got []model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	require.Len(t, got, 1)
-	assert.Equal(t, "mine", got[0].Summary)
+	assert.Equal(t, "shared", got[0].Summary)
+}
+
+// TestListTasks_DirectScopePreventsPartnerEnumeration verifies the security
+// invariant: u-me cannot see u-third's tasks by passing partner_id=u-third,
+// because u-me is not a member of any task u-third relates to.
+func TestListTasks_DirectScopePreventsPartnerEnumeration(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// u-third created a task assigned to u-other; u-me is not involved.
+	createTaskViaService(t, p, task.CreateInput{Summary: "private", CreatorID: "u-third", AssigneeID: "u-other"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-third", "", "u-me"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Empty(t, got, "u-me cannot enumerate u-third's tasks by guessing partner_id")
+}
+
+func TestListTasks_DirectScopeRequiresPartnerID(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct", "", "u-me"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestCreateTask_PriorityRoundTrip verifies priority is persisted by create
+// and echoed back unchanged (including the default when omitted).
+func TestCreateTask_PriorityRoundTrip(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"urgent task","creator_id":"u1","priority":"urgent"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+	var created model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	assert.Equal(t, model.PriorityUrgent, created.Priority)
+
+	// Default priority when omitted.
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(nil, w2, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"default priority","creator_id":"u1"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w2.Code)
+	var created2 model.Task
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &created2))
+	assert.Equal(t, model.PriorityStandard, created2.Priority)
+}
+
+// TestPatchTask_Priority verifies priority is patchable via update_fields.
+func TestPatchTask_Priority(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	newPrio := model.PriorityImportant
+	body, _ := json.Marshal(map[string]any{
+		"update_fields": []string{"priority"},
+		"priority":      newPrio,
+	})
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID, string(body), "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, model.PriorityImportant, got.Priority)
+}
+
+// TestPatchTask_InvalidPriorityRejected verifies an unknown priority value is
+// rejected as a 400 rather than persisted.
+func TestPatchTask_InvalidPriorityRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	body, _ := json.Marshal(map[string]any{
+		"update_fields": []string{"priority"},
+		"priority":      "blocker",
+	})
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID, string(body), "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestCreateTask_InvalidPriorityRejected verifies that POST /tasks with an
+// unknown priority value returns 400 (not 500).
+func TestCreateTask_InvalidPriorityRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
+		`{"summary":"x","creator_id":"u1","priority":"blocker"}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestListTasks_InvalidScopeRejected verifies that an unknown/empty scope is
+// rejected at the API boundary with 400 (not 500 from the store layer).
+func TestListTasks_InvalidScopeRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine", "", "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestListTasks_EmptyScopeRejected(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks", "", "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestHelloWorld_StillWorks(t *testing.T) {
@@ -376,15 +486,18 @@ func TestPatchTaskStatus_BadJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestPatchTaskStatus_ParentDoneBlockedByOpenSubtask(t *testing.T) {
+// TestPatchTaskStatus_ParentDoneCascadesOpenSubtasks verifies that marking a
+// parent Done via the API succeeds (cascade-cancels open subtasks) rather
+// than returning 409.
+func TestPatchTaskStatus_ParentDoneCascadesOpenSubtasks(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
 	createTaskViaService(t, p, task.CreateInput{Summary: "open", CreatorID: "u1", ParentTaskID: parent.ID})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"done"}`, "u1"))
-	// Parent-done guard surfaces as 409 Conflict with the open-subtask summary.
-	assert.Equal(t, http.StatusConflict, w.Code)
+	// Done now cascades — no 409.
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestSetReminder_Endpoint(t *testing.T) {
@@ -541,8 +654,6 @@ func TestAuthenticatedRoutes_StillRequireHeader(t *testing.T) {
 		{"task create", http.MethodPost, "/api/v1/tasks", `{"summary":"x"}`},
 		{"task list", http.MethodGet, "/api/v1/tasks", ""},
 		{"card action", http.MethodPost, "/api/v1/actions", `{}`},
-		{"dialog open task detail", http.MethodPost, "/api/v1/dialogs/open-task-detail", `{"trigger_id":"t","task_id":"x"}`},
-		{"dialog open new task", http.MethodPost, "/api/v1/dialogs/open-new-task", `{"trigger_id":"t"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -556,3 +667,18 @@ func TestAuthenticatedRoutes_StillRequireHeader(t *testing.T) {
 }
 
 var _ = sort.Slice
+
+func TestPatchTaskStatus_ReopenFromDoneToInProgress(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
+
+	// Mark Done first.
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"done"}`, "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Now reopen → In Progress.
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(nil, w2, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"in_progress"}`, "u1"))
+	assert.Equal(t, http.StatusOK, w2.Code, "reopen from done to in_progress must not 500")
+}

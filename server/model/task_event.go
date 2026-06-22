@@ -11,6 +11,7 @@ const (
 	EventDueChanged         = "due_changed"
 	EventSummaryChanged     = "summary_changed"
 	EventDescriptionChanged = "description_changed"
+	EventPriorityChanged    = "priority_changed"
 	EventReminderSet        = "reminder_set"
 	EventReminderFired      = "reminder_fired"
 	EventReminderCleared    = "reminder_cleared"
@@ -51,6 +52,7 @@ func IsValidEventType(t string) bool {
 	switch t {
 	case EventCreated, EventStatusChanged, EventAssigned, EventUnassigned,
 		EventDueChanged, EventSummaryChanged, EventDescriptionChanged,
+		EventPriorityChanged,
 		EventReminderSet, EventReminderFired, EventReminderCleared, EventCommented,
 		EventSubtaskAdded, EventDeleted:
 		return true

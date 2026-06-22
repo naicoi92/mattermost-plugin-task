@@ -1,63 +1,73 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// Notion Light design system for the Task plugin webapp. The RHS (Quick List +
-// Task Detail + inline New Task) renders as a calm, comfortable, mostly
-// borderless surface in the spirit of Notion: neutral zinc neutrals, a single
-// dark text accent (no colored brand blue), generous whitespace, subtle
-// hover/focus tints, and square-ish (4px) corners. Status is conveyed by a
-// small muted text badge rather than a colored dot.
+// Mattermost design system for the Task plugin webapp. The RHS (Quick List +
+// Task Detail + inline New Task) renders as a calm, compact, enterprise-feel
+// surface in Mattermost's brand identity: cool gray neutrals, Mattermost Blue
+// (#1f66e1) as the single interactive accent, status-dot semantics
+// (online/away/dnd/offline), @mention-style assignee pills, and tight 3-6px
+// corners. Status is conveyed by a small uppercase pill with a leading dot.
 //
 // Imported once from src/index.tsx so webpack bundles it into main.js. Scoped
 // under the plugin's own class namespace so it never collides with the host.
 
-// --- Design tokens (Notion Light) ------------------------------------------
+// --- Design tokens (Mattermost) --------------------------------------------
 
 :root {
-    // Neutrals: a single cool-zinc family. No warm/cool mixing.
+    // Neutrals: a single cool-gray family with a faint blue undertone.
     --task-bg: #ffffff;
-    --task-surface: #f7f7f5;       // Notion's faintly warm sidebar grey
-    --task-surface-hover: #efefed;
-    --task-fg: #37352f;            // Notion's ink (warm near-black, not pure)
-    --task-muted: #9b9a97;         // Notion's secondary text
-    --task-faint: #c5c4c0;         // hairlines, placeholders
-    --task-border: #ededeb;        // very light separators
-    --task-border-strong: #e3e3e0;
+    --task-surface: #f7f8fa;
+    --task-surface-cool: #eef1f5;
+    --task-surface-hover: #eef1f5;
+    --task-fg: #1f2329;
+    --task-fg-2: #16303f;
+    --task-muted: #5e6b7d;
+    --task-meta: #8a96a8;
+    --task-faint: #c7cedb;
+    --task-border: rgba(31, 50, 92, 0.12);
+    --task-border-soft: rgba(31, 50, 92, 0.06);
 
-    // Accent is neutral/dark, not a brand color. The interactive accent is the
-    // foreground ink; selection/active states use a faint ink tint.
-    --task-accent: #37352f;
-    --task-accent-hover: #1f1e1b;
-    --task-accent-tint: rgba(55, 53, 47, 0.06);
-    --task-accent-tint-strong: rgba(55, 53, 47, 0.10);
+    // Accent is Mattermost Blue.
+    --task-accent: #1f66e1;
+    --task-accent-hover: #0058cc;
+    --task-accent-on: #ffffff;
+    --task-accent-tint: rgba(31, 102, 225, 0.10);
 
-    // Semantic colors are desaturated and used sparingly (status text only).
-    --task-success: #4f8a6b;
-    --task-warning: #b07a2e;
-    --task-danger: #b14c4c;
+    // Semantic colors follow Mattermost's status palette.
+    --task-success: #06ad6d;
+    --task-warning: #ffb700;
+    --task-danger: #e01e5a;
 
-    --task-radius: 4px;            // Notion's tight, square-ish corners
+    --task-radius: 3px;
     --task-radius-sm: 3px;
-    --task-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
-        "Liberation Sans", Arial, sans-serif;
+    --task-radius-md: 6px;
+    --task-radius-lg: 8px;
+
+    --task-focus-ring: 0 0 0 3px rgba(31, 102, 225, 0.30);
+
+    --task-font: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Helvetica Neue", "Liberation Sans", Arial, sans-serif;
 }
 
 .task-rhs[data-theme='dark'] {
-    --task-bg: #191919;
-    --task-surface: #202020;
-    --task-surface-hover: #2a2a2a;
-    --task-fg: #e6e6e5;
-    --task-muted: #8a8a87;
-    --task-faint: #4a4a47;
-    --task-border: #2e2e2c;
-    --task-border-strong: #3a3a38;
-    --task-accent: #e6e6e5;
-    --task-accent-hover: #ffffff;
-    --task-accent-tint: rgba(230, 230, 229, 0.06);
-    --task-accent-tint-strong: rgba(230, 230, 229, 0.10);
-    --task-success: #6fae8c;
-    --task-warning: #d6a05a;
-    --task-danger: #d97b7b;
+    --task-bg: #1a1c20;
+    --task-surface: #22252b;
+    --task-surface-cool: #2a2e35;
+    --task-surface-hover: #2a2e35;
+    --task-fg: #e0e0e8;
+    --task-fg-2: #c7cedb;
+    --task-muted: #a3aab5;
+    --task-meta: #7d8593;
+    --task-faint: #4a4f57;
+    --task-border: rgba(255, 255, 255, 0.10);
+    --task-border-soft: rgba(255, 255, 255, 0.05);
+    --task-accent: #3a8df5;
+    --task-accent-hover: #5aa3ff;
+    --task-accent-on: #ffffff;
+    --task-accent-tint: rgba(58, 141, 245, 0.16);
+    --task-success: #2ecc8f;
+    --task-warning: #ffc94d;
+    --task-danger: #ff5c8a;
 }
 
 // --- Shared primitives ------------------------------------------------------
@@ -77,7 +87,7 @@
     transition: background 0.12s, color 0.12s;
 
     &:hover {
-        background: var(--task-surface);
+        background: var(--task-surface-cool);
         color: var(--task-fg);
     }
 
@@ -92,7 +102,7 @@
 %task-check-svg {
     width: 10px;
     height: 10px;
-    fill: #fff;
+    fill: var(--task-accent-on);
 }
 
 // --- TaskSidebar (RHS container) -------------------------------------------
@@ -114,7 +124,7 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        padding: 20px 18px;
+        padding: 12px 0;
         position: relative;
 
         &::-webkit-scrollbar {
@@ -122,14 +132,31 @@
         }
 
         &::-webkit-scrollbar-thumb {
-            background: var(--task-faint);
-            border-radius: 4px;
+            background: rgba(31, 50, 92, 0.16);
+            border-radius: 999px;
             border: 2px solid var(--task-bg);
         }
 
         &::-webkit-scrollbar-thumb:hover {
-            background: var(--task-muted);
+            background: rgba(31, 50, 92, 0.30);
         }
+    }
+
+    // View transition: when the active view (list/detail/new) changes, the
+    // body re-mounts via React key and this animation runs once.
+    &__view--enter {
+        animation: task-view-in 180ms cubic-bezier(0.2, 0, 0, 1);
+    }
+}
+
+@keyframes task-view-in {
+    from {
+        opacity: 0;
+        transform: translateX(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
     }
 }
 
@@ -138,71 +165,38 @@
 .quick-list {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 8px;
 
     &__toolbar {
         display: flex;
         flex-direction: column;
-        gap: 12px;
-    }
-
-    // Scope tabs: a simple text toggle, no pill background. The active tab is
-    // ink-weight; inactive is muted. Underlines on hover.
-    &__scope-tabs {
-        display: flex;
-        gap: 16px;
-        align-items: baseline;
-    }
-
-    &__scope-tab {
-        border: 0;
-        background: transparent;
-        color: var(--task-muted);
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-        font-family: inherit;
-        padding: 2px 0;
-        transition: color 0.12s;
-
-        &:hover:not(:disabled) {
-            color: var(--task-fg);
-        }
-
-        &:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-
-        &--active {
-            color: var(--task-fg);
-            font-weight: 600;
-        }
+        gap: 8px;
+        padding: 0 12px;
     }
 
     // Search: borderless, faint surface, subtle focus ring.
     &__search {
         height: 32px;
         padding: 0 10px;
-        border-radius: var(--task-radius);
-        border: 1px solid var(--task-border);
+        border-radius: var(--task-radius-md);
+        border: 1px solid transparent;
         background: var(--task-surface);
         display: flex;
         align-items: center;
         gap: 8px;
-        color: var(--task-muted);
+        color: var(--task-meta);
         font-size: 13px;
         transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
 
         &:focus-within {
-            border-color: var(--task-fg);
+            border-color: var(--task-accent);
             background: var(--task-bg);
-            box-shadow: 0 0 0 2px var(--task-accent-tint);
+            box-shadow: var(--task-focus-ring);
         }
 
         svg {
-            width: 15px;
-            height: 15px;
+            width: 14px;
+            height: 14px;
             fill: currentColor;
             flex-shrink: 0;
         }
@@ -218,31 +212,41 @@
             font-family: inherit;
 
             &::placeholder {
-                color: var(--task-muted);
+                color: var(--task-meta);
             }
         }
     }
 
-    &__filters {
+    // Filter tabs: Mattermost channel-style — scroll-x row, active marked by a
+    // blue bottom border + filled count badge.
+    &__filter-tabs {
         display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        align-items: center;
+        gap: 1px;
+        border-bottom: 1px solid var(--task-border-soft);
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding: 0;
+
+        &::-webkit-scrollbar {
+            display: none;
+        }
     }
 
-    // Status filter chips: text-only, muted; active = ink + faint underline.
-    // No pill background, no dot, no color.
-    &__chip {
-        height: 26px;
-        padding: 0 10px;
-        border-radius: var(--task-radius);
-        font-size: 12px;
-        font-weight: 500;
-        cursor: pointer;
-        border: 1px solid transparent;
-        background: transparent;
+    &__filter-tab {
+        padding: 9px 12px;
+        font-size: 13px;
+        font-weight: 600;
         color: var(--task-muted);
+        cursor: pointer;
         font-family: inherit;
+        background: transparent;
+        border: 0;
+        white-space: nowrap;
+        position: relative;
+        border-bottom: 2px solid transparent;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
         transition: background 0.12s, color 0.12s;
 
         &:hover {
@@ -251,40 +255,64 @@
         }
 
         &--active {
-            background: var(--task-accent-tint-strong);
-            color: var(--task-fg);
-            font-weight: 600;
+            color: var(--task-accent);
+            border-bottom-color: var(--task-accent);
         }
     }
 
-    &__due-select {
-        height: 26px;
-        margin-left: auto;
-        padding: 0 8px;
-        border-radius: var(--task-radius);
-        border: 1px solid var(--task-border);
-        background: var(--task-bg);
-        color: var(--task-muted);
-        font-size: 12px;
-        font-family: inherit;
-        cursor: pointer;
-        outline: none;
+    &__count {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        background: var(--task-surface-cool);
+        color: var(--task-meta);
+        padding: 1px 5px;
+        border-radius: 9999px;
+        min-width: 16px;
+        text-align: center;
 
-        &:focus {
-            border-color: var(--task-fg);
+        &--plus {
+            // Indicator that the badge is a lower bound ("25+"); uses the same
+            // surface style so the meaning is the "+" alone.
         }
+    }
+
+    &__filter-tab--active &__count {
+        color: var(--task-accent-on);
+        background: var(--task-accent);
     }
 
     &__error {
+        margin: 0 12px;
         padding: 8px 10px;
-        background: rgba(177, 76, 76, 0.08);
+        background: rgba(224, 30, 90, 0.08);
         color: var(--task-danger);
         border-radius: var(--task-radius);
         font-size: 13px;
     }
 
-    // Task rows: borderless, separated by faint hairlines. Hover = surface
-    // tint, no lift/shadow (calm, Notion-like).
+    // Group label: uppercase meta text with a trailing hairline divider.
+    &__group-label {
+        padding: 10px 14px 4px;
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--task-meta);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        &::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--task-border-soft);
+        }
+    }
+
+    // Task rows: borderless, separated by a 3px left accent that appears on
+    // hover. No lift/shadow (calm, Mattermost-like).
     &__items {
         list-style: none;
         margin: 0;
@@ -294,56 +322,46 @@
     }
 
     &__item {
-        border-bottom: 1px solid var(--task-border);
-
-        &:first-child {
-            border-top: 1px solid var(--task-border);
-        }
-
-        &--done,
-        &--cancelled {
-            .quick-list__item-summary {
-                color: var(--task-muted);
-            }
-        }
+        // status modifier classes drive summary styling (done/cancelled dim +
+        // strikethrough) via the nested rule below.
     }
 
     &__item-row {
         display: flex;
         align-items: flex-start;
         gap: 10px;
-        padding: 10px 6px;
+        padding: 9px 14px;
         border: 0;
         background: transparent;
         cursor: pointer;
-        transition: background 0.1s;
+        transition: background 0.1s, border-color 0.1s;
         width: 100%;
         text-align: left;
         font-family: inherit;
-        border-radius: var(--task-radius-sm);
+        border-left: 3px solid transparent;
 
         &:hover {
             background: var(--task-surface);
+            border-left-color: var(--task-border);
         }
     }
 
-    // Square check (Notion uses squares for tasks, not circles).
+    // Square check (Mattermost uses squares for tasks). Done = blue fill.
     &__check {
-        width: 16px;
-        height: 16px;
-        border: 1.5px solid var(--task-faint);
+        width: 17px;
+        height: 17px;
+        border: 1.7px solid var(--task-meta);
         border-radius: var(--task-radius-sm);
         display: grid;
         place-items: center;
         flex-shrink: 0;
-        margin-top: 2px;
+        margin-top: 1px;
         cursor: pointer;
         transition: border-color 0.12s, background 0.12s;
         background: transparent;
 
         &:hover {
-            border-color: var(--task-fg);
-            background: var(--task-surface);
+            border-color: var(--task-accent);
         }
 
         svg {
@@ -354,8 +372,8 @@
         }
 
         &--done {
-            background: var(--task-fg);
-            border-color: var(--task-fg);
+            background: var(--task-accent);
+            border-color: var(--task-accent);
 
             svg {
                 opacity: 1;
@@ -372,19 +390,24 @@
     }
 
     &__item-summary {
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 500;
-        line-height: 1.45;
+        line-height: 1.4;
         color: var(--task-fg);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        margin-bottom: 4px;
+        word-wrap: break-word;
     }
 
     &__item--done &__item-summary,
     &__item--cancelled &__item-summary {
+        color: var(--task-meta);
         text-decoration: line-through;
-        color: var(--task-muted);
+        text-decoration-color: var(--task-meta);
+    }
+
+    &__item--done &__item-meta-row,
+    &__item--cancelled &__item-meta-row {
+        opacity: 0.55;
     }
 
     // Description preview: single line, muted.
@@ -398,47 +421,40 @@
         white-space: nowrap;
     }
 
-    // Meta row: a single line of small muted text (status · due · assignee).
+    // Meta row: a single line of small muted chips (status pill, priority dot,
+    // due chip with calendar icon, assignee mention).
     &__item-meta {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 10px;
         margin-top: 5px;
-        flex-wrap: nowrap;
-        overflow: hidden;
-    }
-
-    // Status text — colored subtly by status, no dot, no pill.
-    &__item-status {
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--task-muted);
-
-        &--in_progress {
-            color: var(--task-warning);
-        }
-
-        &--done {
-            color: var(--task-success);
-        }
-
-        &--cancelled {
-            color: var(--task-muted);
-            text-decoration: line-through;
-        }
-    }
-
-    &__item-sep {
-        color: var(--task-faint);
-        font-size: 12px;
+        flex-wrap: wrap;
     }
 
     &__item-due {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--task-muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        svg {
+            width: 11px;
+            height: 11px;
+            opacity: 0.7;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.6;
+            stroke-linecap: round;
+        }
 
         &--none {
-            opacity: 0.5;
+            opacity: 0.4;
+        }
+
+        &--soon {
+            color: var(--task-warning);
+            font-weight: 600;
         }
 
         &--overdue {
@@ -448,7 +464,7 @@
     }
 
     &__item-assignee {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--task-muted);
         max-width: 130px;
         overflow: hidden;
@@ -462,14 +478,15 @@
 
     &__empty {
         text-align: center;
-        padding: 48px 16px;
-        color: var(--task-muted);
+        padding: 48px 24px;
+        color: var(--task-meta);
         font-size: 13px;
     }
 
     &__load-more {
         align-self: center;
         padding: 8px 16px;
+        margin-top: 4px;
         border: 0;
         background: transparent;
         color: var(--task-fg);
@@ -488,35 +505,137 @@
         }
     }
 
-    // "New task" button: text-link style at the bottom (Notion-like), not a
-    // floating accent FAB.
-    &__fab {
-        align-self: flex-start;
-        height: 32px;
-        padding: 0 12px;
-        border: 0;
-        border-radius: var(--task-radius);
+    // Footer CTA: a full-width primary button with a top hairline.
+    &__footer {
+        padding: 10px 12px 12px;
+        border-top: 1px solid var(--task-border-soft);
+        margin-top: 4px;
+    }
+}
+
+// --- Shared status / priority pills ----------------------------------------
+
+// Status pill: tiny uppercase label with a leading dot. Used by both the Quick
+// List row and the Task Detail meta-table.
+.task-status-pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 9999px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+
+    &::before {
+        content: '';
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: currentColor;
+        flex-shrink: 0;
+    }
+
+    &--todo {
+        color: var(--task-muted);
+        background: rgba(94, 107, 125, 0.12);
+    }
+
+    &--in_progress {
+        color: var(--task-accent);
+        background: var(--task-accent-tint);
+    }
+
+    &--done {
+        color: var(--task-success);
+        background: rgba(6, 173, 109, 0.10);
+    }
+
+    &--cancelled {
+        color: var(--task-meta);
+        background: rgba(138, 150, 168, 0.12);
+        text-decoration: line-through;
+    }
+}
+
+// Priority dot: a single colored dot. Only rendered when priority != standard
+// (standard is the implicit default, so we don't clutter the row).
+.task-priority-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+
+    &--important {
+        background: var(--task-warning);
+    }
+
+    &--urgent {
+        background: var(--task-danger);
+    }
+}
+
+// Priority pill for the Task Detail meta-table: dot + label.
+.task-priority-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--task-fg);
+    cursor: pointer;
+
+    &--important {
+        color: var(--task-warning);
+        font-weight: 600;
+    }
+
+    &--urgent {
+        color: var(--task-danger);
+        font-weight: 600;
+    }
+
+    &--standard {
+        color: var(--task-muted);
+    }
+}
+
+// --- Mention (assignee) pill -----------------------------------------------
+
+// @mention-style assignee pill: avatar-dot + @username, tinted blue like a
+// Mattermost mention.
+.task-mention {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--task-accent-tint);
+    color: var(--task-accent);
+    padding: 2px 8px 2px 4px;
+    border-radius: 9999px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+
+    &--placeholder {
         background: transparent;
-        color: var(--task-fg);
-        font-size: 13px;
+        color: var(--task-meta);
         font-weight: 500;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        transition: background 0.12s;
-        font-family: inherit;
+        padding-left: 0;
+    }
 
-        &:hover {
-            background: var(--task-surface);
-        }
-
-        svg {
-            width: 15px;
-            height: 15px;
-            fill: currentColor;
-            flex-shrink: 0;
-        }
+    &__avatar-dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--task-accent);
+        color: var(--task-accent-on);
+        font-size: 9px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        letter-spacing: 0;
+        flex-shrink: 0;
     }
 }
 
@@ -525,91 +644,213 @@
 .task-detail {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    padding: 0;
 
     &--loading,
     &__error-block {
         padding: 16px;
         text-align: center;
-        color: var(--task-muted);
+        color: var(--task-meta);
         font-size: 13px;
     }
 
+    // Light inline header: back arrow + check + title + delete, hairline bottom border.
     &__header {
         display: flex;
         align-items: center;
-        gap: 8px;
+        justify-content: space-between;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--task-border);
+        gap: 6px;
+    }
+
+    &__header-left {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex: 1;
     }
 
     &__back {
         @extend %task-icon-btn;
     }
 
-    // Status: a small text badge with a hairline border. Click cycles status.
-    &__status-pill {
-        height: 24px;
-        padding: 0 10px;
-        border-radius: var(--task-radius);
-        border: 1px solid var(--task-border-strong);
-        background: var(--task-bg);
+    &__header-check {
+        flex-shrink: 0;
+    }
+
+    // Title in the header: a heading that reads as plain text and becomes an
+    // input on click. Truncates with ellipsis when long.
+    &__header-title {
+        margin: 0;
+        font-family: var(--task-font);
+        font-size: 15px;
+        font-weight: 600;
+        line-height: 1.3;
+        letter-spacing: -0.005em;
         color: var(--task-fg);
-        font-size: 12px;
-        font-weight: 500;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-family: inherit;
+        cursor: text;
+        padding: 4px 6px;
+        border-radius: var(--task-radius-sm);
         transition: background 0.12s;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
 
         &:hover {
             background: var(--task-surface);
         }
-    }
 
-    // Tiny status dot inside the pill (single, semantic — conveys state).
-    &__status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        flex-shrink: 0;
-        background: var(--task-muted);
-
-        &--todo {
-            background: var(--task-muted);
-        }
-
-        &--in_progress {
-            background: var(--task-warning);
-        }
-
-        &--done {
-            background: var(--task-success);
-        }
-
-        &--cancelled {
-            background: var(--task-faint);
+        &--terminal {
+            color: var(--task-meta);
+            text-decoration: line-through;
+            text-decoration-color: var(--task-meta);
         }
     }
 
-    &__progress {
-        font-weight: 400;
-        color: var(--task-muted);
-        margin-left: 6px;
-        font-size: 12px;
-    }
-
-    &__section {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    &__section-title {
-        font-size: 12px;
+    &__header-title-input {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--task-font);
+        font-size: 15px;
         font-weight: 600;
-        color: var(--task-muted);
-        letter-spacing: 0.01em;
+        color: var(--task-fg);
+        background: var(--task-bg);
+        border: 1px solid var(--task-accent);
+        border-radius: var(--task-radius-sm);
+        padding: 4px 6px;
+        outline: none;
+        box-shadow: var(--task-focus-ring);
+    }
+
+    &__header-delete {
+        @extend %task-icon-btn;
+
+        &:hover {
+            color: var(--task-danger);
+        }
+    }
+
+    &__header-actions {
+        display: flex;
+        gap: 2px;
+    }
+
+    &__scroll {
+        padding: 4px 16px 24px;
+    }
+
+    // Meta table: grid label/value rows with click-to-edit cells. No top
+    // border — the header already carries a bottom border, so a top border
+    // here would render as a double line directly under the header.
+    &__meta-table {
+        display: grid;
+        grid-template-columns: 96px 1fr;
+        gap: 2px 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--task-border-soft);
+        margin-bottom: 16px;
+    }
+
+    &__meta-label {
+        font-size: 13px;
+        color: var(--task-meta);
+        align-self: center;
+        padding: 6px 0;
+        font-weight: 500;
+    }
+
+    &__meta-value {
+        font-size: 13px;
+        color: var(--task-fg);
+        padding: 6px 8px;
+        margin: -6px -8px;
+        border-radius: var(--task-radius-sm);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+
+        &--overdue {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
+        &--soon {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        // Priority value cells: the dot + label inherit the priority color so
+        // the whole cell reads as a unit (matching the design's inline dot +
+        // label rather than a bordered pill).
+        &--priority-important {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        &--priority-urgent {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
+        &--priority-standard {
+            color: var(--task-muted);
+        }
+
+        // Assignee cell wraps the UserPicker; no hover fill (the picker has
+        // its own interaction styling).
+        &--picker {
+        }
+    }
+
+    // Compact datetime input used inside the due meta-value cell when editing.
+    &__meta-value .task-input--meta {
+        padding: 2px 6px;
+        font-size: 13px;
+        border-radius: var(--task-radius-sm);
+    }
+
+    &__section-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--task-meta);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin: 18px 0 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        &::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--task-border-soft);
+        }
+    }
+
+    &__description {
+        font-size: 13px;
+        color: var(--task-fg);
+        line-height: 1.6;
+        cursor: pointer;
+        padding: 4px 8px;
+        margin: -4px -8px;
+        border-radius: var(--task-radius);
+        transition: background 0.12s;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+
+        &:hover {
+            background: var(--task-surface);
+        }
+
+        &--empty {
+            color: var(--task-meta);
+        }
     }
 
     &__subtask-list,
@@ -624,31 +865,32 @@
     &__subtask {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 6px 0;
-        font-size: 14px;
+        gap: 8px;
+        padding: 5px 0;
+        font-size: 13px;
 
         &--done,
         &--cancelled {
-            color: var(--task-muted);
+            color: var(--task-meta);
             text-decoration: line-through;
         }
     }
 
     &__subtask-check {
-        width: 16px;
-        height: 16px;
-        border: 1.5px solid var(--task-faint);
+        width: 15px;
+        height: 15px;
+        border: 1.7px solid var(--task-meta);
         border-radius: var(--task-radius-sm);
         display: grid;
         place-items: center;
         flex-shrink: 0;
+        margin-top: 2px;
         cursor: pointer;
         transition: border-color 0.12s, background 0.12s;
         background: transparent;
 
         &:hover {
-            border-color: var(--task-fg);
+            border-color: var(--task-accent);
         }
 
         svg {
@@ -659,8 +901,8 @@
         }
 
         &.quick-list__check--done {
-            background: var(--task-fg);
-            border-color: var(--task-fg);
+            background: var(--task-accent);
+            border-color: var(--task-accent);
 
             svg {
                 opacity: 1;
@@ -669,32 +911,56 @@
         }
     }
 
-    &__comment {
+    // Activity (comment) item: avatar + body with author/time + bubble.
+    &__activity-item {
         display: flex;
         gap: 10px;
-        padding: 10px 0;
-        border-top: 1px solid var(--task-border);
+        padding: 8px 0;
+    }
 
-        &:first-child {
-            border-top: 0;
+    &__activity-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--task-accent), #1e325c);
+        color: #ffffff;
+        font-size: 10px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        letter-spacing: 0.02em;
+    }
+
+    &__activity-body {
+        flex: 1;
+        min-width: 0;
+        font-size: 13px;
+        color: var(--task-muted);
+        line-height: 1.5;
+
+        strong {
+            color: var(--task-fg);
+            font-weight: 600;
         }
     }
 
-    &__comment-body {
-        flex: 1;
-        min-width: 0;
+    &__activity-time {
+        display: inline-block;
+        font-size: 11px;
+        color: var(--task-meta);
+        margin-left: 6px;
     }
 
-    &__comment-meta {
-        font-size: 12px;
-        color: var(--task-muted);
-        margin-bottom: 2px;
-    }
-
-    &__comment-text {
-        font-size: 14px;
+    &__activity-comment {
+        background: var(--task-surface);
+        padding: 8px 10px;
+        border-radius: var(--task-radius-md);
         color: var(--task-fg);
-        line-height: 1.45;
+        margin-top: 4px;
+        font-size: 13px;
+        line-height: 1.5;
+        border: 1px solid var(--task-border-soft);
         white-space: pre-wrap;
         overflow-wrap: break-word;
     }
@@ -754,7 +1020,7 @@
         border: 0;
         background: transparent;
         color: var(--task-fg);
-        font-size: 14px;
+        font-size: 13px;
         text-align: left;
         cursor: pointer;
         padding: 0;
@@ -781,46 +1047,69 @@
         color: var(--task-muted);
         letter-spacing: 0.01em;
     }
+
+    // Uppercase variant for the New Task form labels.
+    &__label--upper {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--task-meta);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
 }
 
-// Two-column field row (Assignee | Due).
+// Two-column field row (Assignee | Due, Status | Priority).
 .task-fields-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    gap: 10px;
+}
+
+// Specialized row for the hybrid due input (quick-select + datetime-local).
+.task-fields-row--due {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: end;
 }
 
 .task-input,
 .task-select,
 .task-textarea {
     width: 100%;
-    padding: 8px 10px;
+    padding: 8px 11px;
     border: 1px solid var(--task-border);
-    border-radius: var(--task-radius);
+    border-radius: var(--task-radius-sm);
     background: var(--task-bg);
     color: var(--task-fg);
-    font-size: 14px;
+    font-size: 13px;
     font-family: inherit;
     outline: none;
     transition: border-color 0.12s, box-shadow 0.12s;
 
     &:focus {
-        border-color: var(--task-fg);
-        box-shadow: 0 0 0 2px var(--task-accent-tint);
+        border-color: var(--task-accent);
+        box-shadow: var(--task-focus-ring);
+    }
+
+    &::placeholder {
+        color: var(--task-meta);
     }
 }
 
 // Larger title-style input for the summary field.
 .task-input--title {
     font-size: 18px;
-    font-weight: 600;
+    font-weight: 700;
     padding: 8px 10px;
+    line-height: 1.3;
+    letter-spacing: -0.012em;
 }
 
 .task-textarea {
     min-height: 80px;
     resize: vertical;
-    line-height: 1.5;
+    line-height: 1.55;
 }
 
 // Inline-edit variant: borderless so the field reads as plain text in both
@@ -842,7 +1131,7 @@
     &:focus {
         border-color: transparent;
         background: var(--task-bg);
-        box-shadow: 0 0 0 2px var(--task-accent-tint);
+        box-shadow: var(--task-focus-ring);
     }
 
     &:disabled {
@@ -868,7 +1157,7 @@
         cursor: pointer;
 
         &--placeholder {
-            color: var(--task-muted);
+            color: var(--task-meta);
         }
     }
 
@@ -879,10 +1168,10 @@
         height: 26px;
         padding: 0 8px;
         border-radius: var(--task-radius);
-        background: var(--task-accent-tint-strong);
-        color: var(--task-fg);
+        background: var(--task-accent-tint);
+        color: var(--task-accent);
         font-size: 13px;
-        font-weight: 500;
+        font-weight: 600;
     }
 
     &__clear {
@@ -909,9 +1198,9 @@
         max-height: 240px;
         overflow-y: auto;
         background: var(--task-bg);
-        border: 1px solid var(--task-border-strong);
+        border: 1px solid var(--task-border);
         border-radius: var(--task-radius);
-        box-shadow: 0 4px 16px rgba(15, 15, 15, 0.08);
+        box-shadow: 0 4px 16px rgba(31, 50, 92, 0.12);
     }
 
     &__option {
@@ -958,13 +1247,13 @@
     }
 }
 
-// --- Avatar (comment + fallback) -------------------------------------------
+// --- Avatar (activity + fallback) -------------------------------------------
 
 .quick-list__avatar {
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: var(--task-surface-hover);
+    background: var(--task-surface-cool);
     color: var(--task-fg);
     font-size: 10px;
     font-weight: 600;
@@ -987,53 +1276,74 @@
 .task-btn {
     height: 32px;
     padding: 0 14px;
-    border-radius: var(--task-radius);
+    border-radius: var(--task-radius-sm);
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 6px;
     border: 1px solid transparent;
     font-family: inherit;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.12s, border-color 0.12s, transform 0.1s;
 
     &:disabled {
         opacity: 0.55;
         cursor: not-allowed;
     }
 
+    svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        flex-shrink: 0;
+    }
+
     &--secondary {
-        background: transparent;
+        background: var(--task-surface-cool);
         color: var(--task-fg);
-        border-color: var(--task-border-strong);
 
         &:hover:not(:disabled) {
-            background: var(--task-surface);
+            background: var(--task-border-soft);
         }
     }
 
     &--primary {
-        background: var(--task-fg);
-        color: var(--task-bg);
-        border-color: var(--task-fg);
+        background: var(--task-accent);
+        color: var(--task-accent-on);
+        border-color: var(--task-accent);
+        box-shadow: 0 1px 2px rgba(31, 102, 225, 0.20);
 
         &:hover:not(:disabled) {
             background: var(--task-accent-hover);
             border-color: var(--task-accent-hover);
+        }
+
+        &:active:not(:disabled) {
+            transform: scale(0.98);
         }
     }
 
     &--danger {
         background: transparent;
         color: var(--task-danger);
-        border-color: var(--task-border-strong);
+        border-color: var(--task-border);
 
         &:hover:not(:disabled) {
-            background: rgba(177, 76, 76, 0.08);
+            background: rgba(224, 30, 90, 0.08);
             border-color: var(--task-danger);
         }
     }
+}
+
+// Full-width primary button used in the Quick List footer and the New Task
+// footer.
+.task-btn--block {
+    width: 100%;
 }
 
 // --- New Task dialog (legacy modal — kept for registration compat) ---------

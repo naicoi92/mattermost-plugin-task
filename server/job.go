@@ -10,13 +10,6 @@ import (
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 )
 
-// runJob is the generic starter-template background job placeholder, kept
-// around for parity with the template's cluster.Schedule example. The real
-// scheduled work is runReminderJob.
-func (p *Plugin) runJob() {
-	p.API.LogInfo("Job is currently running")
-}
-
 // reminderGracePeriod is the window after the due time during which a reminder
 // can still fire. Beyond it the reminder is treated as missed and dropped
 // (fires at most once), so the scheduler doesn't spam a backlog after downtime.
@@ -77,7 +70,7 @@ func (p *Plugin) fireReminderDM(r taskmodel.DueReminder) error {
 	}
 	// Fallback: plain DM when the notifier isn't ready.
 	channel, err := p.API.GetDirectChannel(r.AssigneeID, p.botUserID)
-	if err != nil {
+	if err != nil || channel == nil {
 		return errors.Wrapf(err, "failed to open DM with %s", r.AssigneeID)
 	}
 	post := &model.Post{

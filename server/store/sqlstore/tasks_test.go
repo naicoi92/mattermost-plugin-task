@@ -235,15 +235,15 @@ func TestListTasks_ScopeChannelStatusAndPagination(t *testing.T) {
 	})
 }
 
-func TestListTasks_AllScope(t *testing.T) {
+func TestListAllTasksForTest_Unfiltered(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	mustCreate(t, s, ctx, fixture("T2", "k2", withChannel("ch1")))
 
-	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeAll, Limit: 10})
+	rows, err := s.ListAllTasksForTest(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, page.Total)
+	assert.Len(t, rows, 2)
 }
 
 func TestCountTasksByStatus_GroupsKanbanProgress(t *testing.T) {

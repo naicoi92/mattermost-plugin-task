@@ -1,16 +1,12 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// NewTaskDialog is the inline "New task" view rendered inside the RHS (the
-// former desktop popup was converted to an RHS view so the whole task UI lives
-// in one Lark-style sidebar). Fields: summary (required), assignee (user
-// picker), due datetime, description. The task's scope (personal vs channel) is
-// NO LONGER chosen by the user — it is derived from the channel context the
-// form was opened in (see deriveNewTaskContext). Submit goes through
-// POST /tasks; on success the RHS returns to the Quick List.
-//
-// The connected root component (connected_new_task_dialog) is still registered
-// so index.test's "two root components" assertion holds, but it renders null.
+// NewTaskDialog is the inline "New task" view rendered inside the RHS. Fields:
+// summary (required), assignee (user picker), due datetime (hybrid select +
+// datetime-local), description, status, and priority. The task's scope
+// (personal vs channel) is derived from the channel context the form was
+// opened in (see deriveNewTaskContext). Submit goes through POST /tasks; on
+// success the RHS returns to the Quick List.
 
 import * as client from 'client';
 import {ClientError} from 'client';
@@ -24,10 +20,9 @@ import type {Channel} from '@mattermost/types/channels';
 import {useResolvedUser} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
-import type {CreateTaskInput, Task} from 'types/tasks';
+import type {CreateTaskInput, Task, TaskPriority} from 'types/tasks';
 
-// ChannelLike is the minimal slice of Channel deriveNewTaskContext reads.
-// Channel.type values: 'D' (direct), 'G' (group), 'O' (public), 'P' (private).
+// ChannelType values: 'D' (direct), 'G' (group), 'O' (public), 'P' (private).
 // A DM's partner is encoded in the channel name as "<uid1>__<uid2>".
 type ChannelType = 'D' | 'G' | 'O' | 'P';
 
@@ -58,25 +53,19 @@ export function deriveNewTaskContext(channel: ChannelLike | null | undefined, cu
     if (!channel || !channel.id) {
         return {channelId: '', suggestedAssigneeID: currentUserId};
     }
-
-    // Any non-DM channel → a channel task belonging to that channel.
     if (channel.type !== 'D') {
         return {channelId: channel.id, suggestedAssigneeID: ''};
     }
-
-    // DM: parse the two user ids from the channel name.
     const parts = (channel.name || '').split('__').filter((s) => s.length > 0);
     const partner = parts.find((id) => id !== currentUserId);
     if (!partner) {
-        // No partner distinct from me → DM with myself (nota).
         return {channelId: '', suggestedAssigneeID: currentUserId};
     }
     return {channelId: '', suggestedAssigneeID: partner};
 }
 
 // channelToContext normalizes a host Channel (or a bare channelID) into the
-// ChannelLike shape deriveNewTaskContext reads. A bare channelID is treated as
-// a public channel (best effort when the host didn't supply the full object).
+// ChannelLike shape deriveNewTaskContext reads.
 export function channelToContext(channel: Channel | null | undefined, channelID: string | undefined): ChannelLike | null {
     if (channel) {
         return {id: channel.id, type: channel.type, name: channel.name};
@@ -96,17 +85,14 @@ export interface NewTaskDialogProps {
     // derive the task scope via deriveNewTaskContext.
     channelID?: string;
 
-    // channel supplies the channel type/name for scope derivation. When omitted
-    // the dialog falls back to treating channelID as a channel task (best
-    // effort). The host RHS passes the full channel object.
+    // channel supplies the channel type/name for scope derivation.
     channel?: Channel | null;
 
     // currentUserID is the authenticated user; used as the default assignee for
     // personal/DM-with-self tasks.
     currentUserID?: string;
 
-    // initialSummary / initialDescription pre-fill the form when the dialog opens
-    // (e.g. from the post-dropdown "Tạo task" action, #16).
+    // initialSummary / initialDescription pre-fill the form when the dialog opens.
     initialSummary?: string;
     initialDescription?: string;
 
@@ -119,12 +105,21 @@ export interface NewTaskDialogProps {
     onCreated?: (task: Task) => void;
 }
 
+// QuickDue enumerates the quick-options for the due select. The value is a
+// sentinel consumed by applyQuickDue; "" means "use the datetime-local value".
+type QuickDue = '' | 'today' | 'tomorrow' | 'weekend' | 'next_week';
+
 // emptyForm is the reset state used when the dialog opens and after a submit.
+// Note: status is not included — the server always creates tasks in "todo" and
+// does not accept a status on POST /tasks. The form exposes priority + due +
+// assignee + description only; if the user wants a different status they set
+// it from the Task Detail after creation.
 const emptyForm = {
     summary: '',
     assigneeID: '',
     dueLocal: '',
     description: '',
+    priority: 'standard' as TaskPriority,
 };
 
 export default function NewTaskDialog({
@@ -141,18 +136,16 @@ export default function NewTaskDialog({
     const t = useFormatMessage();
 
     const [form, setForm] = useState(emptyForm);
+    const [quickDue, setQuickDue] = useState<QuickDue>('');
     const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
-    // Resolve the currently-selected assignee id → "@username" for the picker
-    // chip. Store-first, fetch fallback. Recomputed whenever the selection
-    // changes (open dialog, user picks from the picker, DM suggest).
+    // Resolve the currently-selected assignee id → "@username" for the picker.
     const resolvedAssigneeLabel = useResolvedUser(form.assigneeID).label;
 
     // Reset the form whenever the dialog is opened. Derive the task scope from
     // the channel context and pre-select the suggested assignee (DM partner or
-    // self), applying any prefilled summary/description (e.g. from the
-    // post-dropdown "Tạo task" action, #16).
+    // self), applying any prefilled summary/description.
     useEffect(() => {
         if (!visible) {
             return;
@@ -164,6 +157,7 @@ export default function NewTaskDialog({
             description: initialDescription ?? '',
             assigneeID: ctx.suggestedAssigneeID,
         });
+        setQuickDue('');
         setError('');
     }, [visible, channel, channelID, currentUserID, initialSummary, initialDescription]);
 
@@ -178,10 +172,19 @@ export default function NewTaskDialog({
     // Derived scope (recomputed on render so it reflects the latest channel).
     const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
 
+    // applyQuickDue sets form.dueLocal from a quick-option sentinel. Computed
+    // in the browser's local time (end of the chosen day), then sent as ms
+    // epoch to the server — the server stores UTC neutral.
+    const applyQuickDue = (option: QuickDue) => {
+        setQuickDue(option);
+        if (option === '') {
+            return; // manual datetime-local mode — leave form.dueLocal as-is.
+        }
+        const value = computeQuickDue(option);
+        setForm((prev) => ({...prev, dueLocal: value}));
+    };
+
     const submit = async () => {
-        // Guard against rapid re-trigger (double Enter / fast click) firing
-        // duplicate createTask requests before the disabled button state
-        // commits.
         if (submitting) {
             return;
         }
@@ -194,21 +197,15 @@ export default function NewTaskDialog({
         const input: CreateTaskInput = {
             summary,
             description: form.description,
+            priority: form.priority,
         };
-
-        // Scope: a derived channel id → channel task; empty → personal.
         if (ctx.channelId) {
             input.channel_id = ctx.channelId;
         }
-
-        // Assignee: the picker resolves to a user id. Keep the legacy
-        // @username → user lookup as a fallback when an opaque id is present but
-        // no picker selection was made (e.g. prefilled by an older caller).
         const assigneeID = (form.assigneeID || ctx.suggestedAssigneeID).trim();
         if (assigneeID) {
             input.assignee_id = assigneeID;
         }
-
         const dueMs = parseDueLocal(form.dueLocal);
         if (dueMs !== null) {
             input.due = dueMs;
@@ -234,86 +231,168 @@ export default function NewTaskDialog({
     return (
         <div className='task-detail'>
             <div className='task-detail__header'>
-                <button
-                    className='task-detail__back'
-                    onClick={cancel}
-                    type='button'
-                    aria-label={t('webapp.task.cancel')}
-                >
-                    <BackIcon/>
-                </button>
-                <span style={{fontWeight: 600, fontSize: 16}}>{t('webapp.task.new')}</span>
+                <div className='task-detail__header-left'>
+                    <button
+                        className='task-detail__back'
+                        onClick={cancel}
+                        type='button'
+                        aria-label={t('webapp.task.cancel')}
+                    >
+                        <BackIcon/>
+                    </button>
+                    <span className='task-detail__title-inline'>{t('webapp.task.title.new')}</span>
+                </div>
             </div>
 
-            {error && <div className='task-detail__error-block'>{error}</div>}
+            <div className='task-detail__scroll'>
+                <h2 style={{fontFamily: 'var(--task-font)', fontSize: 22, fontWeight: 700, margin: '8px 0 4px'}}>
+                    {t('webapp.task.new')}
+                </h2>
 
-            <label className='task-field'>
-                <span className='task-field__label'>{t('webapp.task.summary')}</span>
-                <input
-                    className='task-input task-input--title'
-                    value={form.summary}
-                    onChange={(e) => update({summary: e.target.value})}
-                    placeholder={t('webapp.task.summary.placeholder')}
-                    autoFocus={true}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            submit();
-                        }
-                    }}
-                />
-            </label>
+                {error && <div className='task-detail__error-block'>{error}</div>}
 
-            <div className='task-fields-row'>
                 <label className='task-field'>
-                    <span className='task-field__label'>{t('webapp.task.assignee')}</span>
+                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.summary')}</span>
+                    <input
+                        className='task-input task-input--title'
+                        value={form.summary}
+                        onChange={(e) => update({summary: e.target.value})}
+                        placeholder={t('webapp.task.summary.placeholder')}
+                        autoFocus={true}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                submit();
+                            }
+                        }}
+                    />
+                </label>
+
+                <label className='task-field'>
+                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.description')}</span>
+                    <textarea
+                        className='task-textarea'
+                        value={form.description}
+                        onChange={(e) => update({description: e.target.value})}
+                    />
+                </label>
+
+                <label className='task-field'>
+                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.priority')}</span>
+                    <select
+                        className='task-select'
+                        value={form.priority}
+                        onChange={(e) => update({priority: e.target.value as TaskPriority})}
+                    >
+                        <option value='standard'>{t('webapp.task.priority.standard')}</option>
+                        <option value='important'>{t('webapp.task.priority.important')}</option>
+                        <option value='urgent'>{t('webapp.task.priority.urgent')}</option>
+                    </select>
+                </label>
+
+                <div className='task-fields-row task-fields-row--due'>
+                    <label className='task-field'>
+                        <span className='task-field__label task-field__label--upper'>{t('webapp.task.due')}</span>
+                        <select
+                            className='task-select'
+                            value={quickDue}
+                            aria-label={t('webapp.task.due')}
+                            onChange={(e) => applyQuickDue(e.target.value as QuickDue)}
+                        >
+                            <option value=''>{t('webapp.task.due.pick')}</option>
+                            <option value='today'>{t('webapp.task.due.today')}</option>
+                            <option value='tomorrow'>{t('webapp.task.due.tomorrow')}</option>
+                            <option value='weekend'>{t('webapp.task.due.weekend')}</option>
+                            <option value='next_week'>{t('webapp.task.due.next_week')}</option>
+                        </select>
+                    </label>
+                    <label className='task-field'>
+                        <span className='task-field__label task-field__label--upper'>{' '}</span>
+                        <input
+                            className='task-input'
+                            type='datetime-local'
+                            value={form.dueLocal}
+                            aria-label={t('webapp.task.due')}
+                            onChange={(e) => {
+                                update({dueLocal: e.target.value});
+                                setQuickDue('');
+                            }}
+                        />
+                    </label>
+                </div>
+
+                <label className='task-field'>
+                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.assignee')}</span>
                     <UserPicker
                         value={form.assigneeID}
                         valueLabel={resolvedAssigneeLabel}
                         channelID={ctx.channelId || channelID}
                         onSelect={(u) => update({assigneeID: u ? u.id : ''})}
+                        placeholder={t('webapp.task.assignee.placeholder')}
                     />
                 </label>
-                <label className='task-field'>
-                    <span className='task-field__label'>{t('webapp.task.due')}</span>
-                    <input
-                        className='task-input'
-                        type='datetime-local'
-                        value={form.dueLocal}
-                        onChange={(e) => update({dueLocal: e.target.value})}
-                    />
-                </label>
-            </div>
 
-            <label className='task-field'>
-                <span className='task-field__label'>{t('webapp.task.description')}</span>
-                <textarea
-                    className='task-textarea'
-                    value={form.description}
-                    onChange={(e) => update({description: e.target.value})}
-                />
-            </label>
-
-            <div className='task-actions-bar'>
-                <button
-                    className='task-btn task-btn--secondary'
-                    onClick={cancel}
-                    type='button'
-                    disabled={submitting}
-                >
-                    {t('webapp.task.cancel')}
-                </button>
-                <button
-                    className='task-btn task-btn--primary'
-                    onClick={submit}
-                    type='button'
-                    disabled={submitting}
-                >
-                    {t('webapp.task.create')}
-                </button>
+                <div className='task-actions-bar'>
+                    <button
+                        className='task-btn task-btn--secondary'
+                        onClick={cancel}
+                        type='button'
+                        disabled={submitting}
+                    >
+                        {t('webapp.task.cancel')}
+                    </button>
+                    <button
+                        className='task-btn task-btn--primary'
+                        onClick={submit}
+                        type='button'
+                        disabled={submitting}
+                    >
+                        <CheckIcon/>
+                        {t('webapp.task.create')}
+                    </button>
+                </div>
             </div>
         </div>
     );
+}
+
+// computeQuickDue maps a quick-option sentinel to a datetime-local string
+// representing the end of the chosen day in the browser's local time. Exported
+// for unit testing.
+export function computeQuickDue(option: QuickDue): string {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const formatEndOfDay = (d: Date): string => {
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T23:59`;
+    };
+    switch (option) {
+    case 'today':
+        return formatEndOfDay(now);
+    case 'tomorrow': {
+        const d = new Date(now);
+        d.setDate(d.getDate() + 1);
+        return formatEndOfDay(d);
+    }
+    case 'weekend': {
+        // "This weekend" = upcoming Sunday 23:59. If today is Sunday, next week's
+        // Sunday.
+        const d = new Date(now);
+        const day = d.getDay();
+        const daysUntilSunday = day === 0 ? 7 : 7 - day;
+        d.setDate(d.getDate() + daysUntilSunday);
+        return formatEndOfDay(d);
+    }
+    case 'next_week': {
+        // "Next week" = end of next Sunday.
+        const d = new Date(now);
+        const day = d.getDay();
+        const daysUntilSunday = day === 0 ? 7 : 7 - day;
+        d.setDate(d.getDate() + daysUntilSunday + 7);
+        return formatEndOfDay(d);
+    }
+    default:
+        return '';
+    }
 }
 
 // BackIcon is the ‹ arrow used in the inline view header.
@@ -328,9 +407,24 @@ function BackIcon(): JSX.Element {
     );
 }
 
-// parseDueLocal converts a datetime-local string (e.g. "2026-06-19T12:00") into
-// epoch milliseconds, or null when empty/invalid. datetime-local is interpreted
-// as the user's local time, which matches the picker's UX.
+function CheckIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='2'
+            strokeLinecap='round'
+        >
+            <path d='M3 8.5L6.5 12 13 4.5'/>
+        </svg>
+    );
+}
+
+// parseDueLocal converts a datetime-local string into epoch milliseconds, or
+// null when empty/invalid. datetime-local is interpreted as the user's local
+// time.
 export function parseDueLocal(value: string): number | null {
     if (!value.trim()) {
         return null;
@@ -340,20 +434,13 @@ export function parseDueLocal(value: string): number | null {
 }
 
 // normalizeAssigneeUsername strips a single leading "@" from the assignee field
-// value so the lookup hits the host /api/v4/users/username/<name> endpoint
-// correctly. Trims surrounding whitespace. Exported for unit testing (#96).
+// value. Exported for unit testing (#96).
 export function normalizeAssigneeUsername(value: string): string {
     return value.trim().replace(/^@/, '');
 }
 
 // assigneeLookupError maps a thrown assignee-lookup error to the user-facing
-// message. A 404 (unknown username) returns the localized not-found text via
-// the notFoundText callback so the message is actionable and translated; any
-// other error surfaces its raw message via messageFor. Extracted so the UX
-// contract is unit-testable without an i18n/Redux harness (#96).
-//
-// notFoundText is a callback (not a string) so it's only evaluated on the 404
-// path, keeping the non-404 path free of any i18n dependency.
+// message. Exported for unit testing (#96).
 export function assigneeLookupError(err: unknown, notFoundText: () => string): string {
     if (err instanceof ClientError && err.status === 404) {
         return notFoundText();
@@ -361,9 +448,7 @@ export function assigneeLookupError(err: unknown, notFoundText: () => string): s
     return messageFor(err);
 }
 
-// messageFor extracts a user-facing message from a thrown error, preferring the
-// server's text body (ClientError) and falling back to a generic string.
-// Exported so tests verify the production logic rather than a hand-copied twin.
+// messageFor extracts a user-facing message from a thrown error.
 export function messageFor(err: unknown): string {
     if (err instanceof ClientError) {
         return err.message || tFallback();
@@ -371,7 +456,6 @@ export function messageFor(err: unknown): string {
     return err instanceof Error ? err.message : tFallback();
 }
 
-// tFallback is a static generic message for when no better text is available.
 function tFallback(): string {
     return 'request failed';
 }

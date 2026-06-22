@@ -151,6 +151,21 @@ type CreateInput struct {
 	IsAllDay       bool
 	ParentTaskID   string
 	ReminderOffset *int64
+	// Priority is one of the model.Priority* constants. Empty defaults to
+	// standard; an invalid value is rejected.
+	Priority string
+}
+
+// ensurePriority normalizes an empty priority to the default. Tasks created
+// before the priority migration (000008) are backfilled to 'standard' by the
+// DEFAULT clause, but defensive reads can still surface an empty string in
+// edge cases (e.g. a row cached before the migration ran). Calling this before
+// any UpdateTask prevents a NOT NULL constraint violation.
+func ensurePriority(p string) string {
+	if p == "" {
+		return model.PriorityStandard
+	}
+	return p
 }
 
 // Create persists a new task atomically: the task row, its creator + assignee
@@ -167,6 +182,17 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 	}
 	if in.CreatorID == "" {
 		return nil, errors.New("creator id is required")
+	}
+
+	// Normalize + validate priority. Empty defaults to standard (the implicit
+	// default in the column); an explicit value must be one of the recognized
+	// constants so the UI can always render it.
+	priority := in.Priority
+	if priority == "" {
+		priority = model.PriorityStandard
+	}
+	if !model.IsValidPriority(priority) {
+		return nil, errors.New("invalid priority")
 	}
 
 	// Resolve parent inheritance BEFORE the transaction so the tx body is a
@@ -214,6 +240,7 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 		ChannelID:    channelID,
 		ParentTaskID: in.ParentTaskID,
 		Status:       model.StatusTodo,
+		Priority:     priority,
 		OrderKey:     orderKey,
 		IsAllDay:     in.IsAllDay,
 		DueAt:        in.DueAt,
@@ -498,19 +525,9 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 	}
 	oldStatus := row.Status
 
-	// Parent-done guard: a parent can only reach done once all direct subtasks
-	// are terminal. Checked before the transition so the task isn't left
-	// half-updated.
-	if newStatus == model.StatusDone {
-		if open, err := s.openSubtasks(ctx, id); err != nil {
-			return nil, err
-		} else if len(open) > 0 {
-			return nil, ErrOpenSubtasks{Open: open}
-		}
-	}
-
 	now := nowFunc()
 	taskutil.ApplyStatus(row, newStatus, now)
+	row.Priority = ensurePriority(row.Priority)
 
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
@@ -521,8 +538,15 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 		}
 		row = &updated
 
-		// Cascade-cancel open subtasks when the parent is cancelled.
-		if newStatus == model.StatusCancelled {
+		// Cascade-cancel open subtasks when the parent reaches a terminal
+		// status (done or cancelled). Open subtasks are forced to cancelled
+		// so a parent can be completed without manually closing every child.
+		// The cascade is recursive: a cancelled subtask with its own open
+		// subtasks cascades again (cascadeCancelSubtasks calls UpdateTask on
+		// each child, which is itself a terminal transition — but it writes
+		// directly rather than going through SetStatus, so the recursion is
+		// handled by the explicit loop below).
+		if newStatus == model.StatusDone || newStatus == model.StatusCancelled {
 			if err := s.cascadeCancelSubtasks(txCtx, tx, id, actorID, now); err != nil {
 				return err
 			}
@@ -568,46 +592,6 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 // hierarchies.
 const maxSubtaskDepth = 16
 
-// ErrOpenSubtasks is returned when a parent task is marked done while it still
-// has non-terminal (todo/in_progress) subtasks. Open holds the summaries of the
-// unfinished subtasks so the caller can list them in the error message.
-type ErrOpenSubtasks struct {
-	Open []string
-}
-
-// Error renders the blocking subtask summaries in a clear, actionable message.
-func (e ErrOpenSubtasks) Error() string {
-	if len(e.Open) == 0 {
-		return "task has open subtasks"
-	}
-	quoted := make([]string, len(e.Open))
-	for i, s := range e.Open {
-		quoted[i] = "“" + s + "”"
-	}
-	return "cannot mark task done while subtasks are open: " + strings.Join(quoted, ", ")
-}
-
-// openSubtasks returns the summaries of parentID's direct subtasks that are not
-// yet terminal (done/cancelled). A subtask with no summary falls back to its id.
-func (s *Service) openSubtasks(ctx context.Context, parentID string) ([]string, error) {
-	subs, err := s.store.ListSubtasks(ctx, parentID)
-	if err != nil {
-		return nil, err
-	}
-	var open []string
-	for _, sub := range subs {
-		if model.IsTerminalStatus(sub.Status) {
-			continue
-		}
-		label := sub.Summary
-		if label == "" {
-			label = sub.ID
-		}
-		open = append(open, label)
-	}
-	return open, nil
-}
-
 // assertNoCycle walks the parent chain from startID up to maxDepth ancestors via
 // GetTask, returning ErrSubtaskCycle if the chain repeats a node or exceeds the
 // depth cap. A nil error means attaching a child under startID cannot form a
@@ -644,7 +628,9 @@ var ErrSubtaskCycle = errors.New("subtask would form a cycle or exceed the nesti
 
 // cascadeCancelSubtasks moves every todo/in_progress subtask of parentID to
 // cancelled, issuing UpdateTask per subtask inside the already-open tx. Already
-// terminal subtasks are left untouched.
+// terminal subtasks are left untouched. The cascade is recursive: each
+// cancelled subtask's own open subtasks are cancelled too, depth-first, so a
+// deep hierarchy collapses in one transition.
 func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, parentID, actorID string, now int64) error {
 	subs, err := tx.ListSubtasks(ctx, parentID)
 	if err != nil {
@@ -657,6 +643,7 @@ func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, par
 		}
 		oldStatus := sub.Status
 		taskutil.ApplyStatus(&sub, model.StatusCancelled, now)
+		sub.Priority = ensurePriority(sub.Priority)
 		if _, err := tx.UpdateTask(ctx, sub); err != nil {
 			return err
 		}
@@ -672,6 +659,10 @@ func (s *Service) cascadeCancelSubtasks(ctx context.Context, tx store.Store, par
 			FromValue: &from,
 			ToValue:   &to,
 		}); err != nil {
+			return err
+		}
+		// Recurse: cancel this subtask's own open subtasks too.
+		if err := s.cascadeCancelSubtasks(ctx, tx, sub.ID, actorID, now); err != nil {
 			return err
 		}
 	}
@@ -794,6 +785,10 @@ type PatchInput struct {
 	Description  *string
 	DueAt        *int64 // nil clears due when "due" is in UpdateFields
 	IsAllDay     *bool
+	// Priority, when "priority" is in UpdateFields. The pointer is non-nil in
+	// practice (there is no "clear" semantic for priority — it always has a
+	// value); nil keeps the existing value as a safety net.
+	Priority *string
 }
 
 // Patch applies a partial update to the task identified by id. A due change
@@ -834,6 +829,21 @@ func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) 
 			newDue := ptrStringOrEmpty(row.DueAt)
 			dueChanged = true
 			changes = append(changes, fieldChange{model.EventDueChanged, oldDue, newDue})
+		case "priority":
+			// Priority always has a value (standard default); a nil pointer is
+			// treated as a no-op to keep the existing value.
+			if in.Priority != nil {
+				newP := *in.Priority
+				if newP == "" {
+					newP = model.PriorityStandard
+				}
+				if !model.IsValidPriority(newP) {
+					return nil, errors.New("invalid priority")
+				}
+				old := row.Priority
+				row.Priority = newP
+				changes = append(changes, fieldChange{model.EventPriorityChanged, old, newP})
+			}
 		case "is_all_day":
 			row.IsAllDay = derefBool(in.IsAllDay)
 		}
@@ -844,6 +854,7 @@ func (s *Service) Patch(actorID, id string, in PatchInput) (*model.Task, error) 
 
 	now := nowFunc()
 	row.UpdatedAt = now
+	row.Priority = ensurePriority(row.Priority)
 
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
@@ -976,10 +987,16 @@ func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, Assign
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
 	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
-		// Empty new assignee means "unassign": remove the assignee edge.
+		// Empty new assignee means "unassign": remove the assignee edge. Skip
+		// the RemoveMember call when there is no current assignee — otherwise
+		// RemoveMember("", ...) returns "user id is required" and the whole
+		// assign call fails with a 500. An unassign on an already-unassigned
+		// task is a no-op (still record the touch + event for auditability).
 		if newAssigneeID == "" {
-			if err := tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee); err != nil {
-				return err
+			if oldAssigneeID != "" {
+				if err := tx.RemoveMember(txCtx, id, oldAssigneeID, model.MemberRoleAssignee); err != nil {
+					return err
+				}
 			}
 			if err := tx.TouchTaskUpdatedAt(txCtx, id, now); err != nil {
 				return err
@@ -1086,22 +1103,24 @@ func snapshotTaskJSON(row *model.TaskRow) string {
 
 // Scope enumerates the list result scopes. These mirror store.Scope so the
 // service layer keeps its own read-friendly names while delegating to the
-// store's enum.
+// store's enum. Two scopes are supported: channel (tasks of a channel) and
+// direct (tasks shared between two DM participants).
 type Scope string
 
 const (
-	ScopeMine    Scope = Scope(store.ScopeMine)
 	ScopeChannel Scope = Scope(store.ScopeChannel)
-	ScopeAll     Scope = Scope(store.ScopeAll)
+	ScopeDirect  Scope = Scope(store.ScopeDirect)
 )
 
 // ListQuery is the filtered/paginated list request. It mirrors store.ListQuery;
 // the service maps its loose Due string to a store.DueFilter.
 type ListQuery struct {
 	Scope         Scope
-	UserID        string // required for ScopeMine
+	UserID        string // required for ScopeDirect (one of the two DM users)
 	ChannelID     string // required for ScopeChannel
+	PartnerID     string // required for ScopeDirect (the other DM user)
 	Status        string // optional: "", todo, in_progress, done, cancelled
+	Priority      string // optional: "", standard, important, urgent
 	DueAt         string // optional: "", overdue, today, week
 	AfterOrderKey string // cursor: only tasks with OrderKey > this are returned
 	Limit         int    // page size; <=0 defaults to DefaultLimit
@@ -1125,7 +1144,9 @@ func (s *Service) List(q ListQuery) ([]*model.Task, error) {
 		Scope:         store.Scope(q.Scope),
 		UserID:        q.UserID,
 		ChannelID:     q.ChannelID,
+		PartnerID:     q.PartnerID,
 		Status:        q.Status,
+		Priority:      q.Priority,
 		Due:           mapDueFilter(q.DueAt),
 		DueAsOf:       nowFunc(),
 		AfterOrderKey: q.AfterOrderKey,

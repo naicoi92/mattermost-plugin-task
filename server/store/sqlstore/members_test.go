@@ -154,32 +154,64 @@ func TestSetAssignee_NoExistingAssigneeInsertsNew(t *testing.T) {
 	assert.Equal(t, "u1", got)
 }
 
-func TestListTasks_ScopeMineJoinsMembers(t *testing.T) {
+// TestListTasks_ScopeDirectRequiresMutualMembership verifies the DM scope
+// returns only tasks where BOTH the caller and the partner are members (with
+// the assignee or creator role). Tasks where only one of them is a member are
+// hidden — this is the security boundary that prevents a caller from
+// enumerating a third user's tasks by guessing partner_id.
+func TestListTasks_ScopeDirectRequiresMutualMembership(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
-	// u1 is assignee of T1 and T2; u2 is assignee of T3; T4 has no assignee.
+	// u1 + u2 are the DM pair.
+	// T1: both u1 (assignee) + u2 (creator)  → returned.
+	// T2: only u1 (assignee)                  → hidden (u2 not a member).
+	// T3: only u2 (creator)                   → hidden (u1 not a member).
+	// T4: both u1 + u3 (third party)          → hidden (u2 not a member).
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	mustCreate(t, s, ctx, fixture("T2", "k2"))
 	mustCreate(t, s, ctx, fixture("T3", "k3"))
 	mustCreate(t, s, ctx, fixture("T4", "k4"))
 	require.NoError(t, s.AddMember(ctx, "T1", "u1", model.MemberRoleAssignee))
+	require.NoError(t, s.AddMember(ctx, "T1", "u2", model.MemberRoleCreator))
 	require.NoError(t, s.AddMember(ctx, "T2", "u1", model.MemberRoleAssignee))
-	require.NoError(t, s.AddMember(ctx, "T2", "u1", model.MemberRoleCreator)) // extra role, same user
-	require.NoError(t, s.AddMember(ctx, "T3", "u2", model.MemberRoleAssignee))
+	require.NoError(t, s.AddMember(ctx, "T3", "u2", model.MemberRoleCreator))
+	require.NoError(t, s.AddMember(ctx, "T4", "u1", model.MemberRoleAssignee))
+	require.NoError(t, s.AddMember(ctx, "T4", "u3", model.MemberRoleCreator))
 
-	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u1", Limit: 10})
+	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", PartnerID: "u2", Limit: 10})
 	require.NoError(t, err)
-	assert.Equal(t, 2, page.Total, "u1 should see only T1 and T2")
-	assert.False(t, page.HasMore)
-	ids := []string{page.Items[0].(*model.TaskRow).ID, page.Items[1].(*model.TaskRow).ID}
-	assert.ElementsMatch(t, []string{"T1", "T2"}, ids)
+	assert.Equal(t, 1, page.Total, "only T1 has both u1 and u2 as members")
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "T1", page.Items[0].(*model.TaskRow).ID)
 }
 
-func TestListTasks_ScopeMineRequiresUserID(t *testing.T) {
+// TestListTasks_ScopeDirectPartnerGuessingFails verifies the security
+// invariant: a caller cannot enumerate a third user's tasks by passing their
+// id as partner_id. Here u1 tries to peek at u3's tasks by claiming
+// partner_id=u3, but u1 is not a member of any task u3 relates to, so nothing
+// is returned.
+func TestListTasks_ScopeDirectPartnerGuessingFails(t *testing.T) {
 	s := tasksTestStore(t)
-	_, err := s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeMine, Limit: 10})
+	ctx := context.Background()
+	// u3 created T1 alone; u1 is not a member.
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+	require.NoError(t, s.AddMember(ctx, "T1", "u3", model.MemberRoleCreator))
+
+	page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", PartnerID: "u3", Limit: 10})
+	require.NoError(t, err)
+	require.Empty(t, page.Items, "no task rows should leak to an unrelated caller")
+	assert.Equal(t, 0, page.Total, "u1 cannot see u3's task by claiming partner_id=u3")
+}
+
+func TestListTasks_ScopeDirectRequiresUserAndPartner(t *testing.T) {
+	s := tasksTestStore(t)
+	_, err := s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeDirect, UserID: "u1", Limit: 10})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scope=mine requires UserID")
+	assert.Contains(t, err.Error(), "scope=direct requires UserID and PartnerID")
+
+	_, err = s.ListTasks(context.Background(), store.ListQuery{Scope: store.ScopeDirect, PartnerID: "u2", Limit: 10})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope=direct requires UserID and PartnerID")
 }
 
 func TestIsValidMemberRole(t *testing.T) {

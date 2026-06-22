@@ -1,6 +1,12 @@
 # Kế hoạch triển khai Mattermost Plugin "Task" (mô phỏng Lark Suite Tasks)
 
 > Trạng thái: **Hoàn thiện** — chốt phạm vi & cách tiếp cận với người dùng. Sẵn sàng review.
+>
+> **Cập nhật v0.2.0 (2026-06-21):** Redesign RHS theo design system Mattermost
+> (Quick List / Task Detail / New Task), chuyển sang model **context-driven
+> listing** (scope `channel` / `direct`; xoá `mine` / `all`), thêm field
+> **priority** (`standard` / `important` / `urgent`), và **xoá slash-command +
+> mobile Interactive Dialogs** (sẽ rebuild sau). Xem `docs/RELEASE_NOTES.md`.
 
 ## Context (Bối cảnh)
 
