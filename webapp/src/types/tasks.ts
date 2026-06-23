@@ -103,6 +103,14 @@ export interface CreateTaskInput {
     priority?: TaskPriority;
 }
 
+// ShareTaskResult is the response body of POST /tasks/:id/share
+// (server/api.go shareTask). post_id is the card post id - newly created, or
+// the existing one when the share was idempotent (the task already had a card
+// in that channel).
+export interface ShareTaskResult {
+    post_id: string;
+}
+
 // PatchTaskInput is the JSON body for PATCH /tasks/:id. Only fields named in
 // update_fields are modified; a field present in update_fields with a null
 // pointer clears that field (for fields that support clearing). Matches server

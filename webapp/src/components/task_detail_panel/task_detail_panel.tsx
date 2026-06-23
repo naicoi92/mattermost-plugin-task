@@ -18,7 +18,7 @@ import {ACTION_TYPES} from 'reducer';
 
 import type {GlobalState} from '@mattermost/types/store';
 
-import {getChannel} from 'mattermost-redux/selectors/entities/channels';
+import {getChannel, getCurrentChannelId} from 'mattermost-redux/selectors/entities/channels';
 
 import formatDueRelative from 'components/shared/format_due_relative';
 import MetaDropdown from 'components/shared/meta_dropdown';
@@ -142,6 +142,10 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
     // Called unconditionally (rules-of-hooks) before the early return; the
     // selector returns '' when there is no channel.
     const channelIDForSelector = full?.channel_id ?? '';
+
+    // The channel the user is currently viewing (center pane). Share Task posts
+    // the card here. '' when there is no current channel (Share is disabled).
+    const currentChannelID = useSelector(getCurrentChannelId) || '';
     const channelName = useSelector((s: GlobalState) => {
         if (!channelIDForSelector) {
             return '';
@@ -330,6 +334,24 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         }
     };
 
+    // share posts this task's card into the channel the user is currently
+    // viewing (the center pane). The server authorizes the caller (must view
+    // the task + be a member of the channel) and is idempotent per channel; the
+    // card refreshes on later task changes via the existing updateTaskCards
+    // loop. Silent on success (the card appears in the channel), like the other
+    // header actions; surfaces errors via the shared error block.
+    const share = async () => {
+        if (!currentChannelID) {
+            return;
+        }
+        setError('');
+        try {
+            await client.shareTask(full.id, currentChannelID);
+        } catch (err) {
+            setError(messageFor(err));
+        }
+    };
+
     const canDelete = currentUserID !== undefined &&
         (full.creator_id === currentUserID || full.assignee_id === currentUserID);
 
@@ -349,6 +371,16 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     )}
                     <span className='task-detail__title-inline'>{t('webapp.task.title.detail')}</span>
                 </div>
+                <button
+                    className='task-detail__header-share'
+                    onClick={share}
+                    type='button'
+                    disabled={!currentChannelID}
+                    aria-label={t('webapp.task.share.button')}
+                    title={currentChannelID ? t('webapp.task.share.button') : t('webapp.task.share.no_channel')}
+                >
+                    <ShareIcon/>
+                </button>
                 {canDelete && (
                     <button
                         className='task-detail__header-delete'
@@ -836,6 +868,21 @@ function TrashIcon(): JSX.Element {
             style={{width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round'}}
         >
             <path d='M3 4h10M6.5 4V3a1 1 0 011-1h1a1 1 0 011 1v1M5 4l.5 9a1 1 0 001 1h3a1 1 0 001-1l.5-9'/>
+        </svg>
+    );
+}
+
+// ShareIcon is the share glyph used in the header (posts the task card into the
+// current channel). A simple arrow-out-of-box shape.
+function ShareIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round'}}
+        >
+            <path d='M9 3h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h3'/>
+            <path d='M8 1.5v8M5 4.5L8 1.5L11 4.5'/>
         </svg>
     );
 }

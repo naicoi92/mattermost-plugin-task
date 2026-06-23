@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 	"github.com/naicoi92/mattermost-plugin-task/server/permission"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
+	"github.com/naicoi92/mattermost-plugin-task/server/taskutil"
 )
 
 // initRouter initializes the HTTP router for the plugin.
@@ -59,6 +61,9 @@ func (p *Plugin) initRouter() *mux.Router {
 
 	// Audit trail / activity timeline (M4-4).
 	tasks.HandleFunc("/{id:[^/]+}/events", p.listTaskEvents).Methods(http.MethodGet)
+
+	// Share an existing task's card into a channel (issue #159).
+	tasks.HandleFunc("/{id:[^/]+}/share", p.shareTask).Methods(http.MethodPost)
 
 	return router
 }
@@ -865,6 +870,109 @@ func (p *Plugin) listTaskEvents(w http.ResponseWriter, r *http.Request) {
 		events = []taskmodel.TaskEvent{}
 	}
 	p.writeJSON(w, events)
+}
+
+// shareRequest is the JSON body for POST /tasks/{id}/share.
+type shareRequest struct {
+	ChannelID string `json:"channel_id"`
+}
+
+// shareResponse is the JSON body returned by a successful share.
+type shareResponse struct {
+	PostID string `json:"post_id"`
+}
+
+// shareTask posts an existing task's card into a target channel and links it
+// via task_posts (kind="share") so it refreshes on later task changes through
+// the existing updateTaskCards loop. The caller must be able to view the task
+// (CanUserViewTask) AND be a member of the target channel (defense-in-depth:
+// the bot cannot be directed into a channel the caller cannot access). Share
+// is idempotent per channel: if the task already has a card in the target
+// channel, the existing post id is returned without posting a duplicate.
+func (p *Plugin) shareTask(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	actorID := currentUserID(r)
+
+	t, err := p.taskService.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var req shareRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.ChannelID == "" {
+		p.writeError(w, http.StatusBadRequest, "channel_id is required")
+		return
+	}
+
+	// Viewer check: only those who can view the task may share it.
+	if !permission.CanUserViewTask(actorID, t, p.channelMembership()) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
+		return
+	}
+
+	// Channel-member check: the caller must belong to the target channel so a
+	// client cannot direct the bot into a channel the caller cannot access.
+	if !p.channelMembership().IsChannelMember(actorID, req.ChannelID) {
+		p.writeError(w, http.StatusForbidden, "you are not a member of that channel")
+		return
+	}
+
+	existing := p.taskPosts(t.ID)
+	// Idempotency: if the task already has a card in the target channel, return
+	// the existing post id without posting a duplicate.
+	for _, tp := range existing {
+		post, gerr := p.API.GetPost(tp.PostID)
+		if gerr != nil || post == nil {
+			continue
+		}
+		if post.ChannelId == req.ChannelID {
+			p.writeJSON(w, shareResponse{PostID: tp.PostID})
+			return
+		}
+	}
+	// Single-share invariant: task_posts enforces UNIQUE(task_id, kind), so a
+	// task may have at most one kind="share" card. If one already exists in a
+	// different channel, reject (409) rather than violate the constraint and
+	// leave an orphan card. (Same-channel case returned idempotently above.)
+	for _, tp := range existing {
+		if tp.Kind == taskmodel.PostKindShare {
+			p.writeError(w, http.StatusConflict, "task already shared in another channel")
+			return
+		}
+	}
+
+	// Post the card and link it with kind="share".
+	postID := p.postCard(req.ChannelID, t)
+	if postID == "" {
+		p.writeError(w, http.StatusInternalServerError, "failed to post task card")
+		return
+	}
+	if err := p.taskStore.AddPost(context.Background(), taskutil.GenerateULID(), t.ID, postID, taskmodel.PostKindShare); err != nil {
+		// Most likely a UNIQUE(task_id, kind) race: another request claimed the
+		// single share slot between our precheck and this insert. Clean up the
+		// orphan card we just posted so it can't linger untracked, then fail —
+		// the caller can retry and the precheck will resolve it idempotently.
+		// (Best-effort: a DeletePost error is logged but doesn't change the
+		// outcome.)
+		if derr := p.API.DeletePost(postID); derr != nil {
+			p.API.LogError("Failed to clean up orphan share card",
+				"post_id", postID, "error", derr)
+		}
+		p.API.LogError("Failed to link shared task card",
+			"task_id", t.ID, "post_id", postID, "error", err)
+		p.writeError(w, http.StatusInternalServerError, "failed to link task card")
+		return
+	}
+	p.writeJSON(w, shareResponse{PostID: postID})
 }
 
 // channelMembership returns a permission.ChannelMembershipChecker backed by the

@@ -25,6 +25,7 @@ import type {
     PatchTaskInput,
     SetAssigneeInput,
     SetReminderInput,
+    ShareTaskResult,
     Task,
     TaskStatus,
 } from 'types/tasks';
@@ -232,6 +233,21 @@ export function listComments(taskID: string): Promise<Comment[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Sharing (server/api.go: POST /tasks/:id/share)
+// ---------------------------------------------------------------------------
+
+// shareTask posts the task's card into channelID and returns the card post id
+// - newly created, or the existing one when the share was idempotent (the task
+// already had a card in that channel). The server authorizes the caller (must
+// be able to view the task and be a member of channelID).
+export function shareTask(id: string, channelID: string): Promise<ShareTaskResult> {
+    return doFetch<ShareTaskResult>(`/tasks/${encodeURIComponent(id)}/share`, {
+        method: 'POST',
+        body: {channel_id: channelID},
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Kanban ordering (forward-looking; declared in issue #31's acceptance list but
 // not yet backed by a server route). It is intentionally a thin stub so the
 // webapp can adopt it without a client rewrite once the server endpoint lands.
@@ -366,6 +382,7 @@ export default {
     listSubtasks,
     createComment,
     listComments,
+    shareTask,
     setTaskOrder,
     getUserByUsername,
     getUser,
