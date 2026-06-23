@@ -134,6 +134,11 @@ func TestCreateTask_Endpoint(t *testing.T) {
 // no card at all.
 func TestCreateTask_AnnouncesCardInPostChannelID(t *testing.T) {
 	p, _ := newTestPlugin(t)
+	// The caller is a member of the originating DM, so the announce card is
+	// authorized to post there (defense-in-depth on client-controlled
+	// post_channel_id — see TestCreateTask_PostChannelID_IgnoredWhenNotMember).
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "dm1", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
 	body := `{"summary":"DM task","post_channel_id":"dm1"}`
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
@@ -148,6 +153,10 @@ func TestCreateTask_AnnouncesCardInPostChannelID(t *testing.T) {
 	// announce post ("post-1") and no assignee-bot DM ("").
 	assert.Equal(t, "post-1", got.ChannelPostID)
 	assert.Equal(t, "", got.DMPostID)
+	// Routing guard: the announce CreatePost targeted post_channel_id directly.
+	api.AssertCalled(t, "CreatePost", mock.MatchedBy(func(post *mmmodel.Post) bool {
+		return post.ChannelId == "dm1"
+	}))
 }
 
 // TestCreateTask_AnnounceAndAssigneeDM_AreSeparateSurfaces locks in the
@@ -157,6 +166,8 @@ func TestCreateTask_AnnouncesCardInPostChannelID(t *testing.T) {
 // announce post never replaces or suppresses the assignee notification.
 func TestCreateTask_AnnounceAndAssigneeDM_AreSeparateSurfaces(t *testing.T) {
 	p, _ := newTestPlugin(t)
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "dm1", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
 	body := `{"summary":"DM assigned","post_channel_id":"dm1","assignee_id":"partner"}`
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
@@ -171,6 +182,40 @@ func TestCreateTask_AnnounceAndAssigneeDM_AreSeparateSurfaces(t *testing.T) {
 	// Assignee-bot DM notification fires independently (posted second →
 	// "post-2"); it is NOT suppressed by the announce post.
 	assert.Equal(t, "post-2", got.DMPostID)
+	// Routing guard: announce → post_channel_id, assignee-bot-DM → DM(bot,
+	// assignee) (the mocked GetDirectChannel returns "dm-channel").
+	api.AssertCalled(t, "CreatePost", mock.MatchedBy(func(post *mmmodel.Post) bool {
+		return post.ChannelId == "dm1"
+	}))
+	api.AssertCalled(t, "CreatePost", mock.MatchedBy(func(post *mmmodel.Post) bool {
+		return post.ChannelId == "dm-channel"
+	}))
+}
+
+// TestCreateTask_PostChannelID_IgnoredWhenNotMember is the defense-in-depth
+// guard for client-controlled post_channel_id: if the requesting user is NOT a
+// member of post_channel_id, the announce card is NOT posted there (no
+// cross-channel bot posting abuse). The task itself is still created normally.
+func TestCreateTask_PostChannelID_IgnoredWhenNotMember(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	api := p.API.(*plugintest.API)
+	// Caller is not a member of "secret" → GetChannelMember returns no member.
+	api.On("GetChannelMember", "secret", "u1").Return(nil, nil).Maybe()
+	body := `{"summary":"sneak","post_channel_id":"secret"}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	// The task is still created (personal scope, no assignee).
+	assert.Equal(t, "", got.ChannelID)
+	assert.Equal(t, "sneak", got.Summary)
+	// But NO announce card was posted: the caller couldn't direct the bot into
+	// a channel they don't belong to.
+	assert.Equal(t, "", got.ChannelPostID)
+	assert.Equal(t, "", got.DMPostID)
+	api.AssertNumberOfCalls(t, "CreatePost", 0)
 }
 
 func TestCreateTask_RequiresSummary(t *testing.T) {

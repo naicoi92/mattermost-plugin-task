@@ -182,14 +182,24 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// Create in an outer tx because CreatePost is a server RPC that can't
 	// participate in a DB transaction.
 	var channelPostID, dmPostID string
-	// Post the announce card into the task's own channel, or — for a personal
-	// task (empty ChannelID) created with an originating channel (e.g. a DM)
-	// — into post_channel_id. The task's channel_id (scope) is unchanged; only
-	// the card destination is decided here. The DM-assignee notification below
-	// is left untouched (additive, no dedup: it targets a different surface).
+	// Decide where the announce card is posted. A channel task (ChannelID set)
+	// posts into its own channel. A personal task (empty ChannelID) created in
+	// an originating channel (e.g. a DM) posts into post_channel_id instead —
+	// but only after verifying the requesting user is a member of that channel,
+	// so a client cannot direct the bot to post into a channel the caller cannot
+	// access (defense-in-depth on client-controlled post_channel_id). The task's
+	// channel_id (scope) is never changed here; only the card destination is
+	// decided. The DM-assignee notification below is left untouched (additive).
 	announceChannel := created.ChannelID
 	if announceChannel == "" {
 		announceChannel = req.PostChannelID
+	}
+	if announceChannel != "" && announceChannel != created.ChannelID {
+		if !p.channelMembership().IsChannelMember(currentUserID(r), announceChannel) {
+			p.API.LogDebug("Ignoring post_channel_id announce: caller is not a channel member",
+				"task_id", created.ID, "post_channel_id", announceChannel)
+			announceChannel = ""
+		}
 	}
 	if announceChannel != "" {
 		channelPostID = p.postCard(announceChannel, created)
