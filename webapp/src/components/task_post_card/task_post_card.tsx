@@ -11,7 +11,10 @@
 //
 // The host passes the post as a prop. We read task_id from post.props, then
 // hydrate the task via the plugin cache (real-time via WebSocket) or a REST
-// fetch. Clicking the card (outside the checkbox) opens the task in the RHS.
+// fetch. Above the card we render a small "creator started a task [for
+// assignee]" caption so the post reads like a normal message. Clicking the card
+// (outside the checkbox) opens the task in the RHS; the caption is left
+// non-interactive so clicking it behaves like a normal post (opens the thread).
 
 import * as client from 'client';
 import {useActiveLocale, useFormatMessage} from 'i18n_utils';
@@ -103,6 +106,7 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
         }
     }, [cached]);
 
+    const creatorLabel = useResolvedUser(task?.creator_id ?? '').label;
     const assigneeLabel = useResolvedUser(task?.assignee_id ?? '').label;
 
     if (!taskID) {
@@ -113,6 +117,15 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
     }
 
     const done = task.status === 'done' || task.status === 'cancelled';
+
+    // caption is the small "creator started a task [for assignee]" line shown
+    // above the card so the post reads like a normal message. It is intentionally
+    // NOT clickable — clicks on it fall through to the host's default post
+    // behaviour (open the thread), mirroring how a plain text post behaves. Only
+    // the card below opens Task Details.
+    const caption = task.assignee_id && task.assignee_id !== task.creator_id ?
+        t('webapp.task.post.caption.assigned', creatorLabel || task.creator_id, assigneeLabel || task.assignee_id) :
+        t('webapp.task.post.caption.created', creatorLabel || task.creator_id);
 
     // toggleDone flips the checkbox: open → done, terminal → in_progress.
     const toggleDone = async (e: React.MouseEvent) => {
@@ -142,53 +155,56 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
     };
 
     return (
-        <div
-            className={`task-post-card task-post-card--${task.status} ${done ? 'task-post-card--done' : ''}`}
-            onClick={openRHS}
-            onKeyDown={onCardKey}
-            role='button'
-            tabIndex={0}
-            data-task-id={task.id}
-        >
-            <span
-                className={`task-post-card__check ${done ? 'task-post-card__check--done' : ''}`}
-                role='checkbox'
-                aria-checked={done}
+        <div className='task-post-card-post'>
+            <span className='task-post-card-post__caption'>{caption}</span>
+            <div
+                className={`task-post-card task-post-card--${task.status} ${done ? 'task-post-card--done' : ''}`}
+                onClick={openRHS}
+                onKeyDown={onCardKey}
+                role='button'
                 tabIndex={0}
-                onClick={toggleDone}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        toggleDone(e as unknown as React.MouseEvent);
-                    }
-                }}
+                data-task-id={task.id}
             >
-                <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
-            </span>
-            <span className='task-post-card__body'>
-                <span className='task-post-card__title'>{task.summary}</span>
-                <span className='task-post-card__meta'>
-                    <StatusPill status={task.status}/>
-                    <span className='task-post-card__priority'>
-                        <span className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}/>
-                        {priorityLabel(task.priority || 'standard', t)}
-                    </span>
-                    {task.due ? (
-                        <span className={`task-post-card__due ${isOverdue(task) ? 'task-post-card__due--overdue' : ''}`}>
-                            <CalendarIcon/>
-                            {formatDueRelative({dueMs: task.due, locale, isOverdue: isOverdue(task)})}
-                        </span>
-                    ) : null}
-                    {task.assignee_id && (
-                        <span className='task-post-card__assignee'>
-                            <span className='task-post-card__assignee-avatar'>
-                                {(assigneeLabel || '?').replace(/^@/, '').slice(0, 2).toUpperCase()}
-                            </span>
-                            {assigneeLabel || '…'}
-                        </span>
-                    )}
+                <span
+                    className={`task-post-card__check ${done ? 'task-post-card__check--done' : ''}`}
+                    role='checkbox'
+                    aria-checked={done}
+                    tabIndex={0}
+                    onClick={toggleDone}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleDone(e as unknown as React.MouseEvent);
+                        }
+                    }}
+                >
+                    <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
                 </span>
-            </span>
+                <span className='task-post-card__body'>
+                    <span className='task-post-card__title'>{task.summary}</span>
+                    <span className='task-post-card__meta'>
+                        <StatusPill status={task.status}/>
+                        <span className='task-post-card__priority'>
+                            <span className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}/>
+                            {priorityLabel(task.priority || 'standard', t)}
+                        </span>
+                        {task.due ? (
+                            <span className={`task-post-card__due ${isOverdue(task) ? 'task-post-card__due--overdue' : ''}`}>
+                                <CalendarIcon/>
+                                {formatDueRelative({dueMs: task.due, locale, isOverdue: isOverdue(task)})}
+                            </span>
+                        ) : null}
+                        {task.assignee_id && (
+                            <span className='task-post-card__assignee'>
+                                <span className='task-post-card__assignee-avatar'>
+                                    {(assigneeLabel || '?').replace(/^@/, '').slice(0, 2).toUpperCase()}
+                                </span>
+                                {assigneeLabel || '…'}
+                            </span>
+                        )}
+                    </span>
+                </span>
+            </div>
         </div>
     );
 }

@@ -139,6 +139,11 @@ export default class Plugin {
         // Desktop-only: the RHS doesn't exist on mobile, so the click is a
         // harmless no-op there.
         //
+        // Scope: only a click landing inside the card itself (an element marked
+        // data-task-id) opens the RHS. Clicks on the post's caption / the rest
+        // of the post chrome fall through to the host's default behaviour
+        // (opening the thread), matching how a plain text post behaves.
+        //
         // Guarded for non-DOM environments (the Jest node test env) so importing
         // the module never throws.
         if (typeof document !== 'undefined') {
@@ -148,28 +153,23 @@ export default class Plugin {
                     return;
                 }
 
-                // Walk up to the post root. Mattermost wraps each post in an element
-                // carrying data-postid (and an id like "post_<id>").
-                const postEl = target.closest('[data-postid], [id^="post_"]') as HTMLElement | null;
-                if (!postEl) {
-                    return;
-                }
-                const postId = postEl.getAttribute('data-postid') ?? postEl.id?.replace(/^post_/, '');
-                if (!postId) {
-                    return;
-                }
-                const post = resolvePost(store.getState(), postId);
-                if (!post || post.type !== 'custom_task') {
-                    return;
-                }
-                const taskID = post.props?.task_id;
-                if (!taskID) {
+                // Only clicks that land inside the card itself open the RHS.
+                // The card is the element carrying data-task-id; the caption
+                // above it is intentionally excluded so clicking it opens the
+                // thread like any other post.
+                const cardEl = target.closest('[data-task-id]') as HTMLElement | null;
+                if (!cardEl) {
                     return;
                 }
 
-                // Don't hijack clicks on interactive bits inside the post (links,
+                // Don't hijack clicks on interactive bits inside the card (links,
                 // buttons, the reaction picker) — let those do their own thing.
-                if ((e.target as HTMLElement).closest('a, button, input, textarea, select, [role="button"]')) {
+                if (target.closest('a, button, input, textarea, select, [role="button"]')) {
+                    return;
+                }
+
+                const taskID = cardEl.getAttribute('data-task-id');
+                if (!taskID) {
                     return;
                 }
                 e.preventDefault();

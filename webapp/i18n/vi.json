@@ -113,6 +113,8 @@
   "webapp.task.title.new": "Tạo task",
   "webapp.task.tooltip.open_rhs": "Mở danh sách task",
   "webapp.task.tooltip.new_task": "Tạo task",
+  "webapp.task.post.caption.created": "%s đã khởi tạo task",
+  "webapp.task.post.caption.assigned": "%s đã khởi tạo task cho %s",
   "webapp.kanban.title": "Bảng Kanban",
   "webapp.error.required": "Trường này là bắt buộc.",
   "webapp.error.create_failed": "Không tạo được task. Vui lòng thử lại."
