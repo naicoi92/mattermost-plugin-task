@@ -35,7 +35,7 @@
 
     // Semantic colors follow Mattermost's status palette.
     --task-success: #06ad6d;
-    --task-warning: #ffb700;
+    --task-warning: #cf8900;
     --task-danger: #e01e5a;
 
     --task-radius: 3px;
@@ -66,7 +66,7 @@
     --task-accent-on: #ffffff;
     --task-accent-tint: rgba(58, 141, 245, 0.16);
     --task-success: #2ecc8f;
-    --task-warning: #ffc94d;
+    --task-warning: #e6a23c;
     --task-danger: #ff5c8a;
 }
 
@@ -97,6 +97,37 @@
         fill: currentColor;
         flex-shrink: 0;
     }
+}
+
+// --- Task checkbox glyph ---------------------------------------------------
+// Custom rounded-rect box that replaces the FontAwesome square icons. It fills
+// its wrapper (the owning .quick-list__check / .task-detail__title-check /
+// .task-post-card__check / .task-detail__subtask-check) so each consumer's
+// wrapper size still drives the visible size. The open border reads
+// currentColor (the wrapper's muted color); done fills --task-success with a
+// white check mark, matching the design.
+.task-check {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid currentcolor;
+    border-radius: 4px;
+    background: transparent;
+    box-sizing: border-box;
+    transition: background 0.12s, border-color 0.12s;
+
+    svg {
+        width: 65%;
+        height: 65%;
+        flex-shrink: 0;
+    }
+}
+
+.task-check--done {
+    background: var(--task-success);
+    border-color: var(--task-success);
+    color: var(--task-accent-on);
 }
 
 // --- TaskSidebar (RHS container) -------------------------------------------
@@ -170,10 +201,10 @@
 
     // Search: borderless, faint surface, subtle focus ring.
     &__search {
-        height: 32px;
+        height: 34px;
         padding: 0 10px;
         border-radius: var(--task-radius-md);
-        border: 1px solid transparent;
+        border: 1px solid var(--task-border);
         background: var(--task-surface);
         display: flex;
         align-items: center;
@@ -240,20 +271,19 @@
     }
 
     &__filter-tab {
-        padding: 9px 12px;
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--task-muted);
-        cursor: pointer;
-        font-family: inherit;
-        background: transparent;
-        border: 0;
-        white-space: nowrap;
-        position: relative;
-        border-bottom: 2px solid transparent;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
+        padding: 6px 9px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--task-muted);
+        background: transparent;
+        border: 0;
+        border-radius: var(--task-radius-sm);
+        cursor: pointer;
+        font-family: inherit;
+        white-space: nowrap;
         transition: background 0.12s, color 0.12s;
 
         &:hover {
@@ -262,8 +292,8 @@
         }
 
         &--active {
+            background: var(--task-accent-tint);
             color: var(--task-accent);
-            border-bottom-color: var(--task-accent);
         }
     }
 
@@ -308,13 +338,18 @@
         text-transform: uppercase;
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: var(--task-bg);
 
-        &::after {
-            content: '';
-            flex: 1;
-            height: 1px;
-            background: var(--task-border-soft);
+        // Count suffix (rendered by React as the last <span> child) reads as
+        // "· N" — a middot separator + the group size — matching the design.
+        > span::before {
+            content: '·';
+            margin-right: 4px;
+            color: var(--task-meta);
         }
     }
 
@@ -339,17 +374,16 @@
         gap: 10px;
         padding: 9px 14px;
         border: 0;
+        border-bottom: 1px solid var(--task-border-soft);
         background: transparent;
         cursor: pointer;
-        transition: background 0.1s, border-color 0.1s;
+        transition: background 0.1s;
         width: 100%;
         text-align: left;
         font-family: inherit;
-        border-left: 3px solid transparent;
 
         &:hover {
             background: var(--task-surface);
-            border-left-color: var(--task-border);
         }
     }
 
@@ -560,9 +594,15 @@
 
     // Footer CTA: a full-width primary button with a top hairline.
     &__footer {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
+        background: var(--task-bg);
         padding: 10px 12px 12px;
         border-top: 1px solid var(--task-border-soft);
-        margin-top: 4px;
+        // Seal the flex `gap` above the footer so list rows scrolling under it
+        // don't peek through while the footer is pinned to the viewport bottom.
+        box-shadow: 0 -8px 0 0 var(--task-bg);
     }
 }
 
@@ -690,8 +730,8 @@
     font-size: 10px;
     font-weight: 700;
     padding: 2px 7px;
-    border-radius: 9999px;
-    letter-spacing: 0.04em;
+    border-radius: var(--task-radius-sm);
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     display: inline-flex;
     align-items: center;
@@ -874,13 +914,19 @@
         }
     }
 
+    // Close (×) button in the New Task header — mirrors the back arrow's icon
+    // button styling (same placeholder) so both read as the same control.
+    &__header-close {
+        @extend %task-icon-btn;
+    }
+
     &__header-actions {
         display: flex;
         gap: 2px;
     }
 
     &__scroll {
-        padding: 4px 16px 24px;
+        padding: 16px 16px 24px;
     }
 
     // Title row: a large summary heading with a check toggle beside it (the
@@ -1359,6 +1405,74 @@
         margin-top: 4px;
     }
 
+    // Add-subtask inline-trigger: a collapsed "+ Thêm subtask" affordance that
+    // expands into an inline input on click (Enter commits + keeps focus for
+    // continuous entry; Escape / blur-empty collapses). Replaces the old
+    // always-open input + button row.
+    &__subtask-add {
+        display: flex;
+        align-items: center;
+        padding: 7px 4px;
+        border-radius: var(--task-radius-sm);
+    }
+
+    &__subtask-add-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 0;
+        background: transparent;
+        padding: 0;
+        font-family: inherit;
+        font-size: 13px;
+        color: var(--task-meta);
+        cursor: pointer;
+        border-radius: var(--task-radius-sm);
+        transition: color 0.12s, background 0.12s;
+
+        &:hover {
+            color: var(--task-fg);
+        }
+    }
+
+    &__subtask-add-plus {
+        width: 16px;
+        height: 16px;
+        display: grid;
+        place-items: center;
+        font-size: 15px;
+        line-height: 1;
+        color: var(--task-accent);
+        font-weight: 600;
+        flex-shrink: 0;
+    }
+
+    &__subtask-add-label {
+        font-size: 13px;
+    }
+
+    &__subtask-add-input {
+        display: none;
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        outline: none;
+        background: transparent;
+        font-family: inherit;
+        font-size: 13px;
+        color: var(--task-fg);
+        padding: 0;
+    }
+
+    // Editing: hide the trigger, reveal the input.
+    &__subtask-add--editing &__subtask-add-trigger {
+        display: none;
+    }
+
+    &__subtask-add--editing &__subtask-add-input {
+        display: block;
+    }
+
     &__actions {
         display: flex;
         justify-content: flex-end;
@@ -1663,7 +1777,7 @@
 .task-btn {
     height: 32px;
     padding: 0 14px;
-    border-radius: var(--task-radius-sm);
+    border-radius: var(--task-radius-md);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;

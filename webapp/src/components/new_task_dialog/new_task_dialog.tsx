@@ -54,7 +54,10 @@ export interface NewTaskContext {
 //
 // The DM partner is encoded in channel.name as "<uid1>__<uid2>"; we pick the id
 // that is not the current user. Exported (pure) for unit testing.
-export function deriveNewTaskContext(channel: ChannelLike | null | undefined, currentUserId: string): NewTaskContext {
+export function deriveNewTaskContext(
+    channel: ChannelLike | null | undefined,
+    currentUserId: string,
+): NewTaskContext {
     if (!channel || !channel.id) {
         return {channelId: '', suggestedAssigneeID: currentUserId};
     }
@@ -71,7 +74,10 @@ export function deriveNewTaskContext(channel: ChannelLike | null | undefined, cu
 
 // channelToContext normalizes a host Channel (or a bare channelID) into the
 // ChannelLike shape deriveNewTaskContext reads.
-export function channelToContext(channel: Channel | null | undefined, channelID: string | undefined): ChannelLike | null {
+export function channelToContext(
+    channel: Channel | null | undefined,
+    channelID: string | undefined,
+): ChannelLike | null {
     if (channel) {
         return {id: channel.id, type: channel.type, name: channel.name};
     }
@@ -196,7 +202,10 @@ export default function NewTaskDialog({
 
     // Derived scope (recomputed on render so it reflects the latest channel).
     // Computed unconditionally so all hooks below stay in a stable order.
-    const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
+    const ctx = deriveNewTaskContext(
+        channelToContext(channel, channelID),
+        currentUserID || '',
+    );
 
     // Resolve the currently-selected assignee id → "@username" for the picker.
     const resolvedAssigneeLabel = useResolvedUser(form.assigneeID).label;
@@ -219,7 +228,10 @@ export default function NewTaskDialog({
         if (!visible) {
             return;
         }
-        const resetCtx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
+        const resetCtx = deriveNewTaskContext(
+            channelToContext(channel, channelID),
+            currentUserID || '',
+        );
         setForm({
             ...emptyForm,
             summary: initialSummary ?? '',
@@ -229,7 +241,14 @@ export default function NewTaskDialog({
         setQuickDue('');
         setError('');
         setShowError(false);
-    }, [visible, channel, channelID, currentUserID, initialSummary, initialDescription]);
+    }, [
+        visible,
+        channel,
+        channelID,
+        currentUserID,
+        initialSummary,
+        initialDescription,
+    ]);
 
     if (!visible) {
         return null;
@@ -301,8 +320,18 @@ export default function NewTaskDialog({
                     >
                         <BackIcon/>
                     </button>
-                    <span className='task-detail__title-inline'>{t('webapp.task.title.new')}</span>
+                    <span className='task-detail__title-inline'>
+                        {t('webapp.task.title.new')}
+                    </span>
                 </div>
+                <button
+                    className='task-detail__header-close'
+                    onClick={cancel}
+                    type='button'
+                    aria-label={t('webapp.task.cancel')}
+                >
+                    <CloseIcon/>
+                </button>
             </div>
 
             <div className='task-detail__scroll'>
@@ -331,12 +360,18 @@ export default function NewTaskDialog({
                     />
                 </div>
                 {showError && !form.summary.trim() && (
-                    <div className='task-detail__field-error'>{t('webapp.error.required')}</div>
+                    <div className='task-detail__field-error'>
+                        {t('webapp.error.required')}
+                    </div>
                 )}
 
                 <div className='task-detail__meta-table'>
-                    <div className='task-detail__meta-label'>{t('webapp.task.priority')}</div>
-                    <div className={`task-detail__meta-value task-detail__meta-value--priority-${form.priority}`}>
+                    <div className='task-detail__meta-label'>
+                        {t('webapp.task.priority')}
+                    </div>
+                    <div
+                        className={`task-detail__meta-value task-detail__meta-value--priority-${form.priority}`}
+                    >
                         <MetaDropdown
                             ariaLabel={t('webapp.task.priority')}
                             value={form.priority}
@@ -347,7 +382,9 @@ export default function NewTaskDialog({
                             }))}
                             triggerNode={
                                 <span className='task-detail__priority-trigger'>
-                                    <span className={`task-priority-dot task-priority-dot--${form.priority === 'standard' ? 'important' : form.priority}`}/>
+                                    <span
+                                        className={`task-priority-dot task-priority-dot--${form.priority === 'standard' ? 'important' : form.priority}`}
+                                    />
                                     {priorityLabel(form.priority, t)}
                                 </span>
                             }
@@ -366,9 +403,13 @@ export default function NewTaskDialog({
                             >
                                 <option value=''>{t('webapp.task.due.pick')}</option>
                                 <option value='today'>{t('webapp.task.due.today')}</option>
-                                <option value='tomorrow'>{t('webapp.task.due.tomorrow')}</option>
+                                <option value='tomorrow'>
+                                    {t('webapp.task.due.tomorrow')}
+                                </option>
                                 <option value='weekend'>{t('webapp.task.due.weekend')}</option>
-                                <option value='next_week'>{t('webapp.task.due.next_week')}</option>
+                                <option value='next_week'>
+                                    {t('webapp.task.due.next_week')}
+                                </option>
                             </select>
                             <input
                                 className='task-detail__due-input'
@@ -383,7 +424,9 @@ export default function NewTaskDialog({
                         </span>
                     </div>
 
-                    <div className='task-detail__meta-label'>{t('webapp.task.assignee')}</div>
+                    <div className='task-detail__meta-label'>
+                        {t('webapp.task.assignee')}
+                    </div>
                     <div className='task-detail__meta-value task-detail__meta-value--picker'>
                         <UserPicker
                             value={form.assigneeID}
@@ -396,7 +439,9 @@ export default function NewTaskDialog({
 
                     {ctx.channelId && (
                         <>
-                            <div className='task-detail__meta-label'>{t('webapp.task.scope.channel')}</div>
+                            <div className='task-detail__meta-label'>
+                                {t('webapp.task.scope.channel')}
+                            </div>
                             <div className='task-detail__meta-value'>
                                 <span className='task-detail__ch-ref'>
                                     <HashIcon/>
@@ -407,7 +452,9 @@ export default function NewTaskDialog({
                     )}
                 </div>
 
-                <div className='task-detail__section-label'>{t('webapp.task.description')}</div>
+                <div className='task-detail__section-label'>
+                    {t('webapp.task.description')}
+                </div>
                 <textarea
                     className='task-detail__description-input'
                     value={form.description}
@@ -496,6 +543,26 @@ function BackIcon(): JSX.Element {
     );
 }
 
+// CloseIcon is the × glyph used in the New Task header close button.
+function CloseIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{
+                width: 15,
+                height: 15,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.8,
+                strokeLinecap: 'round',
+            }}
+        >
+            <path d='M4 4l8 8M12 4l-8 8'/>
+        </svg>
+    );
+}
+
 // CalendarIcon is the calendar glyph used before the due field in the meta-
 // table. Stroke-based to match Mattermost's line-icon style.
 function CalendarIcon(): JSX.Element {
@@ -503,7 +570,14 @@ function CalendarIcon(): JSX.Element {
         <svg
             viewBox='0 0 16 16'
             aria-hidden='true'
-            style={{width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round'}}
+            style={{
+                width: 14,
+                height: 14,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.6,
+                strokeLinecap: 'round',
+            }}
         >
             <rect
                 x='2.5'
@@ -523,7 +597,15 @@ function HashIcon(): JSX.Element {
         <svg
             viewBox='0 0 16 16'
             aria-hidden='true'
-            style={{width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round'}}
+            style={{
+                width: 14,
+                height: 14,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.6,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+            }}
         >
             <path d='M3 5h10M3 11h10M7 2l-2 12M11 2l-2 12'/>
         </svg>
@@ -549,7 +631,10 @@ export function normalizeAssigneeUsername(value: string): string {
 
 // assigneeLookupError maps a thrown assignee-lookup error to the user-facing
 // message. Exported for unit testing (#96).
-export function assigneeLookupError(err: unknown, notFoundText: () => string): string {
+export function assigneeLookupError(
+    err: unknown,
+    notFoundText: () => string,
+): string {
     if (err instanceof ClientError && err.status === 404) {
         return notFoundText();
     }

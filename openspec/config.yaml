@@ -1,0 +1,70 @@
+strict_tdd: true
+context: |
+  Language: Vietnamese (vi-VN)
+  All artifacts must be written in Vietnamese.
+  Keep technical keywords in English
+  mattermost-plugin-task is a Node.js/TypeScript, React, Go project.
+  Detected markers: webapp/package.json, webapp/tsconfig.json, webapp/npm package manager, go.mod, Makefile, GitHub Actions.
+  Package managers: npm.
+  Additional evidence: Test-like files detected (41); examples: server/api_test.go, server/hooks_test.go, server/i18n_test.go, server/message_attachment_test.go, server/model/task_test.go.
+  Primary test command: make test.
+  Unit tests: Jest (cd webapp && npm test); go test (go test ./...); pytest via Makefile (make test).
+  Integration tests: Go integration tests where present (go test ./...).
+  E2E tests: none.
+rules:
+  proposal:
+    require_problem_statement: true
+  spec:
+    require_acceptance_criteria: true
+  design:
+    require_tradeoffs: true
+  tasks:
+    protect_review_workload: true
+  apply:
+    test_command: "make test"
+  verify:
+    test_command: "make test"
+testing:
+  detected: "2026-06-23"
+  runner:
+    command: "make test"
+    framework: "pytest via Makefile"
+  layers:
+    unit: "Jest, go test, pytest via Makefile"
+    integration: "Go integration tests where present"
+    e2e: ""
+  commands:
+    unit:
+      - scope: "webapp"
+        command: "cd webapp && npm test"
+        framework: "Jest"
+      - scope: "."
+        command: "go test ./..."
+        framework: "go test"
+      - scope: "."
+        command: "make test"
+        framework: "pytest via Makefile"
+    integration:
+      - scope: "."
+        command: "go test ./..."
+        framework: "Go integration tests where present"
+    e2e: []
+  coverage:
+    command: "go test -cover ./..."
+    commands:
+      - scope: "."
+        command: "go test -cover ./..."
+        framework: "go coverage"
+      - scope: "."
+        command: "make coverage"
+        framework: "coverage"
+quality:
+  lint: "cd webapp && npm run lint"
+  lint_commands:
+    - scope: "webapp"
+      command: "cd webapp && npm run lint"
+      framework: "linter"
+  typecheck: ""
+  typecheck_commands: []
+  format: ""
+  format_commands: []

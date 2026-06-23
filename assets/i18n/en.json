@@ -107,6 +107,7 @@
   "webapp.task.comments": "Comments",
   "webapp.task.comments.commented": "commented",
   "webapp.task.add_subtask": "Add subtask",
+  "webapp.task.add_subtask.placeholder": "Type a subtask, then press Enter…",
   "webapp.task.add_comment": "Add comment",
   "webapp.task.set_reminder": "Set reminder",
   "webapp.task.title.detail": "Details",

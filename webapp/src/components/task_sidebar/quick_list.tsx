@@ -21,6 +21,7 @@ import {ACTION_TYPES} from 'reducer';
 import formatDueRelative from 'components/shared/format_due_relative';
 import {priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
+import TaskCheck from 'components/shared/task_check';
 import {useResolvedUsers} from 'components/user_picker/use_resolved_user';
 
 import type {ListScope, ListTasksParams, Task} from 'types/tasks';
@@ -28,7 +29,13 @@ import type {ListScope, ListTasksParams, Task} from 'types/tasks';
 // FilterTab enumerates the six filter tabs. Each tab maps to a (status, due)
 // pair sent to the server; the special "today" maps to due=today, the others
 // map 1:1 to a status filter.
-export type FilterTab = 'all' | 'today' | 'todo' | 'in_progress' | 'done' | 'cancelled';
+export type FilterTab =
+	| 'all'
+	| 'today'
+	| 'todo'
+	| 'in_progress'
+	| 'done'
+	| 'cancelled';
 
 export interface QuickListProps {
 
@@ -55,7 +62,13 @@ export interface QuickListProps {
 // pageLimit is the cursor page size for "Load more" and the badge "N+" bound.
 const pageLimit = 25;
 
-export default function QuickList({channelID, currentUserID, channelType, onSelectTask, onNewTask}: QuickListProps): JSX.Element {
+export default function QuickList({
+    channelID,
+    currentUserID,
+    channelType,
+    onSelectTask,
+    onNewTask,
+}: QuickListProps): JSX.Element {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const locale = useActiveLocale();
@@ -87,32 +100,39 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
 
     // loadFirst resets the list and fetches the first page. Memoized so the
     // effect below depends on a stable reference across renders.
-    const loadFirst = useCallback(async (activeTab: FilterTab) => {
-        const myRequest = ++latestRequestRef.current;
-        setLoading(true);
-        setError('');
-        try {
-            const page = await client.listTasks(buildParams(activeTab, channelID, isDM, ''));
+    const loadFirst = useCallback(
+        async (activeTab: FilterTab) => {
+            const myRequest = ++latestRequestRef.current;
+            setLoading(true);
+            setError('');
+            try {
+                const page = await client.listTasks(
+                    buildParams(activeTab, channelID, isDM, ''),
+                );
 
-            // Drop stale responses: only the latest request's result lands.
-            if (myRequest !== latestRequestRef.current) {
-                return;
+                // Drop stale responses: only the latest request's result lands.
+                if (myRequest !== latestRequestRef.current) {
+                    return;
+                }
+                const list = page ?? [];
+                setTasks(list);
+                setAfterOrderKey(
+                    list.length > 0 ? list[list.length - 1].order_key : '',
+                );
+                setHasMore(list.length >= pageLimit);
+            } catch (err) {
+                if (myRequest !== latestRequestRef.current) {
+                    return;
+                }
+                setError(messageFor(err));
+            } finally {
+                if (myRequest === latestRequestRef.current) {
+                    setLoading(false);
+                }
             }
-            const list = page ?? [];
-            setTasks(list);
-            setAfterOrderKey(list.length > 0 ? list[list.length - 1].order_key : '');
-            setHasMore(list.length >= pageLimit);
-        } catch (err) {
-            if (myRequest !== latestRequestRef.current) {
-                return;
-            }
-            setError(messageFor(err));
-        } finally {
-            if (myRequest === latestRequestRef.current) {
-                setLoading(false);
-            }
-        }
-    }, [channelID, currentUserID, isDM]);
+        },
+        [channelID, currentUserID, isDM],
+    );
 
     // Fetch the first page whenever the tab changes. Search is client-side.
     useEffect(() => {
@@ -131,7 +151,9 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
         const activeTab = tab;
         setLoading(true);
         try {
-            const page = await client.listTasks(buildParams(activeTab, channelID, isDM, afterOrderKey));
+            const page = await client.listTasks(
+                buildParams(activeTab, channelID, isDM, afterOrderKey),
+            );
             if (myRequest !== latestRequestRef.current) {
                 return;
             }
@@ -163,13 +185,17 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
         const terminal = task.status === 'done' || task.status === 'cancelled';
         const next = terminal ? 'in_progress' : 'done';
         const prev = task.status;
-        setTasks((cur) => cur.map((x) => (x.id === task.id ? {...x, status: next} : x)));
+        setTasks((cur) =>
+            cur.map((x) => (x.id === task.id ? {...x, status: next} : x)),
+        );
         try {
             const updated = await client.setTaskStatus(task.id, next);
             dispatch({type: ACTION_TYPES.UPSERT_TASK, task: updated});
         } catch (err) {
             // Roll back on failure and surface the error.
-            setTasks((cur) => cur.map((x) => (x.id === task.id ? {...x, status: prev} : x)));
+            setTasks((cur) =>
+                cur.map((x) => (x.id === task.id ? {...x, status: prev} : x)),
+            );
             setError(messageFor(err));
         }
     };
@@ -179,7 +205,9 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
     const visible = term ? tasks.filter((x) => x.summary.toLowerCase().includes(term)) : tasks;
 
     // Resolve assignee ids → "@username" labels for the avatar pills.
-    const assigneeLabels = useResolvedUsers(visible.map((t) => t.assignee_id).filter(Boolean));
+    const assigneeLabels = useResolvedUsers(
+        visible.map((t) => t.assignee_id).filter(Boolean),
+    );
 
     // Group the visible tasks into the three headers. Needs attention = open
     // + (overdue or due today). Upcoming = open + everything else. Completed =
@@ -216,7 +244,9 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                             aria-selected={tab === key}
                         >
                             {tabLabel(key, t)}
-                            <span className={`quick-list__count ${counts[key].plus ? 'quick-list__count--plus' : ''}`}>
+                            <span
+                                className={`quick-list__count ${counts[key].plus ? 'quick-list__count--plus' : ''}`}
+                            >
                                 {counts[key].label}
                             </span>
                         </button>
@@ -234,7 +264,8 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                     </div>
                     <ul className='quick-list__items'>
                         {g.items.map((task) => {
-                            const done = task.status === 'done' || task.status === 'cancelled';
+                            const done =
+								task.status === 'done' || task.status === 'cancelled';
                             return (
                                 <li
                                     key={task.id}
@@ -259,6 +290,7 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                             className={`quick-list__check ${done ? 'quick-list__check--done' : ''}`}
                                             role='checkbox'
                                             aria-checked={done}
+                                            aria-label={task.summary}
                                             tabIndex={0}
                                             onClick={(e) => toggleDone(e, task)}
                                             onKeyDown={(e) => {
@@ -268,10 +300,12 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                                 }
                                             }}
                                         >
-                                            <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
+                                            <TaskCheck done={done}/>
                                         </span>
                                         <span className='quick-list__item-main'>
-                                            <span className='quick-list__item-summary'>{task.summary}</span>
+                                            <span className='quick-list__item-summary'>
+                                                {task.summary}
+                                            </span>
                                             {task.description && task.description.trim() && (
                                                 <span className='quick-list__item-description'>
                                                     {truncateDescription(task.description.trim())}
@@ -279,8 +313,12 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                             )}
                                             <span className='quick-list__item-meta'>
                                                 <StatusPill status={task.status}/>
-                                                <span className={`quick-list__item-priority quick-list__item-priority--${task.priority || 'standard'}`}>
-                                                    <span className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}/>
+                                                <span
+                                                    className={`quick-list__item-priority quick-list__item-priority--${task.priority || 'standard'}`}
+                                                >
+                                                    <span
+                                                        className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}
+                                                    />
                                                     {priorityLabel(task.priority || 'standard', t)}
                                                 </span>
                                                 {task.due ? (
@@ -293,12 +331,18 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                                         })}
                                                     </span>
                                                 ) : (
-                                                    <span className='quick-list__item-due quick-list__item-due--none'>{'—'}</span>
+                                                    <span className='quick-list__item-due quick-list__item-due--none'>
+                                                        {'—'}
+                                                    </span>
                                                 )}
                                                 {task.assignee_id && (
-                                                    <span className={`quick-list__item-assignee ${assigneeLabels[task.assignee_id] ? '' : 'quick-list__item-assignee--loading'}`}>
+                                                    <span
+                                                        className={`quick-list__item-assignee ${assigneeLabels[task.assignee_id] ? '' : 'quick-list__item-assignee--loading'}`}
+                                                    >
                                                         <span className='quick-list__assignee-avatar'>
-                                                            {assigneeInitials(assigneeLabels[task.assignee_id])}
+                                                            {assigneeInitials(
+                                                                assigneeLabels[task.assignee_id],
+                                                            )}
                                                         </span>
                                                         {assigneeLabels[task.assignee_id] || '…'}
                                                     </span>
@@ -408,7 +452,11 @@ export function isDueSoon(task: Task): boolean {
         return false;
     }
     const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const start = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+    ).getTime();
     const end = start + (24 * 60 * 60 * 1000);
     return task.due >= start && task.due < end;
 }
@@ -440,13 +488,25 @@ export function groupTasks(tasks: Task[]): GroupedTasks[] {
     // Build only non-empty groups, preserving the canonical order.
     const out: GroupedTasks[] = [];
     if (attention.length > 0) {
-        out.push({key: 'attention', label: makeLabel('attention'), items: attention});
+        out.push({
+            key: 'attention',
+            label: makeLabel('attention'),
+            items: attention,
+        });
     }
     if (upcoming.length > 0) {
-        out.push({key: 'upcoming', label: makeLabel('upcoming'), items: upcoming});
+        out.push({
+            key: 'upcoming',
+            label: makeLabel('upcoming'),
+            items: upcoming,
+        });
     }
     if (completed.length > 0) {
-        out.push({key: 'completed', label: makeLabel('completed'), items: completed});
+        out.push({
+            key: 'completed',
+            label: makeLabel('completed'),
+            items: completed,
+        });
     }
     return out;
 }
@@ -455,8 +515,12 @@ export function groupTasks(tasks: Task[]): GroupedTasks[] {
 // that match that tab's filter — with a "+" suffix when there may be more
 // pages (hasMore). Counts are a lower bound (only the loaded page), matching
 // the design's N+ intent. A zero count never carries "+" (no rows to bound).
-export function countByTab(tasks: Task[], hasMore: boolean): Record<FilterTab, { label: string; plus: boolean }> {
-    const count = (pred: (t: Task) => boolean): number => tasks.filter(pred).length;
+export function countByTab(
+    tasks: Task[],
+    hasMore: boolean,
+): Record<FilterTab, { label: string; plus: boolean }> {
+    const count = (pred: (t: Task) => boolean): number =>
+        tasks.filter(pred).length;
     const make = (n: number) => {
         const plus = hasMore && n > 0;
         return {label: plus ? `${n}+` : String(n), plus};
@@ -472,7 +536,10 @@ export function countByTab(tasks: Task[], hasMore: boolean): Record<FilterTab, {
 }
 
 // groupLabel maps a group key to its localized header label.
-export function groupLabel(key: GroupedTasks['key'], t: (id: string) => string): string {
+export function groupLabel(
+    key: GroupedTasks['key'],
+    t: (id: string) => string,
+): string {
     switch (key) {
     case 'attention':
         return t('webapp.task.group.attention');
@@ -489,7 +556,10 @@ export function groupLabel(key: GroupedTasks['key'], t: (id: string) => string):
 // for the list row. Exported for unit testing.
 const DESCRIPTION_MAX_CHARS = 100;
 
-export function truncateDescription(text: string, maxChars = DESCRIPTION_MAX_CHARS): string {
+export function truncateDescription(
+    text: string,
+    maxChars = DESCRIPTION_MAX_CHARS,
+): string {
     // Collapse all whitespace runs (including newlines) to single spaces.
     const flat = text.replace(/\s+/g, ' ').trim();
     if (flat.length <= maxChars) {

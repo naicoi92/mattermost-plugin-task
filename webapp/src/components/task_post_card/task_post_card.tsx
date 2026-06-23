@@ -28,6 +28,7 @@ import type {GlobalState} from '@mattermost/types/store';
 import formatDueRelative from 'components/shared/format_due_relative';
 import {priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
+import TaskCheck from 'components/shared/task_check';
 import {isOverdue} from 'components/task_sidebar/quick_list';
 import {useResolvedUser} from 'components/user_picker/use_resolved_user';
 
@@ -54,13 +55,17 @@ export interface TaskPostCardProps {
     post: Post;
 }
 
-export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | null {
+export default function TaskPostCard({
+    post,
+}: TaskPostCardProps): JSX.Element | null {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const locale = useActiveLocale();
 
     const taskID = readTaskID(post);
-    const cached = useSelector((s: GlobalStateWithPlugin) => (taskID ? s[PLUGIN_STATE_KEY]?.tasks?.[taskID] : undefined));
+    const cached = useSelector((s: GlobalStateWithPlugin) =>
+        (taskID ? s[PLUGIN_STATE_KEY]?.tasks?.[taskID] : undefined),
+    );
 
     const [task, setTask] = useState<Task | null>(cached ?? null);
     const [loading, setLoading] = useState(!task);
@@ -123,9 +128,7 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
     // NOT clickable — clicks on it fall through to the host's default post
     // behaviour (open the thread), mirroring how a plain text post behaves. Only
     // the card below opens Task Details.
-    const caption = task.assignee_id && task.assignee_id !== task.creator_id ?
-        t('webapp.task.post.caption.assigned', creatorLabel || task.creator_id, assigneeLabel || task.assignee_id) :
-        t('webapp.task.post.caption.created', creatorLabel || task.creator_id);
+    const caption = task.assignee_id && task.assignee_id !== task.creator_id ? t('webapp.task.post.caption.assigned', creatorLabel || task.creator_id, assigneeLabel || task.assignee_id) : t('webapp.task.post.caption.created', creatorLabel || task.creator_id);
 
     // toggleDone flips the checkbox: open → done, terminal → in_progress.
     const toggleDone = async (e: React.MouseEvent) => {
@@ -169,6 +172,7 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
                     className={`task-post-card__check ${done ? 'task-post-card__check--done' : ''}`}
                     role='checkbox'
                     aria-checked={done}
+                    aria-label={task.summary}
                     tabIndex={0}
                     onClick={toggleDone}
                     onKeyDown={(e) => {
@@ -178,26 +182,37 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
                         }
                     }}
                 >
-                    <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
+                    <TaskCheck done={done}/>
                 </span>
                 <span className='task-post-card__body'>
                     <span className='task-post-card__title'>{task.summary}</span>
                     <span className='task-post-card__meta'>
                         <StatusPill status={task.status}/>
                         <span className='task-post-card__priority'>
-                            <span className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}/>
+                            <span
+                                className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}
+                            />
                             {priorityLabel(task.priority || 'standard', t)}
                         </span>
                         {task.due ? (
-                            <span className={`task-post-card__due ${isOverdue(task) ? 'task-post-card__due--overdue' : ''}`}>
+                            <span
+                                className={`task-post-card__due ${isOverdue(task) ? 'task-post-card__due--overdue' : ''}`}
+                            >
                                 <CalendarIcon/>
-                                {formatDueRelative({dueMs: task.due, locale, isOverdue: isOverdue(task)})}
+                                {formatDueRelative({
+                                    dueMs: task.due,
+                                    locale,
+                                    isOverdue: isOverdue(task),
+                                })}
                             </span>
                         ) : null}
                         {task.assignee_id && (
                             <span className='task-post-card__assignee'>
                                 <span className='task-post-card__assignee-avatar'>
-                                    {(assigneeLabel || '?').replace(/^@/, '').slice(0, 2).toUpperCase()}
+                                    {(assigneeLabel || '?').
+                                        replace(/^@/, '').
+                                        slice(0, 2).
+                                        toUpperCase()}
                                 </span>
                                 {assigneeLabel || '…'}
                             </span>
@@ -212,7 +227,9 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
 // readTaskID extracts the task id from a post's props. The server sets it under
 // post.props.task_id (see server/message_attachment.go taskCardProps).
 function readTaskID(post: Post): string {
-    const props = (post.props ?? {}) as Record<string, unknown> & {task_id?: string};
+    const props = (post.props ?? {}) as Record<string, unknown> & {
+        task_id?: string;
+    };
     const id = props.task_id;
     return typeof id === 'string' ? id : '';
 }
@@ -222,7 +239,14 @@ function CalendarIcon(): JSX.Element {
         <svg
             viewBox='0 0 16 16'
             aria-hidden='true'
-            style={{width: 12, height: 12, fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round'}}
+            style={{
+                width: 12,
+                height: 12,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.7,
+                strokeLinecap: 'round',
+            }}
         >
             <rect
                 x='2.5'
