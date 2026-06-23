@@ -594,9 +594,15 @@
 
     // Footer CTA: a full-width primary button with a top hairline.
     &__footer {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
+        background: var(--task-bg);
         padding: 10px 12px 12px;
         border-top: 1px solid var(--task-border-soft);
-        margin-top: 4px;
+        // Seal the flex `gap` above the footer so list rows scrolling under it
+        // don't peek through while the footer is pinned to the viewport bottom.
+        box-shadow: 0 -8px 0 0 var(--task-bg);
     }
 }
 

@@ -144,3 +144,12 @@ Add subtask (trong TaskDetailPanel) SHALL dùng inline-trigger expand: default c
 
 - **WHEN** render Task Detail hoặc New Task view
 - **THEN** title row cách header trên cùng 16px, không bị dính sát
+
+### Requirement: Quick List footer (New Task) pin ở bottom
+
+Footer `.quick-list__footer` (chứa nút "New Task") SHALL pin ở bottom của RHS viewport (`position: sticky; bottom: 0`), luôn visible khi list scroll, không trôi theo content như phần tử in-flow cuối scroll.
+
+#### Scenario: Footer luôn visible khi scroll list
+
+- **WHEN** Quick List có nhiều task và user scroll danh sách
+- **THEN** nút "New Task" vẫn visible, pin ở bottom viewport, không bị cuộn đi theo các task row
