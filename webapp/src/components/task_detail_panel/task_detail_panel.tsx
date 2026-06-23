@@ -460,18 +460,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     </div>
 
                     <div className='task-detail__meta-label'>{t('webapp.task.due')}</div>
-                    <div
-                        className={`task-detail__meta-value ${isOverdue(full) ? 'task-detail__meta-value--overdue' : ''} ${full.due && isDueSoon(full) ? 'task-detail__meta-value--soon' : ''}`}
-                        onClick={() => !editingDue && setEditingDue(true)}
-                        onKeyDown={(e) => {
-                            if (!editingDue && (e.key === 'Enter' || e.key === ' ')) {
-                                e.preventDefault();
-                                setEditingDue(true);
-                            }
-                        }}
-                        role='button'
-                        tabIndex={editingDue ? -1 : 0}
-                    >
+                    <div className='task-detail__meta-value'>
                         {editingDue ? (
                             <input
                                 className='task-input task-input--inline task-input--meta'
@@ -497,10 +486,21 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                                 aria-label={t('webapp.task.due')}
                             />
                         ) : (
-                            <>
+                            <span
+                                className={`task-detail__due-chip ${isOverdue(full) ? 'task-detail__due-chip--overdue' : ''} ${full.due && isDueSoon(full) ? 'task-detail__due-chip--soon' : ''}`}
+                                onClick={() => setEditingDue(true)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        setEditingDue(true);
+                                    }
+                                }}
+                                role='button'
+                                tabIndex={0}
+                            >
                                 <CalendarIcon/>
                                 {full.due ? formatDueRelative({dueMs: full.due, locale, isOverdue: isOverdue(full)}) : t('webapp.task.due.pick')}
-                            </>
+                            </span>
                         )}
                     </div>
 
@@ -519,8 +519,8 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         <>
                             <div className='task-detail__meta-label'>{t('webapp.task.scope.channel')}</div>
                             <div className='task-detail__meta-value'>
-                                <HashIcon/>
-                                <span style={{color: 'var(--task-accent)', fontWeight: 500}}>
+                                <span className='task-detail__ch-ref'>
+                                    <HashIcon/>
                                     {channelName || '#' + full.channel_id}
                                 </span>
                             </div>

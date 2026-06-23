@@ -365,8 +365,8 @@ export default function NewTaskDialog({
                         <>
                             <div className='task-detail__meta-label'>{t('webapp.task.scope.channel')}</div>
                             <div className='task-detail__meta-value'>
-                                <HashIcon/>
-                                <span style={{color: 'var(--task-accent)', fontWeight: 500}}>
+                                <span className='task-detail__ch-ref'>
+                                    <HashIcon/>
                                     {channelName || '#' + ctx.channelId}
                                 </span>
                             </div>
