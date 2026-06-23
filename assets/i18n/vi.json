@@ -98,6 +98,7 @@
   "webapp.task.scope.personal": "Cá nhân",
   "webapp.task.scope.channel": "Kênh",
   "webapp.task.create": "Tạo",
+  "webapp.task.create.quick_hint": "để tạo nhanh",
   "webapp.task.cancel": "Hủy",
   "webapp.task.save": "Lưu",
   "webapp.task.delete": "Xóa",

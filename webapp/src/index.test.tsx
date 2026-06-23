@@ -69,6 +69,7 @@ function fakeRegistry() {
         })),
         registerChannelHeaderButtonAction: jest.fn(),
         registerPostEditorActionComponent: jest.fn(),
+        registerPostTypeComponent: jest.fn(),
         registerRootComponent: jest.fn(),
         registerWebSocketEventHandler: jest.fn(),
         registerReducer: jest.fn(),

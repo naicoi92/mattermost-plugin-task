@@ -12,11 +12,16 @@ import * as client from 'client';
 import {ClientError} from 'client';
 import {useFormatMessage} from 'i18n_utils';
 import React, {useEffect, useState} from 'react';
-import {useDispatch} from 'react-redux';
+import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
 import type {Channel} from '@mattermost/types/channels';
+import type {GlobalState} from '@mattermost/types/store';
 
+import {getChannel} from 'mattermost-redux/selectors/entities/channels';
+
+import MetaDropdown from 'components/shared/meta_dropdown';
+import {priorityLabel} from 'components/shared/priority_pill';
 import {useResolvedUser} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
@@ -139,9 +144,25 @@ export default function NewTaskDialog({
     const [quickDue, setQuickDue] = useState<QuickDue>('');
     const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [showError, setShowError] = useState(false);
+
+    // Derived scope (recomputed on render so it reflects the latest channel).
+    // Computed unconditionally so all hooks below stay in a stable order.
+    const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
 
     // Resolve the currently-selected assignee id → "@username" for the picker.
     const resolvedAssigneeLabel = useResolvedUser(form.assigneeID).label;
+
+    // Resolve the context channel's display name (not the raw id) so the
+    // meta-table shows a readable channel reference.
+    const channelName = useSelector((s: GlobalState) => {
+        const id = ctx?.channelId;
+        if (!id) {
+            return '';
+        }
+        const ch = getChannel(s as never, id);
+        return ch?.display_name || ch?.name || '';
+    });
 
     // Reset the form whenever the dialog is opened. Derive the task scope from
     // the channel context and pre-select the suggested assignee (DM partner or
@@ -150,15 +171,16 @@ export default function NewTaskDialog({
         if (!visible) {
             return;
         }
-        const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
+        const resetCtx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
         setForm({
             ...emptyForm,
             summary: initialSummary ?? '',
             description: initialDescription ?? '',
-            assigneeID: ctx.suggestedAssigneeID,
+            assigneeID: resetCtx.suggestedAssigneeID,
         });
         setQuickDue('');
         setError('');
+        setShowError(false);
     }, [visible, channel, channelID, currentUserID, initialSummary, initialDescription]);
 
     if (!visible) {
@@ -168,9 +190,6 @@ export default function NewTaskDialog({
     const update = (patch: Partial<typeof form>) => {
         setForm((prev) => ({...prev, ...patch}));
     };
-
-    // Derived scope (recomputed on render so it reflects the latest channel).
-    const ctx = deriveNewTaskContext(channelToContext(channel, channelID), currentUserID || '');
 
     // applyQuickDue sets form.dueLocal from a quick-option sentinel. Computed
     // in the browser's local time (end of the chosen day), then sent as ms
@@ -190,6 +209,7 @@ export default function NewTaskDialog({
         }
         const summary = form.summary.trim();
         if (!summary) {
+            setShowError(true);
             setError(t('webapp.error.required'));
             return;
         }
@@ -229,7 +249,15 @@ export default function NewTaskDialog({
     };
 
     return (
-        <div className='task-detail'>
+        <div
+            className='task-detail'
+            onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    submit();
+                }
+            }}
+        >
             <div className='task-detail__header'>
                 <div className='task-detail__header-left'>
                     <button
@@ -245,20 +273,22 @@ export default function NewTaskDialog({
             </div>
 
             <div className='task-detail__scroll'>
-                <h2 style={{fontFamily: 'var(--task-font)', fontSize: 22, fontWeight: 700, margin: '8px 0 4px'}}>
-                    {t('webapp.task.new')}
-                </h2>
-
                 {error && <div className='task-detail__error-block'>{error}</div>}
 
-                <label className='task-field'>
-                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.summary')}</span>
+                <div className='task-detail__title-row'>
                     <input
-                        className='task-input task-input--title'
+                        className={`task-detail__title-input ${!form.summary.trim() && showError ? 'task-detail__title-input--error' : ''}`}
+                        type='text'
                         value={form.summary}
-                        onChange={(e) => update({summary: e.target.value})}
+                        onChange={(e) => {
+                            update({summary: e.target.value});
+                            if (showError && e.target.value.trim()) {
+                                setShowError(false);
+                            }
+                        }}
                         placeholder={t('webapp.task.summary.placeholder')}
                         autoFocus={true}
+                        aria-label={t('webapp.task.summary')}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                                 e.preventDefault();
@@ -266,73 +296,99 @@ export default function NewTaskDialog({
                             }
                         }}
                     />
-                </label>
+                </div>
+                {showError && !form.summary.trim() && (
+                    <div className='task-detail__field-error'>{t('webapp.error.required')}</div>
+                )}
 
-                <label className='task-field'>
-                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.description')}</span>
-                    <textarea
-                        className='task-textarea'
-                        value={form.description}
-                        onChange={(e) => update({description: e.target.value})}
-                    />
-                </label>
-
-                <label className='task-field'>
-                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.priority')}</span>
-                    <select
-                        className='task-select'
-                        value={form.priority}
-                        onChange={(e) => update({priority: e.target.value as TaskPriority})}
-                    >
-                        <option value='standard'>{t('webapp.task.priority.standard')}</option>
-                        <option value='important'>{t('webapp.task.priority.important')}</option>
-                        <option value='urgent'>{t('webapp.task.priority.urgent')}</option>
-                    </select>
-                </label>
-
-                <div className='task-fields-row task-fields-row--due'>
-                    <label className='task-field'>
-                        <span className='task-field__label task-field__label--upper'>{t('webapp.task.due')}</span>
-                        <select
-                            className='task-select'
-                            value={quickDue}
-                            aria-label={t('webapp.task.due')}
-                            onChange={(e) => applyQuickDue(e.target.value as QuickDue)}
-                        >
-                            <option value=''>{t('webapp.task.due.pick')}</option>
-                            <option value='today'>{t('webapp.task.due.today')}</option>
-                            <option value='tomorrow'>{t('webapp.task.due.tomorrow')}</option>
-                            <option value='weekend'>{t('webapp.task.due.weekend')}</option>
-                            <option value='next_week'>{t('webapp.task.due.next_week')}</option>
-                        </select>
-                    </label>
-                    <label className='task-field'>
-                        <span className='task-field__label task-field__label--upper'>{' '}</span>
-                        <input
-                            className='task-input'
-                            type='datetime-local'
-                            value={form.dueLocal}
-                            aria-label={t('webapp.task.due')}
-                            onChange={(e) => {
-                                update({dueLocal: e.target.value});
-                                setQuickDue('');
-                            }}
+                <div className='task-detail__meta-table'>
+                    <div className='task-detail__meta-label'>{t('webapp.task.priority')}</div>
+                    <div className={`task-detail__meta-value task-detail__meta-value--priority-${form.priority}`}>
+                        <MetaDropdown
+                            ariaLabel={t('webapp.task.priority')}
+                            value={form.priority}
+                            onChange={(v) => update({priority: v as TaskPriority})}
+                            options={['standard', 'important', 'urgent'].map((p) => ({
+                                value: p,
+                                label: priorityLabel(p as TaskPriority, t),
+                            }))}
+                            triggerNode={
+                                <span className='task-detail__priority-trigger'>
+                                    <span className={`task-priority-dot task-priority-dot--${form.priority === 'standard' ? 'important' : form.priority}`}/>
+                                    {priorityLabel(form.priority, t)}
+                                </span>
+                            }
                         />
-                    </label>
+                    </div>
+
+                    <div className='task-detail__meta-label'>{t('webapp.task.due')}</div>
+                    <div className='task-detail__meta-value task-detail__meta-value--picker'>
+                        <span className='task-detail__due-field'>
+                            <CalendarIcon/>
+                            <select
+                                className='task-detail__due-select'
+                                value={quickDue}
+                                aria-label={t('webapp.task.due')}
+                                onChange={(e) => applyQuickDue(e.target.value as QuickDue)}
+                            >
+                                <option value=''>{t('webapp.task.due.pick')}</option>
+                                <option value='today'>{t('webapp.task.due.today')}</option>
+                                <option value='tomorrow'>{t('webapp.task.due.tomorrow')}</option>
+                                <option value='weekend'>{t('webapp.task.due.weekend')}</option>
+                                <option value='next_week'>{t('webapp.task.due.next_week')}</option>
+                            </select>
+                            <input
+                                className='task-detail__due-input'
+                                type='datetime-local'
+                                value={form.dueLocal}
+                                aria-label={t('webapp.task.due')}
+                                onChange={(e) => {
+                                    update({dueLocal: e.target.value});
+                                    setQuickDue('');
+                                }}
+                            />
+                        </span>
+                    </div>
+
+                    <div className='task-detail__meta-label'>{t('webapp.task.assignee')}</div>
+                    <div className='task-detail__meta-value task-detail__meta-value--picker'>
+                        <UserPicker
+                            value={form.assigneeID}
+                            valueLabel={resolvedAssigneeLabel}
+                            channelID={ctx.channelId || channelID}
+                            onSelect={(u) => update({assigneeID: u ? u.id : ''})}
+                            placeholder={t('webapp.task.assignee.placeholder')}
+                        />
+                    </div>
+
+                    {ctx.channelId && (
+                        <>
+                            <div className='task-detail__meta-label'>{t('webapp.task.scope.channel')}</div>
+                            <div className='task-detail__meta-value'>
+                                <HashIcon/>
+                                <span style={{color: 'var(--task-accent)', fontWeight: 500}}>
+                                    {channelName || '#' + ctx.channelId}
+                                </span>
+                            </div>
+                        </>
+                    )}
                 </div>
 
-                <label className='task-field'>
-                    <span className='task-field__label task-field__label--upper'>{t('webapp.task.assignee')}</span>
-                    <UserPicker
-                        value={form.assigneeID}
-                        valueLabel={resolvedAssigneeLabel}
-                        channelID={ctx.channelId || channelID}
-                        onSelect={(u) => update({assigneeID: u ? u.id : ''})}
-                        placeholder={t('webapp.task.assignee.placeholder')}
-                    />
-                </label>
+                <div className='task-detail__section-label'>{t('webapp.task.description')}</div>
+                <textarea
+                    className='task-detail__description-input'
+                    value={form.description}
+                    onChange={(e) => update({description: e.target.value})}
+                    placeholder={t('webapp.task.description')}
+                    aria-label={t('webapp.task.description')}
+                />
 
-                <div className='task-actions-bar'>
+                <div className='task-detail__form-actions'>
+                    <span className='task-detail__form-hint'>
+                        <span className='task-detail__kbd'>{'⌘'}</span>
+                        <span className='task-detail__kbd'>{'↵'}</span>
+                        {t('webapp.task.create.quick_hint')}
+                    </span>
                     <button
                         className='task-btn task-btn--secondary'
                         onClick={cancel}
@@ -418,6 +474,40 @@ function CheckIcon(): JSX.Element {
             strokeLinecap='round'
         >
             <path d='M3 8.5L6.5 12 13 4.5'/>
+        </svg>
+    );
+}
+
+// CalendarIcon is the calendar glyph used before the due field in the meta-
+// table. Stroke-based to match Mattermost's line-icon style.
+function CalendarIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round'}}
+        >
+            <rect
+                x='2.5'
+                y='3.5'
+                width='11'
+                height='10'
+                rx='1.5'
+            />
+            <path d='M2.5 6.5h11M5.5 2v3M10.5 2v3'/>
+        </svg>
+    );
+}
+
+// HashIcon is the # glyph used before the channel name in the meta-table.
+function HashIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round'}}
+        >
+            <path d='M3 5h10M3 11h10M7 2l-2 12M11 2l-2 12'/>
         </svg>
     );
 }

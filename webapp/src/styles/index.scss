@@ -217,6 +217,19 @@
         }
     }
 
+    // Keyboard hint chip in the search box (decorative ⌘K).
+    &__kbd {
+        font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        color: var(--task-meta);
+        background: var(--task-bg);
+        border: 1px solid var(--task-border);
+        border-radius: var(--task-radius-sm);
+        padding: 1px 5px;
+        line-height: 1.4;
+        flex-shrink: 0;
+    }
+
     // Filter tabs: Mattermost channel-style — scroll-x row, active marked by a
     // blue bottom border + filled count badge.
     &__filter-tabs {
@@ -463,16 +476,65 @@
         }
     }
 
+    // Assignee: a @mention-style pill with a small avatar-dot (initials), like
+    // the design's mention pill. Reads compact at list density.
     &__item-assignee {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
         font-size: 11px;
-        color: var(--task-muted);
-        max-width: 130px;
+        font-weight: 600;
+        color: var(--task-accent);
+        background: var(--task-accent-tint);
+        padding: 1px 6px 1px 2px;
+        border-radius: 9999px;
+        max-width: 140px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
 
         &--loading {
             opacity: 0.4;
+        }
+    }
+
+    &__assignee-avatar {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        color: var(--task-accent-on);
+        background: linear-gradient(135deg, var(--task-accent), #1e325c);
+        font-size: 9px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+    }
+
+    // Priority: dot + label inline (always visible, including standard). The
+    // dot color comes from the modifier class.
+    &__item-priority {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--task-muted);
+        font-weight: 500;
+
+        &--important {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        &--urgent {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
+        // Standard dot: muted grey (the generic .task-priority-dot only styles
+        // important/urgent, so standard needs its own dot).
+        .task-priority-dot--standard-dot {
+            background: var(--task-meta);
         }
     }
 
@@ -510,6 +572,122 @@
         padding: 10px 12px 12px;
         border-top: 1px solid var(--task-border-soft);
         margin-top: 4px;
+    }
+}
+
+// --- Meta dropdown (Status / Priority in Task Detail + New Task) -----------
+
+// MetaDropdown is the click-to-select control that replaces the old
+// click-to-cycle chips. The trigger is caller-supplied (a StatusPill or a
+// dot+label), so it reads like the field's current value; a caret follows and
+// the panel is a compact listbox with a check on the selected option. Mirrors
+// the `.dd` control in the design (mattermost-task-sidebar).
+.meta-dropdown {
+    position: relative;
+    display: inline-block;
+
+    &__trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 6px 3px 8px;
+        border: 1px solid transparent;
+        border-radius: var(--task-radius-sm);
+        background: transparent;
+        color: inherit;
+        font-family: inherit;
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+
+        &:hover:not(:disabled) {
+            background: var(--task-surface-cool);
+        }
+
+        &--open {
+            background: var(--task-bg);
+            border-color: var(--task-accent);
+            box-shadow: var(--task-focus-ring);
+        }
+
+        &:disabled {
+            cursor: default;
+            opacity: 0.7;
+        }
+    }
+
+    &__caret {
+        width: 11px;
+        height: 11px;
+        color: var(--task-meta);
+        flex-shrink: 0;
+    }
+
+    &__panel {
+        position: absolute;
+        top: calc(100% + 4px);
+        z-index: 50;
+        min-width: 180px;
+        background: var(--task-bg);
+        border: 1px solid var(--task-border);
+        border-radius: var(--task-radius-md);
+        box-shadow: 0 4px 14px rgba(31, 50, 92, 0.14), 0 1px 3px rgba(31, 50, 92, 0.10);
+        padding: 4px;
+        animation: meta-dropdown-pop 0.14s cubic-bezier(0.2, 0, 0, 1);
+
+        &--start {
+            left: 0;
+        }
+
+        &--end {
+            right: 0;
+        }
+    }
+
+    &__option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+        padding: 7px 8px;
+        border: 0;
+        border-radius: var(--task-radius-sm);
+        background: transparent;
+        color: var(--task-fg);
+        font-family: inherit;
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+        transition: background 0.12s;
+
+        &:hover {
+            background: var(--task-surface);
+        }
+    }
+
+    &__option-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    &__option-check {
+        width: 14px;
+        height: 14px;
+        color: var(--task-accent);
+        flex-shrink: 0;
+    }
+}
+
+@keyframes meta-dropdown-pop {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
     }
 }
 
@@ -654,7 +832,7 @@
         font-size: 13px;
     }
 
-    // Light inline header: back arrow + check + title + delete, hairline bottom border.
+    // Light inline header: back arrow + title + delete, hairline bottom border.
     &__header {
         display: flex;
         align-items: center;
@@ -676,53 +854,16 @@
         @extend %task-icon-btn;
     }
 
-    &__header-check {
-        flex-shrink: 0;
-    }
-
-    // Title in the header: a heading that reads as plain text and becomes an
-    // input on click. Truncates with ellipsis when long.
-    &__header-title {
-        margin: 0;
+    &__title-inline {
         font-family: var(--task-font);
         font-size: 15px;
         font-weight: 600;
-        line-height: 1.3;
-        letter-spacing: -0.005em;
         color: var(--task-fg);
-        cursor: text;
-        padding: 4px 6px;
-        border-radius: var(--task-radius-sm);
-        transition: background 0.12s;
+        flex: 1;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        min-width: 0;
-
-        &:hover {
-            background: var(--task-surface);
-        }
-
-        &--terminal {
-            color: var(--task-meta);
-            text-decoration: line-through;
-            text-decoration-color: var(--task-meta);
-        }
-    }
-
-    &__header-title-input {
-        flex: 1;
-        min-width: 0;
-        font-family: var(--task-font);
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--task-fg);
-        background: var(--task-bg);
-        border: 1px solid var(--task-accent);
-        border-radius: var(--task-radius-sm);
-        padding: 4px 6px;
-        outline: none;
-        box-shadow: var(--task-focus-ring);
     }
 
     &__header-delete {
@@ -740,6 +881,201 @@
 
     &__scroll {
         padding: 4px 16px 24px;
+    }
+
+    // Title row: a large summary heading with a check toggle beside it (the
+    // design's "det-title-row"). The title reads as plain text and becomes a
+    // big input on click.
+    &__title-row {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        margin-bottom: 16px;
+    }
+
+    // Larger check (22px) than the list row, matching the design.
+    &__title-check.quick-list__check {
+        width: 22px;
+        height: 22px;
+        margin-top: 2px;
+        border-width: 2px;
+        border-radius: var(--task-radius-md);
+
+        svg {
+            width: 12px;
+            height: 12px;
+        }
+    }
+
+    &__title {
+        margin: 0;
+        flex: 1;
+        min-width: 0;
+        font-family: var(--task-font);
+        font-size: 20px;
+        font-weight: 700;
+        line-height: 1.3;
+        color: var(--task-fg);
+        cursor: text;
+        padding: 2px 4px;
+        margin: -2px -4px;
+        border-radius: var(--task-radius-sm);
+        outline: none;
+        transition: background 0.12s;
+        word-wrap: break-word;
+
+        &:hover {
+            background: var(--task-surface);
+        }
+
+        &--terminal {
+            color: var(--task-meta);
+            text-decoration: line-through;
+            text-decoration-color: var(--task-meta);
+        }
+    }
+
+    &__title-input {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--task-font);
+        font-size: 20px;
+        font-weight: 700;
+        line-height: 1.3;
+        color: var(--task-fg);
+        background: var(--task-surface);
+        border: 1px solid transparent;
+        border-radius: var(--task-radius-sm);
+        padding: 2px 4px;
+        margin: -2px -4px;
+        outline: none;
+        font-family: inherit;
+        box-shadow: var(--task-focus-ring);
+        transition: background 0.12s, box-shadow 0.12s;
+    }
+
+    // Priority dropdown trigger: dot + label inline (kept neutral here; the
+    // meta-value modifier classes color it).
+    &__priority-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+    }
+
+    // --- New Task form controls (inspector-parity with Task Details) ---
+
+    // Title-input error state: a red focus ring instead of blue.
+    &__title-input--error {
+        box-shadow: 0 0 0 3px rgba(224, 30, 90, 0.16);
+        border-color: var(--task-danger);
+    }
+
+    // Inline error message shown under the title when empty on submit.
+    &__field-error {
+        font-size: 11px;
+        color: var(--task-danger);
+        margin: -8px 0 12px;
+    }
+
+    // Due field: a calendar icon + quick-select + datetime-local, reading like
+    // the read-only due chip in Task Details. Mirrors the design's due-field.
+    &__due-field {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 6px 3px 8px;
+        border: 1px solid transparent;
+        border-radius: var(--task-radius-sm);
+        transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+
+        &:focus-within {
+            background: var(--task-bg);
+            border-color: var(--task-accent);
+            box-shadow: var(--task-focus-ring);
+        }
+
+        svg {
+            color: var(--task-meta);
+            flex-shrink: 0;
+        }
+
+        select,
+        input {
+            border: 0;
+            outline: none;
+            background: none;
+            font-family: inherit;
+            font-size: 13px;
+            color: var(--task-fg);
+        }
+
+        select {
+            cursor: pointer;
+            min-width: 0;
+        }
+
+        input {
+            min-width: 0;
+        }
+    }
+
+    // Description textarea that visually matches the contenteditable
+    // description block in Task Details.
+    &__description-input {
+        display: block;
+        width: 100%;
+        margin: 0;
+        min-height: 64px;
+        resize: vertical;
+        border: 1px solid transparent;
+        background: transparent;
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--task-fg);
+        padding: 4px 8px;
+        margin: -4px -8px;
+        border-radius: var(--task-radius-sm);
+        outline: none;
+        transition: background 0.12s, box-shadow 0.12s;
+
+        &:focus {
+            background: var(--task-bg);
+            box-shadow: var(--task-focus-ring);
+        }
+
+        &::placeholder {
+            color: var(--task-meta);
+        }
+    }
+
+    // Footer actions bar: hint + cancel + create.
+    &__form-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 12px 0 0;
+        border-top: 1px solid var(--task-border);
+        margin-top: 16px;
+    }
+
+    &__form-hint {
+        flex: 1;
+        font-size: 11px;
+        color: var(--task-meta);
+    }
+
+    &__kbd {
+        font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        color: var(--task-meta);
+        background: var(--task-bg);
+        border: 1px solid var(--task-border);
+        border-radius: var(--task-radius-sm);
+        padding: 1px 5px;
+        line-height: 1.4;
+        margin: 0 2px;
     }
 
     // Meta table: grid label/value rows with click-to-edit cells. No top
@@ -1346,8 +1682,169 @@
     width: 100%;
 }
 
-// --- New Task dialog (legacy modal — kept for registration compat) ---------
+// --- Task post card (custom_task post body) --------------------------------
 
-.task-new-dialog__overlay {
-    display: none;
+// TaskPostCard replaces the native SlackAttachment for "custom_task" posts on
+// desktop. A compact inline card with a real checkbox, the summary, and a
+// single meta row — matching the design's task-card.
+.task-post-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 440px;
+    margin-top: 6px;
+    padding: 12px 16px;
+    background: var(--task-bg);
+    border: 1px solid var(--task-border);
+    border-left: 3px solid var(--task-accent);
+    border-radius: var(--task-radius-md);
+    cursor: pointer;
+    transition: box-shadow 0.12s, border-color 0.12s;
+    font-family: var(--task-font);
+
+    &:hover {
+        box-shadow: 0 1px 2px rgba(31, 50, 92, 0.08), 0 2px 8px rgba(31, 50, 92, 0.06);
+    }
+
+    &--loading {
+        color: var(--task-meta);
+        font-size: 13px;
+        cursor: default;
+    }
+
+    // Status-tinted left border (mirrors the server cardColor).
+    &--todo {
+        border-left-color: #4391fe;
+    }
+
+    &--in_progress {
+        border-left-color: #f1a93c;
+    }
+
+    &--done {
+        border-left-color: var(--task-success);
+    }
+
+    &--cancelled {
+        border-left-color: var(--task-meta);
+    }
+
+    &--overdue:not(.task-post-card--done):not(.task-post-card--cancelled) {
+        border-left-color: var(--task-danger);
+    }
+
+    &__check {
+        width: 18px;
+        height: 18px;
+        border: 1.5px solid var(--task-meta);
+        border-radius: var(--task-radius-sm);
+        flex: none;
+        background: transparent;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        color: transparent;
+        transition: border-color 0.12s, background 0.12s, color 0.12s;
+
+        &:hover {
+            border-color: var(--task-accent);
+        }
+
+        svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        &--done {
+            background: var(--task-success);
+            border-color: var(--task-success);
+            color: var(--task-accent-on);
+        }
+    }
+
+    &__body {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    &__title {
+        font-weight: 500;
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--task-fg);
+        word-wrap: break-word;
+    }
+
+    &--done &__title {
+        color: var(--task-meta);
+        text-decoration: line-through;
+    }
+
+    &__meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    &__priority {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--task-muted);
+        font-weight: 500;
+
+        .task-priority-dot--standard-dot {
+            background: var(--task-meta);
+        }
+    }
+
+    &__due {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 11px;
+        color: var(--task-muted);
+
+        &--overdue {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+    }
+
+    &__assignee {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--task-accent);
+        background: var(--task-accent-tint);
+        padding: 1px 6px 1px 2px;
+        border-radius: 9999px;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    &__assignee-avatar {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        color: var(--task-accent-on);
+        background: linear-gradient(135deg, var(--task-accent), #1e325c);
+        font-size: 9px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+    }
 }
+
+// --- New Task dialog (legacy modal — kept for registration compat) ---------

@@ -21,8 +21,9 @@ import type {GlobalState} from '@mattermost/types/store';
 import {getChannel} from 'mattermost-redux/selectors/entities/channels';
 
 import formatDueRelative from 'components/shared/format_due_relative';
+import MetaDropdown from 'components/shared/meta_dropdown';
 import {PriorityDot, priorityLabel} from 'components/shared/priority_pill';
-import StatusPill from 'components/shared/status_pill';
+import StatusPill, {statusLabel} from 'components/shared/status_pill';
 import {isDueSoon} from 'components/task_sidebar/quick_list';
 import {useResolvedUser, useResolvedUsers} from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
@@ -46,12 +47,6 @@ const PLUGIN_STATE_KEY = 'plugins-com.mattermost.plugin-task';
 function selectSlice(state: GlobalStateWithPlugin): PluginState {
     return state[PLUGIN_STATE_KEY] ?? {selectedTaskID: '', selectedTask: null};
 }
-
-// STATUS_CYCLE is the order the status pill advances through on click.
-const STATUS_CYCLE: Array<Task['status']> = ['todo', 'in_progress', 'done', 'cancelled'];
-
-// PRIORITY_CYCLE is the order the priority pill advances through on click.
-const PRIORITY_CYCLE: TaskPriority[] = ['standard', 'important', 'urgent'];
 
 export interface TaskDetailPanelProps {
 
@@ -190,28 +185,24 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
         }
     };
 
-    const cycleStatus = () => {
-        const idx = STATUS_CYCLE.indexOf(full.status);
-        const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
-        changeStatus(next);
-    };
-
     // toggleCheckboxStatus is the checkbox behavior: Done ↔ In Progress only.
     // Open (todo/in_progress) → Done; terminal (done/cancelled) → In Progress.
-    // Other transitions are done via the status pill's cycleStatus.
+    // Other transitions are done via the Status dropdown in the meta-table.
     const toggleCheckboxStatus = () => {
         const terminal = full.status === 'done' || full.status === 'cancelled';
         changeStatus(terminal ? 'in_progress' : 'done');
     };
 
-    // cyclePriority advances the priority pill to the next value.
-    const cyclePriority = async () => {
-        const idx = PRIORITY_CYCLE.indexOf(full.priority || 'standard');
-        const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
+    // changePriority sets an explicit priority via PATCH (selected from the
+    // Priority dropdown in the meta-table).
+    const changePriority = async (priority: TaskPriority) => {
+        if (priority === (full.priority || 'standard')) {
+            return;
+        }
         try {
             const input: PatchTaskInput = {
                 update_fields: ['priority'],
-                priority: next,
+                priority,
             };
             const updated = await client.patchTask(full.id, input);
             setFull(updated);
@@ -356,8 +347,27 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                             <BackIcon/>
                         </button>
                     )}
+                    <span className='task-detail__title-inline'>{t('webapp.task.title.detail')}</span>
+                </div>
+                {canDelete && (
+                    <button
+                        className='task-detail__header-delete'
+                        onClick={remove}
+                        type='button'
+                        aria-label={t('webapp.task.delete')}
+                        title={t('webapp.task.delete')}
+                    >
+                        <TrashIcon/>
+                    </button>
+                )}
+            </div>
+
+            <div className='task-detail__scroll'>
+                {error && <div className='task-detail__error-block'>{error}</div>}
+
+                <div className='task-detail__title-row'>
                     <span
-                        className={`quick-list__check task-detail__header-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
+                        className={`quick-list__check task-detail__title-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
                         role='checkbox'
                         aria-checked={full.status === 'done' || full.status === 'cancelled'}
                         tabIndex={0}
@@ -373,7 +383,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                     </span>
                     {editingTitle ? (
                         <input
-                            className='task-detail__header-title-input'
+                            className='task-detail__title-input'
                             value={editSummary}
                             onChange={(e) => setEditSummary(e.target.value)}
                             onBlur={() => {
@@ -396,7 +406,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         />
                     ) : (
                         <h2
-                            className={`task-detail__header-title ${full.status === 'done' || full.status === 'cancelled' ? 'task-detail__header-title--terminal' : ''}`}
+                            className={`task-detail__title ${full.status === 'done' || full.status === 'cancelled' ? 'task-detail__title--terminal' : ''}`}
                             onClick={() => setEditingTitle(true)}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' || e.key === ' ') {
@@ -412,50 +422,41 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                         </h2>
                     )}
                 </div>
-                {canDelete && (
-                    <button
-                        className='task-detail__header-delete'
-                        onClick={remove}
-                        type='button'
-                        aria-label={t('webapp.task.delete')}
-                        title={t('webapp.task.delete')}
-                    >
-                        <TrashIcon/>
-                    </button>
-                )}
-            </div>
-
-            <div className='task-detail__scroll'>
-                {error && <div className='task-detail__error-block'>{error}</div>}
 
                 <div className='task-detail__meta-table'>
                     <div className='task-detail__meta-label'>{t('webapp.task.filter.status')}</div>
                     <div className='task-detail__meta-value'>
-                        <button
-                            type='button'
-                            className='task-detail__meta-value-button'
-                            onClick={cycleStatus}
-                            style={{border: 0, background: 'transparent', padding: 0, cursor: 'pointer'}}
-                        >
-                            <StatusPill status={full.status}/>
-                        </button>
+                        <MetaDropdown
+                            ariaLabel={t('webapp.task.filter.status')}
+                            value={full.status}
+                            onChange={(v) => changeStatus(v as Task['status'])}
+                            options={(['todo', 'in_progress', 'done', 'cancelled'] as Array<Task['status']>).map((s) => ({
+                                value: s,
+                                label: statusLabel(s, t),
+                            }))}
+                            triggerNode={<StatusPill status={full.status}/>}
+                        />
                     </div>
 
                     <div className='task-detail__meta-label'>{t('webapp.task.priority')}</div>
                     <div
                         className={`task-detail__meta-value task-detail__meta-value--priority-${full.priority || 'standard'}`}
-                        onClick={cyclePriority}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                cyclePriority();
-                            }
-                        }}
-                        role='button'
-                        tabIndex={0}
                     >
-                        <PriorityDot priority={full.priority || 'standard'}/>
-                        {priorityLabel(full.priority || 'standard', t)}
+                        <MetaDropdown
+                            ariaLabel={t('webapp.task.priority')}
+                            value={full.priority || 'standard'}
+                            onChange={(v) => changePriority(v as TaskPriority)}
+                            options={(['standard', 'important', 'urgent'] as TaskPriority[]).map((p) => ({
+                                value: p,
+                                label: priorityLabel(p, t),
+                            }))}
+                            triggerNode={
+                                <span className='task-detail__priority-trigger'>
+                                    <PriorityDot priority={full.priority || 'standard'}/>
+                                    {priorityLabel(full.priority || 'standard', t)}
+                                </span>
+                            }
+                        />
                     </div>
 
                     <div className='task-detail__meta-label'>{t('webapp.task.due')}</div>
