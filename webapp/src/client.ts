@@ -382,6 +382,7 @@ export default {
     listSubtasks,
     createComment,
     listComments,
+    shareTask,
     setTaskOrder,
     getUserByUsername,
     getUser,

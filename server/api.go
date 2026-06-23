@@ -957,6 +957,16 @@ func (p *Plugin) shareTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.taskStore.AddPost(context.Background(), taskutil.GenerateULID(), t.ID, postID, taskmodel.PostKindShare); err != nil {
+		// Most likely a UNIQUE(task_id, kind) race: another request claimed the
+		// single share slot between our precheck and this insert. Clean up the
+		// orphan card we just posted so it can't linger untracked, then fail —
+		// the caller can retry and the precheck will resolve it idempotently.
+		// (Best-effort: a DeletePost error is logged but doesn't change the
+		// outcome.)
+		if derr := p.API.DeletePost(postID); derr != nil {
+			p.API.LogError("Failed to clean up orphan share card",
+				"post_id", postID, "error", derr)
+		}
 		p.API.LogError("Failed to link shared task card",
 			"task_id", t.ID, "post_id", postID, "error", err)
 		p.writeError(w, http.StatusInternalServerError, "failed to link task card")

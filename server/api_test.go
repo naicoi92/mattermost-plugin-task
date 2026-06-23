@@ -395,6 +395,47 @@ func TestShareTask_409_AlreadySharedElsewhere(t *testing.T) {
 	api.AssertNumberOfCalls(t, "CreatePost", 1)
 }
 
+// TestShareTask_Idempotent_EvenWhenSharedElsewhere locks the precedence between
+// the two guards: if the TARGET channel already has a card (any kind), the
+// share is idempotent (200, existing card) — NOT 409 — even when a share-kind
+// card exists in a different channel. The single-share 409 only applies to a
+// channel that has no existing card. (Spec: idempotent per channel.)
+func TestShareTask_Idempotent_EvenWhenSharedElsewhere(t *testing.T) {
+	p, st := newTestPlugin(t)
+	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "dual card", CreatorID: "u1"})
+	ctx := context.Background()
+	// Seed a channel-kind card in X and a share-kind card in Y.
+	require.NoError(t, st.AddPost(ctx, "row1", taskObj.ID, "post-x", model.PostKindChannel))
+	require.NoError(t, st.AddPost(ctx, "row2", taskObj.ID, "post-y", model.PostKindShare))
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "X", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "GetPost" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+	api.On("GetPost", "post-x").Return(&mmmodel.Post{Id: "post-x", ChannelId: "X"}, nil).Maybe()
+	api.On("GetPost", "post-y").Return(&mmmodel.Post{Id: "post-y", ChannelId: "Y"}, nil).Maybe()
+	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
+
+	// Share to X: X already has the channel card → idempotent 200 (post-x), not
+	// 409, despite the share in Y.
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
+		`{"channel_id":"X"}`, "u1"))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		PostID string `json:"post_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "post-x", resp.PostID)
+	// No new card posted (idempotent).
+	api.AssertNumberOfCalls(t, "CreatePost", 0)
+}
+
 func TestCreateTask_RequiresSummary(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
