@@ -115,9 +115,14 @@ func (p *Plugin) writeError(w http.ResponseWriter, status int, msg string) {
 
 // createTaskRequest is the JSON body for POST /tasks.
 type createTaskRequest struct {
-	Summary        string `json:"summary"`
-	Description    string `json:"description"`
-	ChannelID      string `json:"channel_id"`
+	Summary     string `json:"summary"`
+	Description string `json:"description"`
+	ChannelID   string `json:"channel_id"`
+	// PostChannelID is the originating channel (the channel the user is in when
+	// creating) that should receive the announce card when the task itself is
+	// personal (empty ChannelID), e.g. a task created in a DM. It does not
+	// change the task's own channel_id (scope) — only where the card is posted.
+	PostChannelID  string `json:"post_channel_id"`
 	AssigneeID     string `json:"assignee_id"`
 	Due            *int64 `json:"due"`
 	IsAllDay       bool   `json:"is_all_day"`
@@ -177,8 +182,17 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// Create in an outer tx because CreatePost is a server RPC that can't
 	// participate in a DB transaction.
 	var channelPostID, dmPostID string
-	if created.ChannelID != "" {
-		channelPostID = p.postCard(created.ChannelID, created)
+	// Post the announce card into the task's own channel, or — for a personal
+	// task (empty ChannelID) created with an originating channel (e.g. a DM)
+	// — into post_channel_id. The task's channel_id (scope) is unchanged; only
+	// the card destination is decided here. The DM-assignee notification below
+	// is left untouched (additive, no dedup: it targets a different surface).
+	announceChannel := created.ChannelID
+	if announceChannel == "" {
+		announceChannel = req.PostChannelID
+	}
+	if announceChannel != "" {
+		channelPostID = p.postCard(announceChannel, created)
 	}
 	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
 		dmPostID = p.postCardDM(created.AssigneeID, created)

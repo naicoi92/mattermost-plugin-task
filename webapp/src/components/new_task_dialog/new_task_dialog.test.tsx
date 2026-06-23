@@ -7,7 +7,7 @@
 
 import {ClientError} from 'client';
 
-import {assigneeLookupError, deriveNewTaskContext, messageFor, normalizeAssigneeUsername, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
+import {assigneeLookupError, buildCreateInput, deriveNewTaskContext, messageFor, normalizeAssigneeUsername, parseDueLocal} from 'components/new_task_dialog/new_task_dialog';
 
 describe('deriveNewTaskContext', () => {
     test('a public/group channel yields a channel task with no assignee hint', () => {
@@ -169,5 +169,49 @@ describe('assigneeLookupError (#96)', () => {
         });
         expect(called).toBe(false);
         expect(result).toBe('oops');
+    });
+});
+
+// buildCreateInput assembles the POST /tasks body. The post_channel_id contract
+// is the fix for "New Task sometimes posts a card, sometimes not": a DM task
+// (personal scope, empty channel_id) must still announce its card into the
+// originating DM via post_channel_id, without changing scope.
+describe('buildCreateInput (post_channel_id announce card)', () => {
+    const baseForm = {summary: 'Buy milk', description: '2L', priority: 'standard' as const, assigneeID: '', dueLocal: ''};
+
+    test('a DM task sends post_channel_id (the originating DM) but no channel_id', () => {
+        // DM context: personal scope (channelId empty), partner suggested as assignee.
+        const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'me__partner'}, 'me');
+        const input = buildCreateInput(baseForm, ctx, 'dm1');
+        expect(input.channel_id).toBeUndefined();
+        expect(input.post_channel_id).toBe('dm1');
+    });
+
+    test('a channel task sends both channel_id and post_channel_id (redundant, harmless)', () => {
+        const ctx = deriveNewTaskContext({id: 'ch1', type: 'O', name: 'town-square'}, 'me');
+        const input = buildCreateInput(baseForm, ctx, 'ch1');
+        expect(input.channel_id).toBe('ch1');
+        expect(input.post_channel_id).toBe('ch1');
+    });
+
+    test('no originating channel sends neither channel_id nor post_channel_id', () => {
+        const ctx = deriveNewTaskContext(null, 'me');
+        const input = buildCreateInput(baseForm, ctx, undefined);
+        expect(input.channel_id).toBeUndefined();
+        expect(input.post_channel_id).toBeUndefined();
+    });
+
+    test('summary is trimmed', () => {
+        const ctx = deriveNewTaskContext({id: 'ch1', type: 'O'}, 'me');
+        const input = buildCreateInput({...baseForm, summary: '  spaced  '}, ctx, 'ch1');
+        expect(input.summary).toBe('spaced');
+    });
+
+    test('assignee and due are propagated', () => {
+        const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'me__partner'}, 'me');
+        const input = buildCreateInput({...baseForm, assigneeID: 'bob', dueLocal: '2026-06-19T12:00'}, ctx, 'dm1');
+        expect(input.assignee_id).toBe('bob');
+        expect(input.due).not.toBeUndefined();
+        expect(typeof input.due).toBe('number');
     });
 });

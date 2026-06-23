@@ -126,6 +126,53 @@ func TestCreateTask_Endpoint(t *testing.T) {
 	assert.Equal(t, "u1", got.CreatorID)
 }
 
+// TestCreateTask_AnnouncesCardInPostChannelID asserts that a personal task
+// (empty channel_id) created with a post_channel_id still posts its announce
+// card into post_channel_id and links it via task_posts — WITHOUT changing the
+// task's own channel_id (personal scope is preserved). This is the fix for the
+// "New Task sometimes posts a card, sometimes not" bug: a DM task used to post
+// no card at all.
+func TestCreateTask_AnnouncesCardInPostChannelID(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	body := `{"summary":"DM task","post_channel_id":"dm1"}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	// Personal scope is preserved: the task's own channel_id stays empty.
+	assert.Equal(t, "", got.ChannelID)
+	// The announce card was posted into post_channel_id and linked as the
+	// channel-kind card post. With no assignee, exactly one card exists: the
+	// announce post ("post-1") and no assignee-bot DM ("").
+	assert.Equal(t, "post-1", got.ChannelPostID)
+	assert.Equal(t, "", got.DMPostID)
+}
+
+// TestCreateTask_AnnounceAndAssigneeDM_AreSeparateSurfaces locks in the
+// additive, no-dedup behaviour (design Decision 1): a DM task (personal scope)
+// with assignee = partner posts the announce card into the originating DM AND
+// the assignee-bot DM into DM(bot, assignee) — two distinct surfaces/posts. The
+// announce post never replaces or suppresses the assignee notification.
+func TestCreateTask_AnnounceAndAssigneeDM_AreSeparateSurfaces(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	body := `{"summary":"DM assigned","post_channel_id":"dm1","assignee_id":"partner"}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	// Personal scope preserved: channel_id stays empty even with an assignee.
+	assert.Equal(t, "", got.ChannelID)
+	// Announce card in the originating DM (posted first → "post-1").
+	assert.Equal(t, "post-1", got.ChannelPostID)
+	// Assignee-bot DM notification fires independently (posted second →
+	// "post-2"); it is NOT suppressed by the announce post.
+	assert.Equal(t, "post-2", got.DMPostID)
+}
+
 func TestCreateTask_RequiresSummary(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
