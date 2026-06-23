@@ -98,6 +98,7 @@
   "webapp.task.scope.personal": "Personal",
   "webapp.task.scope.channel": "Channel",
   "webapp.task.create": "Create",
+  "webapp.task.create.quick_hint": "to create quickly",
   "webapp.task.cancel": "Cancel",
   "webapp.task.save": "Save",
   "webapp.task.delete": "Delete",

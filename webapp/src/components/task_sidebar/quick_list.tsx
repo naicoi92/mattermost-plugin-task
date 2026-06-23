@@ -19,7 +19,7 @@ import {useDispatch} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
 import formatDueRelative from 'components/shared/format_due_relative';
-import {PriorityDot} from 'components/shared/priority_pill';
+import {priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
 import {useResolvedUsers} from 'components/user_picker/use_resolved_user';
 
@@ -199,6 +199,7 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                         placeholder={t('webapp.task.search')}
                         aria-label={t('webapp.task.search')}
                     />
+                    <span className='quick-list__kbd'>{'⌘K'}</span>
                 </div>
 
                 <div
@@ -267,7 +268,7 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                                 }
                                             }}
                                         >
-                                            <CheckIcon/>
+                                            <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
                                         </span>
                                         <span className='quick-list__item-main'>
                                             <span className='quick-list__item-summary'>{task.summary}</span>
@@ -278,7 +279,10 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                             )}
                                             <span className='quick-list__item-meta'>
                                                 <StatusPill status={task.status}/>
-                                                <PriorityDot priority={task.priority}/>
+                                                <span className={`quick-list__item-priority quick-list__item-priority--${task.priority || 'standard'}`}>
+                                                    <span className={`task-priority-dot task-priority-dot--${(task.priority || 'standard') === 'standard' ? 'standard-dot' : task.priority}`}/>
+                                                    {priorityLabel(task.priority || 'standard', t)}
+                                                </span>
                                                 {task.due ? (
                                                     <span className={dueChipClass(task)}>
                                                         <CalendarIcon/>
@@ -293,6 +297,9 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                                 )}
                                                 {task.assignee_id && (
                                                     <span className={`quick-list__item-assignee ${assigneeLabels[task.assignee_id] ? '' : 'quick-list__item-assignee--loading'}`}>
+                                                        <span className='quick-list__assignee-avatar'>
+                                                            {assigneeInitials(assigneeLabels[task.assignee_id])}
+                                                        </span>
                                                         {assigneeLabels[task.assignee_id] || '…'}
                                                     </span>
                                                 )}
@@ -545,6 +552,20 @@ export function messageFor(err: unknown): string {
     return err instanceof Error ? err.message : 'request failed';
 }
 
+// assigneeInitials derives up to two uppercase initials from an "@username"
+// label for the assignee avatar-dot. Falls back to "?" when the label is empty
+// or unresolved (the loading "…" case renders the dot anyway).
+export function assigneeInitials(label: string | undefined): string {
+    if (!label) {
+        return '?';
+    }
+    const clean = label.replace(/^@/, '').trim();
+    if (!clean) {
+        return '?';
+    }
+    return clean.slice(0, 2).toUpperCase();
+}
+
 // SearchIcon / CheckIcon / PlusIcon / CalendarIcon are the inline Mattermost-style glyphs.
 function SearchIcon(): JSX.Element {
     return (
@@ -567,17 +588,6 @@ function SearchIcon(): JSX.Element {
                 strokeLinecap='round'
                 fill='none'
             />
-        </svg>
-    );
-}
-
-function CheckIcon(): JSX.Element {
-    return (
-        <svg
-            viewBox='0 0 24 24'
-            aria-hidden='true'
-        >
-            <path d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z'/>
         </svg>
     );
 }

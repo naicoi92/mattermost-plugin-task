@@ -29,6 +29,7 @@ import type {GlobalState} from '@mattermost/types/store';
 
 import KanbanModal from 'components/kanban_modal/kanban_modal';
 import NewTaskDialog from 'components/new_task_dialog/connected_new_task_dialog';
+import TaskPostCard, {setTaskPostCardRhsOpener} from 'components/task_post_card/task_post_card';
 import TaskSidebar from 'components/task_sidebar/task_sidebar';
 
 import type {PluginRegistry} from 'types/mattermost-webapp';
@@ -112,7 +113,7 @@ export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Eleme
                 onClick={onClick}
                 aria-label={t('webapp.task.tooltip.new_task')}
             >
-                <i className='icon fa fa-tasks'/>
+                <i className='icon fa fa-check-square'/>
             </button>
         </OverlayTrigger>
     );
@@ -132,11 +133,11 @@ export default class Plugin {
         this.store = store;
 
         // Click a task card in the channel → open its Task Details in the RHS.
-        // The card is a native SlackAttachment post with Type "custom_task" and
-        // a task_id prop (set by the server). Event delegation handles this
-        // without a custom post-type component, so the card keeps rendering
-        // natively (and on mobile). Desktop-only: the RHS doesn't exist on
-        // mobile, so the click is a harmless no-op there.
+        // The custom_task post body is rendered by TaskPostCard (registered
+        // below), which opens the RHS itself; this listener is a fallback for
+        // clicks on the surrounding post chrome / the mobile native attachment.
+        // Desktop-only: the RHS doesn't exist on mobile, so the click is a
+        // harmless no-op there.
         //
         // Guarded for non-DOM environments (the Jest node test env) so importing
         // the module never throws.
@@ -185,6 +186,13 @@ export default class Plugin {
         // registry is only safely usable inside initialize.
         const {showRHSPlugin} = registry.registerRightHandSidebarComponent(TaskSidebar, 'Tasks');
         rhsOpener = () => store.dispatch(showRHSPlugin);
+        setTaskPostCardRhsOpener(rhsOpener);
+
+        // Custom React body for "custom_task" posts (the task card). Renders in
+        // place of the native SlackAttachment on desktop, with a real checkbox
+        // and an inline meta row matching the design. The server still builds
+        // the SlackAttachment as a mobile / fallback.
+        registry.registerPostTypeComponent('custom_task', TaskPostCard);
 
         // Channel header button: opens the RHS. The icon is a simple checkmark
         // glyph; a richer SVG can replace it without changing the contract.
