@@ -1729,12 +1729,32 @@
 // TaskPostCard replaces the native SlackAttachment for "custom_task" posts on
 // desktop. A compact inline card with a real checkbox, the summary, and a
 // single meta row — matching the design's task-card.
+//
+// .task-post-card-post wraps the caption ("creator started a task [for
+// assignee]") above the card. The caption is intentionally non-interactive so
+// clicks on it open the thread like any other post; only the card opens Task
+// Details.
+.task-post-card-post {
+    margin-top: 6px;
+    max-width: 440px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    &__caption {
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--task-fg);
+        font-weight: 400;
+        // Let the caption inherit the host's normal text flow so it reads like a
+        // plain message rather than a styled banner.
+    }
+}
+
 .task-post-card {
     display: flex;
     align-items: center;
     gap: 12px;
-    max-width: 440px;
-    margin-top: 6px;
     padding: 12px 16px;
     background: var(--task-bg);
     border: 1px solid var(--task-border);

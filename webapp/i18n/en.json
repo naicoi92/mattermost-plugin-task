@@ -113,6 +113,8 @@
   "webapp.task.title.new": "New task",
   "webapp.task.tooltip.open_rhs": "Open task list",
   "webapp.task.tooltip.new_task": "New task",
+  "webapp.task.post.caption.created": "%s started a task",
+  "webapp.task.post.caption.assigned": "%s started a task for %s",
   "webapp.kanban.title": "Kanban board",
   "webapp.error.required": "This field is required.",
   "webapp.error.create_failed": "Failed to create the task. Please try again."
