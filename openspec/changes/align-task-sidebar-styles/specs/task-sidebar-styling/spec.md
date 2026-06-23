@@ -2,7 +2,7 @@
 
 ### Requirement: Token màu amber phải khớp thiết kế
 
-`--task-warning` token trong `index.scss` (cả light và dark theme block) SHALL có giá trị `#cf8900` (light) — cam đậm, không phải `#ffb700` (vàng).
+`--task-warning` token trong `index.scss` SHALL có giá trị `#cf8900` (light theme) và `#e6a23c` (dark theme) — cam đậm, không phải `#ffb700` (vàng).
 
 #### Scenario: Due "soon" hiển thị cam đậm
 
@@ -71,7 +71,7 @@ Search box (`.quick-list__search`) SHALL có `height: 34px` và `border: 1px sol
 
 ### Requirement: Button radius 6px
 
-`.task-btn` và `.task-detail__title-input` SHALL có `border-radius: 6px` (radius-md), không phải `3px` (radius-sm).
+`.task-btn` SHALL có `border-radius: 6px` (radius-md), không phải `3px` (radius-sm). `.task-detail__title-input` giữ `3px` (đã match design).
 
 #### Scenario: Primary button bo góc 6px
 

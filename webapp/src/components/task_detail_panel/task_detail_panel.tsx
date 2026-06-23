@@ -340,7 +340,10 @@ export default function TaskDetailPanel({
     };
 
     const toggleSubtaskDone = async (sub: Task) => {
-        const next = sub.status === 'done' ? 'todo' : 'done';
+        // "cancelled" renders as checked in the UI, so it is a terminal state
+        // alongside "done" — toggling either returns the subtask to "todo".
+        const terminal = sub.status === 'done' || sub.status === 'cancelled';
+        const next = terminal ? 'todo' : 'done';
         const prev = sub.status;
         setSubtasks((cur) =>
             cur.map((x) => (x.id === sub.id ? {...x, status: next} : x)),
@@ -456,6 +459,7 @@ export default function TaskDetailPanel({
                         className={`quick-list__check task-detail__title-check ${full.status === 'done' || full.status === 'cancelled' ? 'quick-list__check--done' : ''}`}
                         role='checkbox'
                         aria-checked={full.status === 'done' || full.status === 'cancelled'}
+                        aria-label={full.summary}
                         tabIndex={0}
                         onClick={toggleCheckboxStatus}
                         onKeyDown={(e) => {

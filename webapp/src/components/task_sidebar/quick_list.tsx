@@ -290,6 +290,7 @@ export default function QuickList({
                                             className={`quick-list__check ${done ? 'quick-list__check--done' : ''}`}
                                             role='checkbox'
                                             aria-checked={done}
+                                            aria-label={task.summary}
                                             tabIndex={0}
                                             onClick={(e) => toggleDone(e, task)}
                                             onKeyDown={(e) => {

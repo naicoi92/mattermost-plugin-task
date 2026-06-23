@@ -6,7 +6,7 @@ Giao diện webapp (Quick List + Task Detail + New Task) hiện lệch nhiều g
 
 ### Token màu
 
-- Sửa `--task-warning` từ `#ffb700` (vàng) → `#cf8900` (cam đậm) trong `index.scss` (cả light + dark theme). Ảnh hưởng toàn bộ chỗ amber: due "soon", priority important.
+- Sửa `--task-warning` từ `#ffb700` (vàng) → `#cf8900` (cam đậm, light theme) và `#e6a23c` (dark theme) trong `index.scss`. Ảnh hưởng toàn bộ chỗ amber: due "soon", priority important.
 
 ### Pure SCSS (6 chỗ, chỉ `index.scss`)
 
@@ -15,7 +15,7 @@ Giao diện webapp (Quick List + Task Detail + New Task) hiện lệch nhiều g
 - **B3. Group label**: từ `::after` hairline divider flex-fill → text suffix `" · N"` + `position: sticky; top: 0; z-index: 1`.
 - **B4. Task row**: từ `border: 0` + hover `border-left: 3px accent` → `border-bottom: 1px border-soft` (separator lines) + hover = bg only.
 - **B5. Search box**: `height: 32px` → `34px`, `border: transparent` → `1px solid border` (luôn visible).
-- **B6. Button radius**: `.task-btn` và `.task-detail__title-input` radius `3px` → `6px`, padding theo design.
+- **B6. Button radius**: `.task-btn` radius `3px` → `6px`, padding theo design. (`.task-detail__title-input` giữ `3px` vì đã match design.)
 
 ### Checkbox glyph (3 TSX + SCSS)
 

@@ -172,6 +172,7 @@ export default function TaskPostCard({
                     className={`task-post-card__check ${done ? 'task-post-card__check--done' : ''}`}
                     role='checkbox'
                     aria-checked={done}
+                    aria-label={task.summary}
                     tabIndex={0}
                     onClick={toggleDone}
                     onKeyDown={(e) => {
