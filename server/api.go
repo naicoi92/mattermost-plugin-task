@@ -115,9 +115,14 @@ func (p *Plugin) writeError(w http.ResponseWriter, status int, msg string) {
 
 // createTaskRequest is the JSON body for POST /tasks.
 type createTaskRequest struct {
-	Summary        string `json:"summary"`
-	Description    string `json:"description"`
-	ChannelID      string `json:"channel_id"`
+	Summary     string `json:"summary"`
+	Description string `json:"description"`
+	ChannelID   string `json:"channel_id"`
+	// PostChannelID is the originating channel (the channel the user is in when
+	// creating) that should receive the announce card when the task itself is
+	// personal (empty ChannelID), e.g. a task created in a DM. It does not
+	// change the task's own channel_id (scope) — only where the card is posted.
+	PostChannelID  string `json:"post_channel_id"`
 	AssigneeID     string `json:"assignee_id"`
 	Due            *int64 `json:"due"`
 	IsAllDay       bool   `json:"is_all_day"`
@@ -177,8 +182,27 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// Create in an outer tx because CreatePost is a server RPC that can't
 	// participate in a DB transaction.
 	var channelPostID, dmPostID string
-	if created.ChannelID != "" {
-		channelPostID = p.postCard(created.ChannelID, created)
+	// Decide where the announce card is posted. A channel task (ChannelID set)
+	// posts into its own channel. A personal task (empty ChannelID) created in
+	// an originating channel (e.g. a DM) posts into post_channel_id instead —
+	// but only after verifying the requesting user is a member of that channel,
+	// so a client cannot direct the bot to post into a channel the caller cannot
+	// access (defense-in-depth on client-controlled post_channel_id). The task's
+	// channel_id (scope) is never changed here; only the card destination is
+	// decided. The DM-assignee notification below is left untouched (additive).
+	announceChannel := created.ChannelID
+	if announceChannel == "" {
+		announceChannel = req.PostChannelID
+	}
+	if announceChannel != "" && announceChannel != created.ChannelID {
+		if !p.channelMembership().IsChannelMember(currentUserID(r), announceChannel) {
+			p.API.LogDebug("Ignoring post_channel_id announce: caller is not a channel member",
+				"task_id", created.ID, "post_channel_id", announceChannel)
+			announceChannel = ""
+		}
+	}
+	if announceChannel != "" {
+		channelPostID = p.postCard(announceChannel, created)
 	}
 	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
 		dmPostID = p.postCardDM(created.AssigneeID, created)

@@ -89,6 +89,12 @@ export interface CreateTaskInput {
     summary: string;
     description?: string;
     channel_id?: string;
+
+    // post_channel_id is the originating channel that should receive the
+    // announce card when the task itself is personal (empty channel_id), e.g.
+    // a task created in a DM. It does not change the task's own scope — only
+    // where the card is posted (server/api.go createTask).
+    post_channel_id?: string;
     assignee_id?: string;
     due?: number;
     is_all_day?: boolean;

@@ -81,6 +81,54 @@ export function channelToContext(channel: Channel | null | undefined, channelID:
     return null;
 }
 
+// CreateInputForm is the subset of the dialog form that buildCreateInput reads.
+// Structural so tests can pass a plain object without the component's full
+// form/state harness.
+export interface CreateInputForm {
+    summary: string;
+    description: string;
+    priority: TaskPriority;
+    assigneeID: string;
+    dueLocal: string;
+}
+
+// buildCreateInput assembles the POST /tasks body from the dialog form, the
+// derived scope context, and the originating channel id. Extracted (pure) so
+// the announce-card contract is unit-testable without a Redux/Intl harness,
+// mirroring the quick_list buildParams pattern.
+//
+// post_channel_id is always sent when an originating channel exists so the
+// server posts an announce card even for a personal task created in a DM (the
+// task's own channel_id stays empty; the card destination is decided
+// server-side). For channel tasks it equals channel_id — redundant but
+// harmless, and the server prefers channel_id.
+export function buildCreateInput(
+    form: CreateInputForm,
+    ctx: NewTaskContext,
+    channelID: string | undefined,
+): CreateTaskInput {
+    const input: CreateTaskInput = {
+        summary: form.summary.trim(),
+        description: form.description,
+        priority: form.priority,
+    };
+    if (ctx.channelId) {
+        input.channel_id = ctx.channelId;
+    }
+    if (channelID) {
+        input.post_channel_id = channelID;
+    }
+    const assigneeID = (form.assigneeID || ctx.suggestedAssigneeID).trim();
+    if (assigneeID) {
+        input.assignee_id = assigneeID;
+    }
+    const dueMs = parseDueLocal(form.dueLocal);
+    if (dueMs !== null) {
+        input.due = dueMs;
+    }
+    return input;
+}
+
 export interface NewTaskDialogProps {
 
     // visible gates rendering; defaults to hidden.
@@ -214,22 +262,7 @@ export default function NewTaskDialog({
             return;
         }
 
-        const input: CreateTaskInput = {
-            summary,
-            description: form.description,
-            priority: form.priority,
-        };
-        if (ctx.channelId) {
-            input.channel_id = ctx.channelId;
-        }
-        const assigneeID = (form.assigneeID || ctx.suggestedAssigneeID).trim();
-        if (assigneeID) {
-            input.assignee_id = assigneeID;
-        }
-        const dueMs = parseDueLocal(form.dueLocal);
-        if (dueMs !== null) {
-            input.due = dueMs;
-        }
+        const input = buildCreateInput(form, ctx, channelID);
 
         setSubmitting(true);
         try {
