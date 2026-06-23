@@ -403,7 +403,7 @@ export default function NewTaskDialog({
                         type='button'
                         disabled={submitting}
                     >
-                        <CheckIcon/>
+                        <i className='icon fa fa-check'/>
                         {t('webapp.task.create')}
                     </button>
                 </div>
@@ -459,21 +459,6 @@ function BackIcon(): JSX.Element {
             aria-hidden='true'
         >
             <path d='M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z'/>
-        </svg>
-    );
-}
-
-function CheckIcon(): JSX.Element {
-    return (
-        <svg
-            viewBox='0 0 16 16'
-            aria-hidden='true'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='2'
-            strokeLinecap='round'
-        >
-            <path d='M3 8.5L6.5 12 13 4.5'/>
         </svg>
     );
 }

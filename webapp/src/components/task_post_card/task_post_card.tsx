@@ -163,7 +163,7 @@ export default function TaskPostCard({post}: TaskPostCardProps): JSX.Element | n
                     }
                 }}
             >
-                <CheckIcon/>
+                <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
             </span>
             <span className='task-post-card__body'>
                 <span className='task-post-card__title'>{task.summary}</span>
@@ -199,22 +199,6 @@ function readTaskID(post: Post): string {
     const props = (post.props ?? {}) as Record<string, unknown> & {task_id?: string};
     const id = props.task_id;
     return typeof id === 'string' ? id : '';
-}
-
-function CheckIcon(): JSX.Element {
-    return (
-        <svg
-            viewBox='0 0 16 16'
-            aria-hidden='true'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='2.4'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-        >
-            <path d='M3 8.5L6.5 12 13 4.5'/>
-        </svg>
-    );
 }
 
 function CalendarIcon(): JSX.Element {

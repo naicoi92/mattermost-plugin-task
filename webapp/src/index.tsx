@@ -113,7 +113,7 @@ export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Eleme
                 onClick={onClick}
                 aria-label={t('webapp.task.tooltip.new_task')}
             >
-                <i className='icon fa fa-tasks'/>
+                <i className='icon fa fa-check-square'/>
             </button>
         </OverlayTrigger>
     );

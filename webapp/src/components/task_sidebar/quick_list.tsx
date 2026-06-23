@@ -268,7 +268,7 @@ export default function QuickList({channelID, currentUserID, channelType, onSele
                                                 }
                                             }}
                                         >
-                                            <CheckIcon/>
+                                            <i className={`icon fa ${done ? 'fa-check-square' : 'fa-square-o'}`}/>
                                         </span>
                                         <span className='quick-list__item-main'>
                                             <span className='quick-list__item-summary'>{task.summary}</span>
@@ -588,17 +588,6 @@ function SearchIcon(): JSX.Element {
                 strokeLinecap='round'
                 fill='none'
             />
-        </svg>
-    );
-}
-
-function CheckIcon(): JSX.Element {
-    return (
-        <svg
-            viewBox='0 0 24 24'
-            aria-hidden='true'
-        >
-            <path d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z'/>
         </svg>
     );
 }

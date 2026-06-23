@@ -379,7 +379,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                             }
                         }}
                     >
-                        <CheckIcon/>
+                        <i className={`icon fa ${full.status === 'done' || full.status === 'cancelled' ? 'fa-check-square' : 'fa-square-o'}`}/>
                     </span>
                     {editingTitle ? (
                         <input
@@ -621,7 +621,7 @@ export default function TaskDetailPanel({taskID: taskIDProp, onBack, currentUser
                                                     }
                                                 }}
                                             >
-                                                <CheckIcon/>
+                                                <i className={`icon fa ${subDone ? 'fa-check-square' : 'fa-square-o'}`}/>
                                             </span>
                                             {onOpenSubtask ? (
                                                 <button
@@ -795,19 +795,6 @@ function BackIcon(): JSX.Element {
     );
 }
 
-function CheckIcon(): JSX.Element {
-    return (
-        <svg
-            viewBox='0 0 24 24'
-            aria-hidden='true'
-        >
-            <path d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z'/>
-        </svg>
-    );
-}
-
-// CalendarIcon is the calendar glyph used before the due value in the meta-
-// table. Stroke-based to match Mattermost's line-icon style.
 function CalendarIcon(): JSX.Element {
     return (
         <svg
