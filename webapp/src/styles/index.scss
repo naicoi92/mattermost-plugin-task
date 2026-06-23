@@ -865,6 +865,15 @@
         }
     }
 
+    &__header-share {
+        @extend %task-icon-btn;
+
+        &:disabled {
+            cursor: not-allowed;
+            opacity: 0.4;
+        }
+    }
+
     &__header-actions {
         display: flex;
         gap: 2px;

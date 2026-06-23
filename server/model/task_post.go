@@ -7,6 +7,7 @@ package model
 const (
 	PostKindChannel = "channel"
 	PostKindDM      = "dm"
+	PostKindShare   = "share"
 )
 
 // IsValidPostKind reports whether kind is one of the recognized PostKind*
@@ -15,7 +16,7 @@ const (
 // can't handle.
 func IsValidPostKind(kind string) bool {
 	switch kind {
-	case PostKindChannel, PostKindDM:
+	case PostKindChannel, PostKindDM, PostKindShare:
 		return true
 	default:
 		return false

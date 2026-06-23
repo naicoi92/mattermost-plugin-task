@@ -53,12 +53,12 @@ func TestIsValidMemberRole(t *testing.T) {
 }
 
 func TestIsValidPostKind(t *testing.T) {
-	for _, s := range []string{PostKindChannel, PostKindDM} {
+	for _, s := range []string{PostKindChannel, PostKindDM, PostKindShare} {
 		if !IsValidPostKind(s) {
 			t.Errorf("IsValidPostKind(%q) = false, want true", s)
 		}
 	}
-	for _, s := range []string{"", "broadcast"} {
+	for _, s := range []string{"", "broadcast", "bogus"} {
 		if IsValidPostKind(s) {
 			t.Errorf("IsValidPostKind(%q) = true, want false", s)
 		}

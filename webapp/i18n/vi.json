@@ -109,6 +109,8 @@
   "webapp.task.add_subtask": "Thêm subtask",
   "webapp.task.add_comment": "Thêm bình luận",
   "webapp.task.set_reminder": "Đặt nhắc",
+  "webapp.task.share.button": "Chia sẻ vào kênh",
+  "webapp.task.share.no_channel": "Không có kênh hiện tại để chia sẻ",
   "webapp.task.title.detail": "Chi tiết",
   "webapp.task.title.new": "Tạo task",
   "webapp.task.tooltip.open_rhs": "Mở danh sách task",

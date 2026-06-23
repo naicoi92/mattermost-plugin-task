@@ -257,6 +257,21 @@ describe('subtask and comment endpoints', () => {
     });
 });
 
+describe('share endpoint', () => {
+    test('shareTask POSTs {channel_id} under the task and returns post_id', async () => {
+        let captured: {url: string; body: string} = {url: '', body: ''};
+        mockFetch((url, init) => {
+            captured = {url, body: String(init?.body ?? '')};
+            return {...mockResponse(200, {post_id: 'post-9'}), ok: true} as unknown as MockResponse;
+        });
+        const {shareTask} = await importClient();
+        const res = await shareTask('abc', 'ch1');
+        expect(captured.url).toBe(`${PLUGIN_API_BASE_URL}/tasks/abc/share`);
+        expect(captured.body).toBe(JSON.stringify({channel_id: 'ch1'}));
+        expect(res).toEqual({post_id: 'post-9'});
+    });
+});
+
 describe('id encoding', () => {
     test('a ULID with a slash is not passed through unencoded', async () => {
         let capturedUrl = '';

@@ -25,6 +25,7 @@ import type {
     PatchTaskInput,
     SetAssigneeInput,
     SetReminderInput,
+    ShareTaskResult,
     Task,
     TaskStatus,
 } from 'types/tasks';
@@ -229,6 +230,21 @@ export function createComment(taskID: string, input: CreateCommentInput): Promis
 
 export function listComments(taskID: string): Promise<Comment[]> {
     return doFetch<Comment[]>(`/tasks/${encodeURIComponent(taskID)}/comments`);
+}
+
+// ---------------------------------------------------------------------------
+// Sharing (server/api.go: POST /tasks/:id/share)
+// ---------------------------------------------------------------------------
+
+// shareTask posts the task's card into channelID and returns the card post id
+// - newly created, or the existing one when the share was idempotent (the task
+// already had a card in that channel). The server authorizes the caller (must
+// be able to view the task and be a member of channelID).
+export function shareTask(id: string, channelID: string): Promise<ShareTaskResult> {
+    return doFetch<ShareTaskResult>(`/tasks/${encodeURIComponent(id)}/share`, {
+        method: 'POST',
+        body: {channel_id: channelID},
+    });
 }
 
 // ---------------------------------------------------------------------------
