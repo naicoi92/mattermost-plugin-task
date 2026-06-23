@@ -129,3 +129,12 @@ Add subtask (trong TaskDetailPanel) SHALL dùng inline-trigger expand: default c
 
 - **WHEN** user nhấn Escape khi đang trong input
 - **THEN** input ẩn, trở về collapsed trigger, text đã nhập bị hủy
+
+### Requirement: Detail scroll container có top padding
+
+`.task-detail__scroll` (container của cả Task Detail và New Task view) SHALL có top padding `16px` để title không dính sát header, khớp thiết kế (`.det-scroll { padding: 16px }`).
+
+#### Scenario: Title có khoảng cách phía trên
+
+- **WHEN** render Task Detail hoặc New Task view
+- **THEN** title row cách header trên cùng 16px, không bị dính sát
