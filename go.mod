@@ -1,6 +1,6 @@
 module github.com/naicoi92/mattermost-plugin-task
 
-go 1.26
+go 1.25
 
 require (
 	github.com/Masterminds/squirrel v1.5.4

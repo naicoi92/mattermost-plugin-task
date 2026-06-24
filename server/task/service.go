@@ -403,7 +403,7 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 			ActorID:   userID,
 			EventType: model.EventCommented,
 			CreatedAt: now,
-			ToValue:   new(commentID),
+			ToValue:   ptrString(commentID),
 		})
 	}); err != nil {
 		return model.TaskComment{}, CommentEvent{}, err
@@ -480,7 +480,7 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 			ActorID:   creatorID,
 			EventType: model.EventSubtaskAdded,
 			CreatedAt: now,
-			ToValue:   new(created.ID),
+			ToValue:   ptrString(created.ID),
 		})
 	}); err != nil {
 		s.logUnexpected("failed to record subtask_added event / touch parent", err)
@@ -598,8 +598,8 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 			ActorID:   actorID,
 			EventType: model.EventStatusChanged,
 			CreatedAt: now,
-			FromValue: new(oldStatus),
-			ToValue:   new(newStatus),
+			FromValue: ptrString(oldStatus),
+			ToValue:   ptrString(newStatus),
 		})
 	}); err != nil {
 		return nil, err
@@ -722,7 +722,7 @@ func (s *Service) SetReminder(actorID, id string, offsetMS int64) (*model.Task, 
 			ActorID:   actorID,
 			EventType: model.EventReminderSet,
 			CreatedAt: now,
-			ToValue:   new(strconv.FormatInt(offsetMS, 10)),
+			ToValue:   ptrString(strconv.FormatInt(offsetMS, 10)),
 		})
 	}); err != nil {
 		return nil, err
@@ -953,10 +953,7 @@ func derefBool(p *bool) bool {
 
 // ptrString returns a pointer to s; used for TaskEvent.FromValue/ToValue which
 // are *string.
-//
-//go:fix inline
-//go:fix inline
-func ptrString(s string) *string { return new(s) }
+func ptrString(s string) *string { return &s }
 
 // ErrNotFound is returned by Get/Patch/Delete when the task id does not exist.
 var ErrNotFound = errors.New("task not found")
@@ -1047,8 +1044,8 @@ func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, Assign
 			ActorID:   actorID,
 			EventType: eventType,
 			CreatedAt: now,
-			FromValue: new(oldAssigneeID),
-			ToValue:   new(newAssigneeID),
+			FromValue: ptrString(oldAssigneeID),
+			ToValue:   ptrString(newAssigneeID),
 		})
 	}); err != nil {
 		return nil, AssignEvent{}, err

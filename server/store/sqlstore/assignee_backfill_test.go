@@ -53,7 +53,7 @@ func TestAssigneeBackfill_MaterializesMemberRowFromAssignedEvent(t *testing.T) {
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	require.NoError(t, s.AppendTaskEvent(ctx, model.TaskEvent{
 		ID: "E1", TaskID: "T1", ActorID: "u-actor",
-		EventType: model.EventAssigned, ToValue: new("u-a1"), CreatedAt: 1_000,
+		EventType: model.EventAssigned, ToValue: ptr("u-a1"), CreatedAt: 1_000,
 	}))
 
 	// T2: assigned then later UNASSIGNED. Currently has no assignee, so the
@@ -62,11 +62,11 @@ func TestAssigneeBackfill_MaterializesMemberRowFromAssignedEvent(t *testing.T) {
 	mustCreate(t, s, ctx, fixture("T2", "k2"))
 	require.NoError(t, s.AppendTaskEvent(ctx, model.TaskEvent{
 		ID: "E2a", TaskID: "T2", ActorID: "u-actor",
-		EventType: model.EventAssigned, ToValue: new("u-a2"), CreatedAt: 1_000,
+		EventType: model.EventAssigned, ToValue: ptr("u-a2"), CreatedAt: 1_000,
 	}))
 	require.NoError(t, s.AppendTaskEvent(ctx, model.TaskEvent{
 		ID: "E2b", TaskID: "T2", ActorID: "u-actor",
-		EventType: model.EventUnassigned, FromValue: new("u-a2"), ToValue: new(""), CreatedAt: 2_000,
+		EventType: model.EventUnassigned, FromValue: ptr("u-a2"), ToValue: ptr(""), CreatedAt: 2_000,
 	}))
 
 	// T3: assigned event AND a real role='assignee' member row already present.
@@ -75,7 +75,7 @@ func TestAssigneeBackfill_MaterializesMemberRowFromAssignedEvent(t *testing.T) {
 	require.NoError(t, s.AddMember(ctx, "T3", "u-existing", model.MemberRoleAssignee))
 	require.NoError(t, s.AppendTaskEvent(ctx, model.TaskEvent{
 		ID: "E3", TaskID: "T3", ActorID: "u-actor",
-		EventType: model.EventAssigned, ToValue: new("u-a3"), CreatedAt: 1_000,
+		EventType: model.EventAssigned, ToValue: ptr("u-a3"), CreatedAt: 1_000,
 	}))
 
 	// Re-execute the literal 000009 migration SQL against the seeded bad data
