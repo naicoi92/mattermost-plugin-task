@@ -215,4 +215,13 @@ describe('COMMENT_REV_BUMP (Task 6 — comment refetch signal)', () => {
         expect(state.commentRev.A).toBe(5);
         expect(state.commentRev.B).toBe(100);
     });
+
+    test('a seq-less (local optimistic) bump advances commentRev from a real default, not -Infinity', () => {
+        // Regression: the seed was -Infinity, so seq-less bumps computed
+        // -Infinity + 1 = -Infinity and never advanced.
+        const s1 = reducer(undefined, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T'});
+        expect(s1.commentRev.T).toBe(1);
+        const s2 = reducer(s1, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T'});
+        expect(s2.commentRev.T).toBe(2);
+    });
 });

@@ -161,16 +161,12 @@ export default function reducer(
             ...state,
             tasks: {...state.tasks, [action.task.id]: action.task},
             selectedTask:
-                    state.selectedTaskID === action.task.id ?
-                        action.task :
-                        state.selectedTask,
+                    state.selectedTaskID === action.task.id ? action.task : state.selectedTask,
             lastSeq:
-                    action.seq === undefined ?
-                        state.lastSeq :
-                        {
-                            ...state.lastSeq,
-                            [action.task.id]: action.seq,
-                        },
+                    action.seq === undefined ? state.lastSeq : {
+                        ...state.lastSeq,
+                        [action.task.id]: action.seq,
+                    },
         };
     case ACTION_TYPES.DELETE_TASK: {
         const id = action.taskID ?? '';
@@ -231,7 +227,7 @@ export default function reducer(
         if (!id) {
             return state;
         }
-        const seen = state.commentRev[id] ?? -Infinity;
+        const seen = state.commentRev[id] ?? 0;
         if (action.seq !== undefined && action.seq <= seen) {
             return state;
         }

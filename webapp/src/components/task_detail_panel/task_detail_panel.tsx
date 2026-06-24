@@ -186,15 +186,16 @@ export default function TaskDetailPanel({
     const pendingRef = useRef<boolean>(false);
     useEffect(() => {
         if (!taskID) {
-            return;
+            return undefined;
         }
 
         // If a refetch is already in flight, coalesce: remember to re-run once it
         // settles instead of starting a parallel duplicate fetch (AC3 dedupe).
         if (inflightRef.current) {
             pendingRef.current = true;
-            return;
+            return undefined;
         }
+        const controller = new AbortController();
         const run = async () => {
             try {
                 // Refetch comments AND activity events so the merged feed stays
@@ -203,9 +204,16 @@ export default function TaskDetailPanel({
                     client.listComments(taskID),
                     client.listTaskEvents(taskID),
                 ]);
+                if (controller.signal.aborted) {
+                    return;
+                }
                 setComments(coms ?? []);
                 setEvents(evs ?? []);
             } catch (err) {
+                if (controller.signal.aborted) {
+                    return;
+                }
+
                 // A refetch failure is non-fatal here; the next bump retries.
                 setError(messageFor(err));
             } finally {
@@ -213,14 +221,16 @@ export default function TaskDetailPanel({
                 if (pendingRef.current) {
                     pendingRef.current = false;
 
-                    // Re-run once after settling. Reuse the same effect body by
-                    // dispatching a no-op state tick via setComments identity is
-                    // not possible without a value change, so call run again.
-                    run();
+                    // Re-run once after settling. Reassign inflightRef so the
+                    // dedupe guard keeps covering the rerun (AC3).
+                    inflightRef.current = run();
                 }
             }
         };
         inflightRef.current = run();
+        return () => {
+            controller.abort();
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [taskID, commentRevForTask]);
 
@@ -535,9 +545,7 @@ export default function TaskDetailPanel({
                     disabled={!currentChannelID}
                     aria-label={t('webapp.task.share.button')}
                     title={
-                        currentChannelID ?
-                            t('webapp.task.share.button') :
-                            t('webapp.task.share.no_channel')
+                        currentChannelID ? t('webapp.task.share.button') : t('webapp.task.share.no_channel')
                     }
                 >
                     <ShareIcon/>
@@ -705,13 +713,11 @@ export default function TaskDetailPanel({
                                 tabIndex={0}
                             >
                                 <CalendarIcon/>
-                                {full.due ?
-                                    formatDueRelative({
-                                        dueMs: full.due,
-                                        locale,
-                                        isOverdue: isOverdue(full),
-                                    }) :
-                                    t('webapp.task.due.pick')}
+                                {full.due ? formatDueRelative({
+                                    dueMs: full.due,
+                                    locale,
+                                    isOverdue: isOverdue(full),
+                                }) : t('webapp.task.due.pick')}
                             </span>
                         )}
                     </div>
@@ -924,17 +930,11 @@ export default function TaskDetailPanel({
                         const isComment = item.kind === 'comment';
                         const c = item.comment;
                         const ev = item.event;
-                        const actorID = isComment ?
-                            (c?.author_id ?? '') :
-                            (ev?.actor_id ?? '');
-                        const label = isComment ?
-                            commentAuthorLabel(c as Comment, actorLabels) :
-                            actorLabels[actorID] || actorID || '?';
+                        const actorID = isComment ? (c?.author_id ?? '') : (ev?.actor_id ?? '');
+                        const label = isComment ? commentAuthorLabel(c as Comment, actorLabels) : actorLabels[actorID] || actorID || '?';
                         const initials =
 							label.replace(/^@/, '').trim().slice(0, 2).toUpperCase() || '?';
-                        const actionLabel = isComment ?
-                            t(activityLabelKey('commented')) :
-                            t(activityLabelKey(ev?.event_type ?? ''));
+                        const actionLabel = isComment ? t(activityLabelKey('commented')) : t(activityLabelKey(ev?.event_type ?? ''));
                         const statusClass = actorStatusClass(actorStatuses[actorID]);
                         return (
                             <li

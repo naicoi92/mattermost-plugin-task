@@ -362,26 +362,6 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 		return model.TaskComment{}, CommentEvent{}, err
 	}
 
-	// Idempotent: post-as-human means the MessageHasBeenPosted hook links the
-	// same post_id (it no longer skips the post because the author is human, not
-	// the bot). Whichever caller wins the race inserts the row + event; the
-	// loser finds the existing mapping and returns it WITHOUT appending a
-	// duplicate EventCommented. Without this guard, the second link violates
-	// uq_comments_post (UNIQUE post_id) and the comment card renders empty.
-	if existing, err := s.store.GetCommentByPostID(ctx, postID); err == nil {
-		creatorID, _ := s.store.GetMemberByRole(ctx, taskID, model.MemberRoleCreator)
-		assigneeID, _ := s.store.GetMemberByRole(ctx, taskID, model.MemberRoleAssignee)
-		return existing, CommentEvent{
-			TaskID:     existing.TaskID,
-			CommentID:  existing.ID,
-			AuthorID:   existing.AuthorID,
-			CreatorID:  creatorID,
-			AssigneeID: assigneeID,
-		}, nil
-	} else if !errors.Is(err, store.ErrCommentNotFound) {
-		return model.TaskComment{}, CommentEvent{}, errors.Wrap(err, "link comment: check existing")
-	}
-
 	now := nowFunc()
 	commentID := taskutil.GenerateULID()
 
@@ -389,6 +369,16 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 	defer txCancel()
 	var c model.TaskComment
 	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
+		// Atomic check-and-insert under the same tx so two concurrent callers
+		// can't both miss the pre-check and race to the UNIQUE(post_id) insert:
+		// the loser now sees the row the winner committed inside this tx and
+		// returns it instead of erroring on uq_comments_post.
+		if existing, err := tx.GetCommentByPostID(txCtx, postID); err == nil {
+			c = existing
+			return nil // already linked; skip the duplicate event append below
+		} else if !errors.Is(err, store.ErrCommentNotFound) {
+			return errors.Wrap(err, "link comment: check existing")
+		}
 		var lErr error
 		c, lErr = tx.LinkComment(txCtx, commentID, taskID, postID, userID, now)
 		if lErr != nil {
