@@ -1,12 +1,12 @@
-// Package permission centralizes the task authorization rules.
+// package permission centralizes the task authorization rules.
 //
 // The model treats the creator and the assignee as co-owners who can modify,
 // change status, reassign, add subtasks/reminders and comment. Only the
-// creator may delete. Personal tasks (no ChannelID) are visible only to
-// creator and assignee; channel-scoped tasks are additionally visible (and
-// commentable) to any member of the home channel or a card channel. There is
-// no "channel admin" actor for tasks — Mattermost channel admins are treated
-// like ordinary channel members.
+// creator may delete. A task with a channel surface (a non-empty ChannelID or
+// a tracked card post) is readable by anyone — its card is already visible in
+// the channel; only a personal task (no ChannelID and no card) is restricted
+// to creator + assignee. There is no "channel admin" actor for tasks —
+// Mattermost channel admins are treated like ordinary channel members.
 //
 // Every command, REST handler and card-action handler must go through these
 // helpers rather than scattering ad-hoc membership checks, so the rules stay
@@ -50,35 +50,33 @@ func CanUserDeleteTask(userID string, task *model.Task) bool {
 }
 
 // CanUserViewTask reports whether userID may view the task. The creator and
-// assignee can always view. For channel-scoped tasks every channel member may
-// view; a member of ANY channel that holds one of the task's card posts
-// (channel card, DM card, OR a shared card in another channel) may also view —
-// consistent with "if you can read the card thread, you can see the task".
+// assignee can always view. A task with a channel surface — a non-empty
+// task.ChannelID (the home channel) or any tracked card post (cardChannelIDs)
+// — is treated as readable: its card is already visible in the channel, so
+// anyone who can see the card can see the task details. This deliberately does
+// NOT consult channel membership: GetChannelMember can flap on transient
+// failures (cache miss, slow load) and would surface as a spurious 403, the
+// same reason listTasks does not pre-gate. Only a personal task (no ChannelID
+// AND no card post) is restricted to creator + assignee.
+//
 // cardChannelIDs is the set of channel ids holding the task's card posts,
-// resolved by the caller (REST/command layer) from task_posts; the union of
-// task.ChannelID + cardChannelIDs is checked for membership. This keeps the
-// package free of pluginapi (the caller does the post→channel resolution).
-func CanUserViewTask(userID string, task *model.Task, cardChannelIDs []string, channels ChannelMembershipChecker) bool {
+// resolved by the caller (REST/command layer) from task_posts; it is the only
+// signal this package uses for channel surface, keeping the package free of
+// pluginapi (the caller does the post→channel resolution).
+func CanUserViewTask(userID string, task *model.Task, cardChannelIDs []string, _ ChannelMembershipChecker) bool {
 	if userID == "" || task == nil {
 		return false
 	}
 	if userID == task.CreatorID || userID == task.AssigneeID {
 		return true
 	}
-	// Personal tasks are private to creator + assignee.
-	if task.ChannelID == "" && len(cardChannelIDs) == 0 {
-		return false
-	}
-	if channels == nil {
-		return false
-	}
-	// Channel-scoped tasks are visible to any member of the home channel OR any
-	// channel holding a card post (channel card / DM card / shared card).
-	if task.ChannelID != "" && channels.IsChannelMember(userID, task.ChannelID) {
+	// A task with a channel surface is readable (its card is already public in
+	// the channel). Only a personal task with no channel and no card is private.
+	if task.ChannelID != "" {
 		return true
 	}
 	for _, cid := range cardChannelIDs {
-		if cid != "" && channels.IsChannelMember(userID, cid) {
+		if cid != "" {
 			return true
 		}
 	}

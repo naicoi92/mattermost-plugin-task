@@ -1409,10 +1409,12 @@ func TestListComments_SharedChannelMemberAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "member of a shared card channel may list comments; body=%s", w.Body.String())
 }
 
-// TestListComments_OutsiderStillForbidden (Change C non-regression): a user who
-// is a member of NEITHER the home channel NOR any card channel is still denied
-// 403 — the card-channel expansion does not open the task to everyone.
-func TestListComments_OutsiderStillForbidden(t *testing.T) {
+// TestListComments_ChannelTaskReadableByOutsider (behavior change): a task
+// with a channel surface (ChannelID != "" or a tracked card post) is now
+// readable by anyone — its card is already public in the channel, so view no
+// longer gates on channel membership. An outsider (member of no channel) may
+// list comments on such a task.
+func TestListComments_ChannelTaskReadableByOutsider(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
 	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
@@ -1423,10 +1425,12 @@ func TestListComments_OutsiderStillForbidden(t *testing.T) {
 	})
 	// outsider is not a member of any channel: every lookup is a non-member.
 	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(nil, &mmmodel.AppError{}).Maybe()
+	// listComments content resolution: no thread needed.
+	api.On("GetPostThread", mock.Anything).Return(&mmmodel.PostList{Posts: map[string]*mmmodel.Post{}}, nil).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "outsider"))
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-member of home AND card channels is denied")
+	assert.Equal(t, http.StatusOK, w.Code, "channel-surfaced task is readable by anyone")
 }
 
 // --- Permission enforcement (task-permissions-review) ---
@@ -1556,7 +1560,11 @@ func TestGetTask_PersonalTaskHiddenFromOthers(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code, "personal task hidden from non creator/assignee")
 }
 
-func TestGetTask_ForbiddenForOutsider(t *testing.T) {
+// Behavior change: a channel-surfaced task (ChannelID != "") is now readable
+// by anyone — its card is already public in the channel, so view does not gate
+// on channel membership. An outsider (not a member of any channel) may view it.
+// Only a personal task (no ChannelID, no card) is restricted.
+func TestGetTask_ChannelTaskReadableByOutsider(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 
@@ -1565,7 +1573,7 @@ func TestGetTask_ForbiddenForOutsider(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, "", "outsider"))
-	assert.Equal(t, http.StatusForbidden, w.Code, "outsider cannot view channel task")
+	assert.Equal(t, http.StatusOK, w.Code, "channel task readable by anyone")
 }
 
 func TestGetTask_AllowedForChannelMember(t *testing.T) {
@@ -1580,7 +1588,8 @@ func TestGetTask_AllowedForChannelMember(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "channel member can view channel task")
 }
 
-func TestListSubtasks_ForbiddenForOutsider(t *testing.T) {
+// Channel-surfaced task: subtasks are listable by anyone (card is public).
+func TestListSubtasks_ChannelTaskReadableByOutsider(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 
@@ -1589,7 +1598,7 @@ func TestListSubtasks_ForbiddenForOutsider(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/subtasks", "", "outsider"))
-	assert.Equal(t, http.StatusForbidden, w.Code, "outsider cannot list subtasks")
+	assert.Equal(t, http.StatusOK, w.Code, "channel task subtasks listable by anyone")
 }
 
 // Card-action buttons (status/priority) must also respect the manage rule.

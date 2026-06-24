@@ -402,10 +402,10 @@ GET    /me/tasks                       My Tasks (alias /tasks?scope=mine)
 
 **Multi-assignee (MVP):** ❌ KHÔNG dùng — **chỉ 1 assignee/task** (đơn giản hóa, theo review). Multi-assignee + `completion_mode` (or-sign/countersign của Lark) **hoãn** (Vượt MVP). Khi hoãn, `done` rõ ràng = assignee duy nhất đánh dấu xong.
 
-**Quy tắc visibility (theo ChannelID):**
+**Quy tắc visibility (theo channel surface):**
 
-- `ChannelID != ""` → **mọi thành viên kênh** xem được task.
-- `ChannelID == ""` (personal) → **chỉ creator + assignee** xem được (`/task show` của người khác sẽ bị từ chối).
+- **Channel-surfaced task** (`ChannelID != ""` HOẶC có card post) → **bất kỳ ai cũng xem được** (card đã public trong kênh; view KHÔNG gate trên channel membership vì `GetChannelMember` có thể flake gây 403 giả). Khớp với `listTasks` (đã không pre-gate từ trước).
+- **Personal task** (`ChannelID == ""` VÀ không card) → **chỉ creator + assignee** xem được (`/task show` của người khác sẽ bị từ chối).
 
 ### 5.5 Subtask — ngữ nghĩa & hiển thị trong “My Tasks”
 

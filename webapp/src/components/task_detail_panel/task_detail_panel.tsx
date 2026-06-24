@@ -143,13 +143,28 @@ export default function TaskDetailPanel({
                 return;
             }
             try {
-                const [detail, subs, coms, evs] = await Promise.all([
+                // allSettled: a single sub-request failure (e.g. a transient
+                // 403 on one slice) must not blank the whole panel. We render
+                // whatever succeeded and surface the first rejection as the
+                // error. This keeps the task visible even when comments/events
+                // briefly fail.
+                const results = await Promise.allSettled([
                     client.getTask(taskID),
                     client.listSubtasks(taskID),
                     client.listComments(taskID),
                     client.listTaskEvents(taskID),
                 ]);
                 if (cancelled) {
+                    return;
+                }
+                const detail = results[0].status === 'fulfilled' ? results[0].value : undefined;
+                const subs = results[1].status === 'fulfilled' ? results[1].value : undefined;
+                const coms = results[2].status === 'fulfilled' ? results[2].value : undefined;
+                const evs = results[3].status === 'fulfilled' ? results[3].value : undefined;
+                if (!detail) {
+                    // The task itself failed to load — surface the reason.
+                    const r = results[0] as PromiseRejectedResult;
+                    setError(messageFor(r.reason));
                     return;
                 }
                 setFull(detail);
@@ -198,15 +213,18 @@ export default function TaskDetailPanel({
         const controller = new AbortController();
         const run = async () => {
             try {
-                // Refetch comments AND activity events so the merged feed stays
-                // consistent (a new comment also appends a commented event).
-                const [coms, evs] = await Promise.all([
+                // allSettled: a comment/events refetch failure is non-fatal
+                // (handled below). Use allSettled so a failing slice does not
+                // discard a succeeding one.
+                const results = await Promise.allSettled([
                     client.listComments(taskID),
                     client.listTaskEvents(taskID),
                 ]);
                 if (controller.signal.aborted) {
                     return;
                 }
+                const coms = results[0].status === 'fulfilled' ? results[0].value : undefined;
+                const evs = results[1].status === 'fulfilled' ? results[1].value : undefined;
                 setComments(coms ?? []);
                 setEvents(evs ?? []);
             } catch (err) {
@@ -545,9 +563,7 @@ export default function TaskDetailPanel({
                     disabled={!currentChannelID}
                     aria-label={t('webapp.task.share.button')}
                     title={
-                        currentChannelID ?
-                            t('webapp.task.share.button') :
-                            t('webapp.task.share.no_channel')
+                        currentChannelID ? t('webapp.task.share.button') : t('webapp.task.share.no_channel')
                     }
                 >
                     <ShareIcon/>
@@ -715,13 +731,11 @@ export default function TaskDetailPanel({
                                 tabIndex={0}
                             >
                                 <CalendarIcon/>
-                                {full.due ?
-                                    formatDueRelative({
-                                        dueMs: full.due,
-                                        locale,
-                                        isOverdue: isOverdue(full),
-                                    }) :
-                                    t('webapp.task.due.pick')}
+                                {full.due ? formatDueRelative({
+                                    dueMs: full.due,
+                                    locale,
+                                    isOverdue: isOverdue(full),
+                                }) : t('webapp.task.due.pick')}
                             </span>
                         )}
                     </div>
@@ -934,17 +948,11 @@ export default function TaskDetailPanel({
                         const isComment = item.kind === 'comment';
                         const c = item.comment;
                         const ev = item.event;
-                        const actorID = isComment ?
-                            (c?.author_id ?? '') :
-                            (ev?.actor_id ?? '');
-                        const label = isComment ?
-                            commentAuthorLabel(c as Comment, actorLabels) :
-                            actorLabels[actorID] || actorID || '?';
+                        const actorID = isComment ? (c?.author_id ?? '') : (ev?.actor_id ?? '');
+                        const label = isComment ? commentAuthorLabel(c as Comment, actorLabels) : actorLabels[actorID] || actorID || '?';
                         const initials =
 							label.replace(/^@/, '').trim().slice(0, 2).toUpperCase() || '?';
-                        const actionLabel = isComment ?
-                            t(activityLabelKey('commented')) :
-                            t(activityLabelKey(ev?.event_type ?? ''));
+                        const actionLabel = isComment ? t(activityLabelKey('commented')) : t(activityLabelKey(ev?.event_type ?? ''));
                         const statusClass = actorStatusClass(actorStatuses[actorID]);
                         return (
                             <li
