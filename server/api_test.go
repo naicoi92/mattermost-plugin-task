@@ -45,7 +45,7 @@ func newTestPlugin(t *testing.T) (*Plugin, store.Store) {
 	}
 	// LogError is variadic in usage (handlers pass message + N key/value
 	// pairs). Register per-arity stubs so any call is tolerated.
-	for n := 1; n <= 9; n++ {
+	for n := 1; n <= 15; n++ {
 		args := make([]any, n)
 		for i := range args {
 			args[i] = mock.Anything
