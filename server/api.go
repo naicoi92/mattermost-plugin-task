@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -890,9 +891,7 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if thread != nil {
-			for id, post := range thread.Posts {
-				posts[id] = post
-			}
+			maps.Copy(posts, thread.Posts)
 		}
 	}
 	if len(posts) == 0 {
