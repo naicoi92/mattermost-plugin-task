@@ -362,6 +362,26 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 		return model.TaskComment{}, CommentEvent{}, err
 	}
 
+	// Idempotent: post-as-human means the MessageHasBeenPosted hook links the
+	// same post_id (it no longer skips the post because the author is human, not
+	// the bot). Whichever caller wins the race inserts the row + event; the
+	// loser finds the existing mapping and returns it WITHOUT appending a
+	// duplicate EventCommented. Without this guard, the second link violates
+	// uq_comments_post (UNIQUE post_id) and the comment card renders empty.
+	if existing, err := s.store.GetCommentByPostID(ctx, postID); err == nil {
+		creatorID, _ := s.store.GetMemberByRole(ctx, taskID, model.MemberRoleCreator)
+		assigneeID, _ := s.store.GetMemberByRole(ctx, taskID, model.MemberRoleAssignee)
+		return existing, CommentEvent{
+			TaskID:     existing.TaskID,
+			CommentID:  existing.ID,
+			AuthorID:   existing.AuthorID,
+			CreatorID:  creatorID,
+			AssigneeID: assigneeID,
+		}, nil
+	} else if !errors.Is(err, store.ErrCommentNotFound) {
+		return model.TaskComment{}, CommentEvent{}, errors.Wrap(err, "link comment: check existing")
+	}
+
 	now := nowFunc()
 	commentID := taskutil.GenerateULID()
 
@@ -383,7 +403,7 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 			ActorID:   userID,
 			EventType: model.EventCommented,
 			CreatedAt: now,
-			ToValue:   ptrString(commentID),
+			ToValue:   new(commentID),
 		})
 	}); err != nil {
 		return model.TaskComment{}, CommentEvent{}, err
@@ -460,7 +480,7 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 			ActorID:   creatorID,
 			EventType: model.EventSubtaskAdded,
 			CreatedAt: now,
-			ToValue:   ptrString(created.ID),
+			ToValue:   new(created.ID),
 		})
 	}); err != nil {
 		s.logUnexpected("failed to record subtask_added event / touch parent", err)
@@ -578,8 +598,8 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 			ActorID:   actorID,
 			EventType: model.EventStatusChanged,
 			CreatedAt: now,
-			FromValue: ptrString(oldStatus),
-			ToValue:   ptrString(newStatus),
+			FromValue: new(oldStatus),
+			ToValue:   new(newStatus),
 		})
 	}); err != nil {
 		return nil, err
@@ -702,7 +722,7 @@ func (s *Service) SetReminder(actorID, id string, offsetMS int64) (*model.Task, 
 			ActorID:   actorID,
 			EventType: model.EventReminderSet,
 			CreatedAt: now,
-			ToValue:   ptrString(strconv.FormatInt(offsetMS, 10)),
+			ToValue:   new(strconv.FormatInt(offsetMS, 10)),
 		})
 	}); err != nil {
 		return nil, err
@@ -933,7 +953,10 @@ func derefBool(p *bool) bool {
 
 // ptrString returns a pointer to s; used for TaskEvent.FromValue/ToValue which
 // are *string.
-func ptrString(s string) *string { return &s }
+//
+//go:fix inline
+//go:fix inline
+func ptrString(s string) *string { return new(s) }
 
 // ErrNotFound is returned by Get/Patch/Delete when the task id does not exist.
 var ErrNotFound = errors.New("task not found")
@@ -1024,8 +1047,8 @@ func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, Assign
 			ActorID:   actorID,
 			EventType: eventType,
 			CreatedAt: now,
-			FromValue: ptrString(oldAssigneeID),
-			ToValue:   ptrString(newAssigneeID),
+			FromValue: new(oldAssigneeID),
+			ToValue:   new(newAssigneeID),
 		})
 	}); err != nil {
 		return nil, AssignEvent{}, err

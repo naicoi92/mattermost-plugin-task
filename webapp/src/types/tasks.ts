@@ -53,13 +53,52 @@ export interface Task {
 	updated_at: number;
 }
 
-// Comment mirrors server/model/comment.Comment.
+// Comment mirrors the server listComments transport response (server/api.go
+// commentResponse): the DB row fields plus content (resolved from the backing
+// post.Message) and a deleted flag for out-of-band deleted posts. The server
+// is the single source of truth for these fields; the webapp does not send
+// user_id/updated_at (dropped — the server no longer emits them).
 export interface Comment {
 	id: string;
-	user_id: string;
-	content: string;
+	task_id: string;
+	post_id: string;
+	author_id: string; // was user_id; the row snapshot, not re-derived from the post
 	created_at: number;
-	updated_at: number;
+	content: string; // from post.Message (single source of truth, Hướng A)
+	deleted: boolean; // true when the backing post was deleted out-of-band
+}
+
+// TaskEventType mirrors the Event* constants in server/model/task_event.go.
+// The Activity feed label map (webapp.task.activity.label.*) covers every
+// value here; an unknown type must not render an English/empty string.
+export const TaskEventType = {
+	Created: "created",
+	StatusChanged: "status_changed",
+	Assigned: "assigned",
+	Unassigned: "unassigned",
+	DueChanged: "due_changed",
+	SummaryChanged: "summary_changed",
+	DescriptionChanged: "description_changed",
+	PriorityChanged: "priority_changed",
+	ReminderSet: "reminder_set",
+	ReminderFired: "reminder_fired",
+	ReminderCleared: "reminder_cleared",
+	Commented: "commented",
+	SubtaskAdded: "subtask_added",
+	Deleted: "deleted",
+} as const;
+export type TaskEventType = (typeof TaskEventType)[keyof typeof TaskEventType];
+
+// TaskEvent mirrors server/model/task_event.go: one row of the task audit trail.
+// FromValue/ToValue are JSON snapshots (absent when nil on the server).
+export interface TaskEvent {
+	id: string;
+	task_id: string;
+	actor_id: string;
+	event_type: string;
+	from_value?: string;
+	to_value?: string;
+	created_at: number;
 }
 
 // ListScope enumerates the Quick List result scopes, matching task.Scope. Two
@@ -141,9 +180,12 @@ export interface CreateSubtaskInput {
 }
 
 // CreateCommentInput is the JSON body for POST /tasks/:id/comments. Matches
-// server createCommentRequest.
+// server createCommentRequest. channel_id is the channel the viewer is acting
+// from so the comment threads under the task's card IN that channel (Change B
+// shared-task fix); omitted for contexts with no active channel.
 export interface CreateCommentInput {
 	content: string;
+	channel_id?: string;
 }
 
 // SetReminderInput is the JSON body for POST /tasks/:id/reminder. Matches

@@ -27,6 +27,7 @@ import type {
 	SetReminderInput,
 	ShareTaskResult,
 	Task,
+	TaskEvent,
 	TaskStatus,
 } from "types/tasks";
 
@@ -258,6 +259,23 @@ export function listComments(taskID: string): Promise<Comment[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Activity / task events (server/api.go: GET /tasks/:id/events)
+// ---------------------------------------------------------------------------
+
+// listTaskEvents fetches a task's audit trail (newest-first), permission-gated
+// by the view rule. The optional limit caps the page (server default 50). Used
+// by the Task Details Activity feed to interleave events with comments.
+export function listTaskEvents(
+	taskID: string,
+	limit?: number,
+): Promise<TaskEvent[]> {
+	const qs = limit ? `?limit=${encodeURIComponent(limit)}` : "";
+	return doFetch<TaskEvent[]>(
+		`/tasks/${encodeURIComponent(taskID)}/events${qs}`,
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Sharing (server/api.go: POST /tasks/:id/share)
 // ---------------------------------------------------------------------------
 
@@ -352,6 +370,38 @@ export async function getUser(userID: string): Promise<User> {
 	return JSON.parse(await res.text()) as User;
 }
 
+// UserStatus is the minimal slice of the host presence response
+// (GET /api/v4/users/<id>/status): `status` is one of
+// online/away/dnd/offline. The Activity feed's avatar status dot is driven
+// from this (AC5/AC6, task-details-panel styling — data-driven, not a
+// hardcoded offline default).
+export interface UserStatus {
+	user_id: string;
+	status: string;
+}
+
+// getUserStatus resolves a user's presence status via the host REST API
+// (GET /api/v4/users/<id>/status). Throws ClientError on a non-2xx reply.
+// Used by useResolvedStatuses to drive the Activity avatar status-dot
+// modifier class (online/away/dnd/offline).
+export async function getUserStatus(userID: string): Promise<UserStatus> {
+	const url = `/api/v4/users/${encodeURIComponent(userID)}/status`;
+	const res = await fetch(url, Client4.getOptions({}));
+	if (!res.ok) {
+		let message = "";
+		try {
+			message = (await res.text()).trim();
+		} catch {
+			message = "";
+		}
+		throw new ClientError(
+			res.status,
+			message || res.statusText || "request failed",
+		);
+	}
+	return JSON.parse(await res.text()) as UserStatus;
+}
+
 // UserSearchResult is the minimal slice of model.User the listing endpoints
 // return. Kept compatible with getUserByUsername's User (id + username) but
 // also carries the display name for richer picker rows.
@@ -423,9 +473,11 @@ export default {
 	listSubtasks,
 	createComment,
 	listComments,
+	listTaskEvents,
 	shareTask,
 	setTaskOrder,
 	getUserByUsername,
 	getUser,
+	getUserStatus,
 	searchUsers,
 };

@@ -189,6 +189,11 @@ type Store interface {
 	DeletePost(ctx context.Context, postID string) error
 
 	// --- Comments (M2-5) ---
+	// GetCommentByPostID returns the comment mapping row whose post_id matches,
+	// or store.ErrCommentNotFound when none exists. Used to make comment linking
+	// idempotent (post-as-human means a REST-created comment and the
+	// MessageHasBeenPosted hook both try to link the same post_id).
+	GetCommentByPostID(ctx context.Context, postID string) (model.TaskComment, error)
 	LinkComment(ctx context.Context, id, taskID, postID, authorID string, createdAt int64) (model.TaskComment, error)
 	ListComments(ctx context.Context, taskID string) ([]model.TaskComment, error)
 	CountComments(ctx context.Context, taskID string) (int, error)

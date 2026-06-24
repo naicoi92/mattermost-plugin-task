@@ -58,8 +58,14 @@ func CanUserDeleteTask(userID string, task *model.Task, channels ChannelMembersh
 
 // CanUserViewTask reports whether userID may view the task. The creator and
 // assignee can always view. For channel-scoped tasks every channel member may
-// view; for personal tasks (ChannelID == "") nobody else may view.
-func CanUserViewTask(userID string, task *model.Task, channels ChannelMembershipChecker) bool {
+// view; a member of ANY channel that holds one of the task's card posts
+// (channel card, DM card, OR a shared card in another channel) may also view —
+// consistent with "if you can read the card thread, you can see the task".
+// cardChannelIDs is the set of channel ids holding the task's card posts,
+// resolved by the caller (REST/command layer) from task_posts; the union of
+// task.ChannelID + cardChannelIDs is checked for membership. This keeps the
+// package free of pluginapi (the caller does the post→channel resolution).
+func CanUserViewTask(userID string, task *model.Task, cardChannelIDs []string, channels ChannelMembershipChecker) bool {
 	if userID == "" || task == nil {
 		return false
 	}
@@ -67,15 +73,27 @@ func CanUserViewTask(userID string, task *model.Task, channels ChannelMembership
 		return true
 	}
 	// Personal tasks are private to creator + assignee.
-	if task.ChannelID == "" {
+	if task.ChannelID == "" && len(cardChannelIDs) == 0 {
 		return false
 	}
-	// Channel-scoped tasks are visible to any channel member.
-	return channels != nil && channels.IsChannelMember(userID, task.ChannelID)
+	if channels == nil {
+		return false
+	}
+	// Channel-scoped tasks are visible to any member of the home channel OR any
+	// channel holding a card post (channel card / DM card / shared card).
+	if task.ChannelID != "" && channels.IsChannelMember(userID, task.ChannelID) {
+		return true
+	}
+	for _, cid := range cardChannelIDs {
+		if cid != "" && channels.IsChannelMember(userID, cid) {
+			return true
+		}
+	}
+	return false
 }
 
 // CanUserCommentTask reports whether userID may comment on the task. Commenting
 // follows the view rule: anyone who can view the task may comment on it.
-func CanUserCommentTask(userID string, task *model.Task, channels ChannelMembershipChecker) bool {
-	return CanUserViewTask(userID, task, channels)
+func CanUserCommentTask(userID string, task *model.Task, cardChannelIDs []string, channels ChannelMembershipChecker) bool {
+	return CanUserViewTask(userID, task, cardChannelIDs, channels)
 }

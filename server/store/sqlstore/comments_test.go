@@ -57,6 +57,28 @@ func TestLinkComment_PostIDUnique(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGetCommentByPostID_ReturnsMapping(t *testing.T) {
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+	mustLink(t, s, ctx, "C1", "T1", "post1", "u1", 1_700_000_000_000)
+
+	got, err := s.GetCommentByPostID(ctx, "post1")
+	require.NoError(t, err)
+	assert.Equal(t, "C1", got.ID)
+	assert.Equal(t, "T1", got.TaskID)
+	assert.Equal(t, "u1", got.AuthorID)
+}
+
+func TestGetCommentByPostID_NotFound(t *testing.T) {
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1"))
+
+	_, err := s.GetCommentByPostID(ctx, "missing")
+	require.ErrorIs(t, err, store.ErrCommentNotFound)
+}
+
 func TestListComments_ChronologicalOrder(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()

@@ -293,6 +293,29 @@ describe("subtask and comment endpoints", () => {
 		await listComments("t1");
 		expect(capturedUrl).toBe(`${PLUGIN_API_BASE_URL}/tasks/t1/comments`);
 	});
+
+	test("listTaskEvents GETs under the task and forwards limit", async () => {
+		let capturedUrl = "";
+		mockFetch((url) => {
+			capturedUrl = url;
+			return okResponse([{ id: "e1" }]);
+		});
+		const { listTaskEvents } = await importClient();
+		const events = await listTaskEvents("T", 10);
+		expect(capturedUrl).toBe(`${PLUGIN_API_BASE_URL}/tasks/T/events?limit=10`);
+		expect(events).toEqual([{ id: "e1" }]);
+	});
+
+	test("listTaskEvents omits the query when no limit is given", async () => {
+		let capturedUrl = "";
+		mockFetch((url) => {
+			capturedUrl = url;
+			return okResponse([]);
+		});
+		const { listTaskEvents } = await importClient();
+		await listTaskEvents("T");
+		expect(capturedUrl).toBe(`${PLUGIN_API_BASE_URL}/tasks/T/events`);
+	});
 });
 
 describe("share endpoint", () => {

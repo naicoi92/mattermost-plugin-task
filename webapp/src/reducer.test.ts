@@ -188,3 +188,31 @@ describe('stale-event drop (seq/updated_at, #32)', () => {
         expect(summaryOf(state.tasks['1'])).toBe('upd');
     });
 });
+
+describe('COMMENT_REV_BUMP (Task 6 — comment refetch signal)', () => {
+    test('bumps commentRev for the task on a fresh seq', () => {
+        const state = reducer(undefined, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T', seq: 5});
+        expect(state.commentRev.T).toBe(5);
+    });
+
+    test('a stale seq (<= current) is ignored — commentRev unchanged', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T', seq: 5});
+        const stale = reducer(s1, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T', seq: 5});
+        expect(stale.commentRev.T).toBe(5);
+        const older = reducer(s1, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T', seq: 4});
+        expect(older.commentRev.T).toBe(5);
+    });
+
+    test('a newer seq bumps commentRev', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T', seq: 5});
+        const state = reducer(s1, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'T', seq: 7});
+        expect(state.commentRev.T).toBe(7);
+    });
+
+    test('commentRev is tracked per task independently', () => {
+        const s1 = reducer(undefined, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'A', seq: 5});
+        const state = reducer(s1, {type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: 'B', seq: 100});
+        expect(state.commentRev.A).toBe(5);
+        expect(state.commentRev.B).toBe(100);
+    });
+});

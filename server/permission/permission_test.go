@@ -96,10 +96,10 @@ func TestCanUserViewTask(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{"member1:ch1": true}}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
-	assert.True(t, CanUserViewTask("creator1", task, ch), "creator can view")
-	assert.True(t, CanUserViewTask("assignee1", task, ch), "assignee can view")
-	assert.True(t, CanUserViewTask("member1", task, ch), "channel member can view channel task")
-	assert.False(t, CanUserViewTask("outsider", task, ch), "non-member cannot view")
+	assert.True(t, CanUserViewTask("creator1", task, nil, ch), "creator can view")
+	assert.True(t, CanUserViewTask("assignee1", task, nil, ch), "assignee can view")
+	assert.True(t, CanUserViewTask("member1", task, nil, ch), "channel member can view channel task")
+	assert.False(t, CanUserViewTask("outsider", task, nil, ch), "non-member cannot view")
 }
 
 func TestCanUserViewTask_MemberIsNotAdmin(t *testing.T) {
@@ -110,22 +110,67 @@ func TestCanUserViewTask_MemberIsNotAdmin(t *testing.T) {
 		admins:  map[string]bool{},
 	}
 	task := taskFixture("creator1", "assignee1", "ch1")
-	assert.True(t, CanUserViewTask("member1", task, ch))
+	assert.True(t, CanUserViewTask("member1", task, nil, ch))
 }
 
 func TestCanUserViewTask_PersonalTask(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{"member1:": true}}
 	personal := taskFixture("creator1", "assignee1", "")
 
-	assert.True(t, CanUserViewTask("creator1", personal, ch), "creator can view personal")
-	assert.True(t, CanUserViewTask("assignee1", personal, ch), "assignee can view personal")
-	assert.False(t, CanUserViewTask("member1", personal, ch), "personal task hidden from others")
+	assert.True(t, CanUserViewTask("creator1", personal, nil, ch), "creator can view personal")
+	assert.True(t, CanUserViewTask("assignee1", personal, nil, ch), "assignee can view personal")
+	assert.False(t, CanUserViewTask("member1", personal, nil, ch), "personal task hidden from others")
 }
 
 func TestCanUserCommentTask_FollowsView(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{"member1:ch1": true}}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
-	assert.True(t, CanUserCommentTask("member1", task, ch), "viewers may comment")
-	assert.False(t, CanUserCommentTask("outsider", task, ch), "non-viewers cannot comment")
+	assert.True(t, CanUserCommentTask("member1", task, nil, ch), "viewers may comment")
+	assert.False(t, CanUserCommentTask("outsider", task, nil, ch), "non-viewers cannot comment")
+}
+
+// Change C: a shared task's card lives in a channel OTHER than task.ChannelID.
+// A member of that shared channel (who is NOT a member of task.ChannelID) must
+// still be able to view AND comment — consistent with "they can read the card
+// thread, they can reply". The rule checks IsChannelMember against the union of
+// task.ChannelID + the card-channel ids passed by the caller (resolved from
+// task_posts).
+func TestCanUserViewTask_SharedChannelMemberAllowed(t *testing.T) {
+	// Home channel ch-home; share card in ch-shared. sharer is a member of
+	// ch-shared ONLY (not ch-home).
+	ch := fakeMembershipChecker{members: map[string]bool{
+		"sharer:ch-shared":    true,
+		"member-home:ch-home": true,
+	}}
+	// task.ChannelID == ch-home; card also lives in ch-shared.
+	task := taskFixture("creator1", "assignee1", "ch-home")
+	cardChannels := []string{"ch-shared"}
+
+	assert.True(t, CanUserViewTask("sharer", task, cardChannels, ch),
+		"member of a shared card channel may view")
+	assert.True(t, CanUserViewTask("member-home", task, nil, ch),
+		"member of home channel still views via task.ChannelID")
+}
+
+func TestCanUserCommentTask_SharedChannelMemberAllowed(t *testing.T) {
+	ch := fakeMembershipChecker{members: map[string]bool{"sharer:ch-shared": true}}
+	task := taskFixture("creator1", "assignee1", "ch-home")
+	cardChannels := []string{"ch-shared"}
+
+	assert.True(t, CanUserCommentTask("sharer", task, cardChannels, ch),
+		"member of a shared card channel may comment")
+}
+
+// Non-member outsider (member of neither home nor any card channel) is still
+// denied — the card-channel expansion does not open the task to everyone.
+func TestCanUserViewTask_OutsiderStillDeniedWithCardChannels(t *testing.T) {
+	ch := fakeMembershipChecker{members: map[string]bool{
+		"sharer:ch-shared": true,
+	}}
+	task := taskFixture("creator1", "assignee1", "ch-home")
+	cardChannels := []string{"ch-shared"}
+
+	assert.False(t, CanUserViewTask("outsider", task, cardChannels, ch),
+		"non-member of home AND card channels is denied")
 }
