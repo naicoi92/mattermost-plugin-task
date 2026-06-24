@@ -5,7 +5,6 @@
   "error.permission_denied": "You do not have permission to perform this action.",
   "error.unknown_command": "Unknown command: %s",
   "error.empty_command": "Empty command.",
-
   "task.created": "Task created: %s",
   "task.updated": "Task updated: %s",
   "task.deleted": "Task deleted.",
@@ -17,20 +16,16 @@
   "task.reopened": "Task reopened: %s",
   "task.assigned": "Task assigned to %s.",
   "task.unassigned": "Task unassigned.",
-
   "reminder.set": "Reminder set for %s before due time.",
   "reminder.removed": "Reminder removed.",
-
   "comment.added": "Comment added.",
   "subtask.added": "Subtask added: %s",
-
   "notification.assigned": "You have been assigned to task **%s** by %s.",
   "notification.completed": "Task **%s** was marked as done by %s.",
   "notification.cancelled": "Task **%s** was cancelled by %s.",
   "notification.commented": "%s commented on task **%s**.",
   "notification.reminder": "Reminder: task **%s** is due soon.",
   "notification.overdue": "Overdue: task **%s** was due at %s.",
-
   "command.help.header": "Available Task commands:\n",
   "command.help.add": "`/task add \"<summary>\"` - Create a new task",
   "command.help.list": "`/task list [mine|channel|all] [status ...] [due ...]` - List and filter tasks",
@@ -46,7 +41,6 @@
   "command.help.board": "`/task board [mine|channel]` - Open the Kanban board",
   "command.help.search": "`/task search <keyword>` - Search tasks",
   "command.help.footer": "Use `/task help` to show this message again.",
-
   "webapp.task.title": "Tasks",
   "webapp.task.quicklist": "Quick List",
   "webapp.task.new": "New Task",
@@ -133,5 +127,6 @@
   "webapp.task.post.caption.assigned": "%s started a task for %s",
   "webapp.kanban.title": "Kanban board",
   "webapp.error.required": "This field is required.",
-  "webapp.error.create_failed": "Failed to create the task. Please try again."
+  "webapp.error.create_failed": "Failed to create the task. Please try again.",
+  "webapp.task.activity": "Activity"
 }
