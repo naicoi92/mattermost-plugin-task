@@ -63,6 +63,11 @@ func CanUserDeleteTask(userID string, task *model.Task) bool {
 // resolved by the caller (REST/command layer) from task_posts; it is the only
 // signal this package uses for channel surface, keeping the package free of
 // pluginapi (the caller does the post→channel resolution).
+//
+// TODO(perm): this read-path is intentionally fail-open for channel-surfaced
+// tasks because GetChannelMember flakes deterministically in our environment.
+// Revisit when we have a reliable membership signal (e.g. a cached/cluster-safe
+// membership API) to tighten view access without reintroducing spurious 403s.
 func CanUserViewTask(userID string, task *model.Task, cardChannelIDs []string, _ ChannelMembershipChecker) bool {
 	if userID == "" || task == nil {
 		return false

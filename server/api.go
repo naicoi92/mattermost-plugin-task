@@ -270,6 +270,10 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 	// caller-supplied channelID), and the per-task CanUserViewTask rule gates
 	// getTask/list-subtasks/comments/events. List-level hard enforcement is
 	// tracked separately to avoid read-path flapping.
+	//
+	// TODO(perm): revisit list-level visibility filtering once a reliable,
+	// non-flapping membership signal is available so caller-supplied channel_id
+	// alone cannot discover tasks without CanUserListTask authorization.
 
 	query := task.ListQuery{
 		Scope:         scope,
