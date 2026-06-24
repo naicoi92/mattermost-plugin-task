@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -702,7 +703,8 @@ func (p *Plugin) listSubtasks(w http.ResponseWriter, r *http.Request) {
 
 // createCommentRequest is the JSON body for POST /tasks/:id/comments.
 type createCommentRequest struct {
-	Content string `json:"content"`
+	Content   string `json:"content"`
+	ChannelID string `json:"channel_id"` // Change B: the channel the viewer is acting from, so the comment threads under the card IN that channel (shared-task fix).
 }
 
 // createComment handles POST /tasks/:id/comments. The authenticated user is the
@@ -722,7 +724,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
+	if !permission.CanUserCommentTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to comment on this task")
 		return
 	}
@@ -738,18 +740,41 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Comment-as-thread: create the reply post in the task's card thread, then
-	// link the post to the task. The post roots under the task's channel card
-	// (or DM card as fallback) so replies thread under the card.
-	rootID := t.ChannelPostID
+	// link the post to the task. Change B: for a SHARED task the comment must
+	// thread under the card post in the channel the viewer is acting from
+	// (req.ChannelID, sent by the webapp as the active channel), not the home
+	// channel card. Resolve the root from the card post living in that channel;
+	// if none is found there, fall back to the legacy home/DM-card resolution
+	// (and warn) so channel and root stay consistent.
+	rootID := ""
+	postChannel := ""
+	if req.ChannelID != "" {
+		if rp := p.cardPostInChannel(t.ID, req.ChannelID); rp != "" {
+			rootID = rp
+			postChannel = req.ChannelID
+		} else {
+			p.API.LogWarn("createComment: no task card in the requested channel; falling back to home/DM card",
+				"task_id", t.ID, "requested_channel_id", req.ChannelID)
+		}
+	}
 	if rootID == "" {
-		rootID = t.DMPostID
+		rootID = t.ChannelPostID
+		if rootID == "" {
+			rootID = t.DMPostID
+		}
+		postChannel = t.ChannelID
+		if postChannel == "" {
+			postChannel = t.AssigneeID // personal task: post in the assignee's context
+		}
 	}
-	channelID := t.ChannelID
-	if channelID == "" {
-		channelID = t.AssigneeID // personal task: post in the assignee's context
-	}
+	channelID := postChannel
 	commentPost := &mmmodel.Post{
-		UserId:    p.botUserID,
+		// Change A: the comment post is authored by the HUMAN commenter, not the
+		// bot. This fixes channel attribution (the real person appears as the
+		// sender, not task_bot). Card posts (postCard/postCardDM) STAY bot-owned;
+		// only comment posts become human-authored. AuthorID is still snapshotted
+		// on task_comments (equals post.UserId now).
+		UserId:    actorID,
 		ChannelId: channelID,
 		RootId:    rootID,
 		Message:   req.Content,
@@ -793,10 +818,27 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	p.broadcastTaskUpdated(fresh, []string{"comment"})
 }
 
-// listComments handles GET /tasks/:id/comments, returning comments sorted by
-// creation time. Access-controlled: the caller must be permitted to view the
-// task (CanUserCommentTask follows the view rule), so a personal task's thread
-// can't be read by an outsider who only knows the id.
+// commentResponse is the transport-only shape returned by listComments: the DB
+// row fields (id/task_id/post_id/author_id/created_at) plus content resolved
+// from the backing post's Message and a deleted flag for out-of-band deleted
+// posts. These extra fields are NOT persisted in task_comments (Hướng A:
+// post.Message is the single source of truth for content).
+type commentResponse struct {
+	ID        string `json:"id"`
+	TaskID    string `json:"task_id"`
+	PostID    string `json:"post_id"`
+	AuthorID  string `json:"author_id"`
+	CreatedAt int64  `json:"created_at"`
+	Content   string `json:"content"`
+	Deleted   bool   `json:"deleted"`
+}
+
+// listComments handles GET /tasks/:id/comments, returning comments newest-first
+// with content resolved from the backing thread post and a deleted flag for
+// comments whose post was removed out-of-band. Access-controlled: the caller
+// must be permitted to view the task (CanUserCommentTask follows the view
+// rule), so a personal task's thread can't be read by an outsider who only
+// knows the id.
 func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 	taskID := mux.Vars(r)["id"]
 	actorID := currentUserID(r)
@@ -810,7 +852,7 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
+	if !permission.CanUserCommentTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task's comments")
 		return
 	}
@@ -820,16 +862,73 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Enforce ordering defensively: the service returns ULID (creation) order,
-	// but this handler guarantees it regardless of the underlying contract by
-	// sorting by CreatedAt with the comment ID as a deterministic tie-breaker.
-	sort.Slice(comments, func(i, j int) bool {
-		if comments[i].CreatedAt != comments[j].CreatedAt {
-			return comments[i].CreatedAt < comments[j].CreatedAt
+
+	// Resolve content via a SINGLE batched GetPostThread(rootID) call (Q-B
+	// resolved: GetPostsByIds is not exposed on the pinned plugin API, so we
+	// use GetPostThread, which returns the root + every reply in one call).
+	// The comment threads under EVERY card post of the task are fetched: the
+	// home channel card, the assignee DM card, AND any shared-card channel. A
+	// shared task has ChannelPostID="" and DMPostID="", so a single-root
+	// lookup would mark every comment deleted (Bug: comments rendered
+	// "(comment deleted)" for shared tasks). Each card post is at most 3
+	// (home + DM + 1 share), so this is bounded — not N+1 over comments.
+	posts := map[string]*mmmodel.Post{}
+	rootIDs := map[string]struct{}{}
+	if t.ChannelPostID != "" {
+		rootIDs[t.ChannelPostID] = struct{}{}
+	}
+	if t.DMPostID != "" {
+		rootIDs[t.DMPostID] = struct{}{}
+	}
+	for _, tp := range p.taskPosts(taskID) {
+		rootIDs[tp.PostID] = struct{}{}
+	}
+	for rootID := range rootIDs {
+		thread, appErr := p.API.GetPostThread(rootID)
+		if appErr != nil {
+			p.API.LogWarn("listComments: failed to load a comment thread",
+				"task_id", taskID, "root_id", rootID, "error", appErr.Error())
+			continue
 		}
-		return comments[i].ID < comments[j].ID
+		if thread != nil {
+			maps.Copy(posts, thread.Posts)
+		}
+	}
+	if len(posts) == 0 {
+		// No card post (should not happen for a task with comments, but handled
+		// defensively): every comment is treated as deleted. No N+1 fallback.
+		p.API.LogError("listComments: task has no card post root; comments returned as deleted", "task_id", taskID)
+	}
+
+	out := make([]commentResponse, len(comments))
+	for i, c := range comments {
+		resp := commentResponse{
+			ID:        c.ID,
+			TaskID:    c.TaskID,
+			PostID:    c.PostID,
+			AuthorID:  c.AuthorID, // row snapshot, NOT re-derived from the post
+			CreatedAt: c.CreatedAt,
+		}
+		if post, ok := posts[c.PostID]; ok {
+			resp.Content = post.Message
+			resp.Deleted = false
+		} else {
+			resp.Content = ""
+			resp.Deleted = true
+		}
+		out[i] = resp
+	}
+
+	// Newest-first: descending created_at, descending id (ULID is monotonic) as
+	// the deterministic tie-breaker. Reverses the store's ASC order.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt != out[j].CreatedAt {
+			return out[i].CreatedAt > out[j].CreatedAt
+		}
+		return out[i].ID > out[j].ID
 	})
-	p.writeJSON(w, comments)
+
+	p.writeJSON(w, out)
 }
 
 // listTaskEvents handles GET /tasks/:id/events, returning the task's audit
@@ -849,7 +948,7 @@ func (p *Plugin) listTaskEvents(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
+	if !permission.CanUserCommentTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task's events")
 		return
 	}
@@ -914,7 +1013,7 @@ func (p *Plugin) shareTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Viewer check: only those who can view the task may share it.
-	if !permission.CanUserViewTask(actorID, t, p.channelMembership()) {
+	if !permission.CanUserViewTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
 		return
 	}

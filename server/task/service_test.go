@@ -560,6 +560,32 @@ func TestLinkComment_TaskNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestLinkComment_IdempotentOnDuplicatePostID pins the post-as-human fix:
+// both the REST createComment handler and the MessageHasBeenPosted hook try
+// to link the same post_id (the hook no longer skips the post because the
+// author is human, not the bot). The first link inserts the row + event; the
+// second link returns the existing mapping WITHOUT a duplicate event and
+// WITHOUT a uq_comments_post UNIQUE violation.
+func TestLinkComment_IdempotentOnDuplicatePostID(t *testing.T) {
+	svc, s := newTestService(t)
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-creator", AssigneeID: "u-assignee"})
+
+	first, _, err := svc.LinkComment(task.ID, "post-1", "u-commenter")
+	require.NoError(t, err)
+	require.Equal(t, "post-1", first.PostID)
+
+	// Second link of the SAME post_id must not error (idempotent) and must
+	// return the existing mapping.
+	second, _, err := svc.LinkComment(task.ID, "post-1", "u-commenter")
+	require.NoError(t, err)
+	require.Equal(t, first.ID, second.ID, "idempotent link must return the existing row, not a new one")
+
+	// Exactly one comment row — no duplicate.
+	comments, err := s.ListComments(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Len(t, comments, 1, "duplicate link must not create a second comment row")
+}
+
 func TestListComments_EmptyWhenNone(t *testing.T) {
 	svc, _ := newTestService(t)
 	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c"})

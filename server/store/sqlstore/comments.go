@@ -2,6 +2,7 @@ package sqlstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -31,6 +32,29 @@ var commentColumns = []string{"id", "task_id", "post_id", "author_id", "created_
 // id allocation, same as CreateTask). post_id is UNIQUE, so linking the same
 // post twice (e.g. a hook firing twice) is an error the caller should treat as
 // already-linked and ignore.
+// GetCommentByPostID returns the single comment mapping row for postID, or
+// store.ErrCommentNotFound when no comment is linked to that post. post_id is
+// UNIQUE, so at most one row matches. Used to make LinkComment idempotent.
+func (s *SQLStore) GetCommentByPostID(ctx context.Context, postID string) (model.TaskComment, error) {
+	if postID == "" {
+		return model.TaskComment{}, errors.New("get comment by post: post id is required")
+	}
+	var c model.TaskComment
+	err := s.builder().
+		Select(commentColumns...).
+		From(s.tableName(commentsTableShort)).
+		Where(sq.Eq{"post_id": postID}).
+		QueryRowContext(ctx).
+		Scan(&c.ID, &c.TaskID, &c.PostID, &c.AuthorID, &c.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.TaskComment{}, store.ErrCommentNotFound
+		}
+		return model.TaskComment{}, fmt.Errorf("get comment by post %s: %w", postID, err)
+	}
+	return c, nil
+}
+
 func (s *SQLStore) LinkComment(ctx context.Context, id, taskID, postID, authorID string, createdAt int64) (model.TaskComment, error) {
 	if id == "" || taskID == "" || postID == "" || authorID == "" {
 		return model.TaskComment{}, errors.New("link comment: id, task id, post id and author id are required")

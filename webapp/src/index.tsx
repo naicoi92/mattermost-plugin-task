@@ -226,6 +226,7 @@ export default class Plugin {
                 task_id?: string;
                 task?: Record<string, unknown>;
                 seq?: number;
+                changed_fields?: string[];
             };
             const seq = typeof data.seq === 'number' ? data.seq : undefined;
             if (data.task_id && !data.task) {
@@ -234,6 +235,13 @@ export default class Plugin {
             }
             if (data.task) {
                 store.dispatch({type: ACTION_TYPES.UPSERT_TASK, task: data.task, seq});
+            }
+
+            // Comment realtime (#32): when the server signals a comment change,
+            // bump the comment-refetch signal so an open Task Detail panel
+            // refetches comments without reselecting the task (Decision 2).
+            if (data.task_id && Array.isArray(data.changed_fields) && data.changed_fields.includes('comment')) {
+                store.dispatch({type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: data.task_id, seq});
             }
         });
 
@@ -322,9 +330,7 @@ export function splitMessageForTask(message: string): {summary: string; descript
     }
     const lines = trimmed.split('\n');
     const firstLine = lines[0].trim();
-    const summary = firstLine.length > summaryLimit ?
-        firstLine.slice(0, summaryLimit - 1) + '…' :
-        firstLine;
+    const summary = firstLine.length > summaryLimit ? firstLine.slice(0, summaryLimit - 1) + '…' : firstLine;
     const description = lines.slice(1).join('\n').trim();
     return {summary, description};
 }

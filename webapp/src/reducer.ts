@@ -30,6 +30,7 @@ export const ACTION_TYPES = {
     SET_SELECTED_TASK: 'task/set_selected_task',
     UPSERT_TASK: 'task/upsert_task',
     DELETE_TASK: 'task/delete_task',
+    COMMENT_REV_BUMP: 'task/comment_rev_bump',
     OPEN_NEW_TASK_DIALOG: 'task/open_new_task_dialog',
     CLOSE_NEW_TASK_DIALOG: 'task/close_new_task_dialog',
 } as const;
@@ -64,10 +65,22 @@ export interface TaskState {
     // state. The server sets seq to the task's UpdatedAt on every publish.
     lastSeq: Record<string, number>;
 
+    // commentRev is the latest comment-change seq per task (#32 realtime): the
+    // Task Detail panel's comment-refetch effect depends on the value for the
+    // open task, so a WS task_updated with changedFields=["comment"] bumps it
+    // and re-runs the refetch without reselecting the task. A stale seq (not
+    // newer than the current value) is ignored, mirroring the UPSERT_TASK guard.
+    commentRev: Record<string, number>;
+
     // newTaskDialog drives the NewTaskDialog root component (#30). When open, it
     // carries an optional prefill (summary/description) set by the post-dropdown
     // "Tạo task" action (#16). null = dialog closed.
-    newTaskDialog: {open: boolean; prefillSummary?: string; prefillDescription?: string; channelID?: string};
+    newTaskDialog: {
+        open: boolean;
+        prefillSummary?: string;
+        prefillDescription?: string;
+        channelID?: string;
+    };
 }
 
 const initialState: TaskState = {
@@ -77,6 +90,7 @@ const initialState: TaskState = {
     selectedTask: null,
     tasks: {},
     lastSeq: {},
+    commentRev: {},
     newTaskDialog: {open: false},
 };
 
@@ -91,10 +105,17 @@ export interface PluginAction {
     prefillSummary?: string;
     prefillDescription?: string;
     channelID?: string;
+
+    // changedFields is the WS task_updated change list (server/websocket.go).
+    // index.tsx dispatches COMMENT_REV_BUMP when it includes "comment".
+    changedFields?: string[];
 }
 
 // reducer is the entry point registered via registerReducer in index.tsx.
-export default function reducer(state: TaskState = initialState, action: PluginAction): TaskState {
+export default function reducer(
+    state: TaskState = initialState,
+    action: PluginAction,
+): TaskState {
     switch (action.type) {
     case ACTION_TYPES.OPEN_RHS:
         return {...state, rhsOpen: true};
@@ -117,7 +138,11 @@ export default function reducer(state: TaskState = initialState, action: PluginA
         // is the one in detail, refresh the detail view too.
         // Guard against a malformed payload (e.g. a WebSocket event missing the
         // id): a task without an id can't be cached under a key, so drop it.
-        if (!action.task || typeof action.task.id !== 'string' || !action.task.id.trim()) {
+        if (
+            !action.task ||
+				typeof action.task.id !== 'string' ||
+				!action.task.id.trim()
+        ) {
             return state;
         }
 
@@ -135,11 +160,17 @@ export default function reducer(state: TaskState = initialState, action: PluginA
         return {
             ...state,
             tasks: {...state.tasks, [action.task.id]: action.task},
-            selectedTask: state.selectedTaskID === action.task.id ? action.task : state.selectedTask,
-            lastSeq: action.seq === undefined ? state.lastSeq : {
-                ...state.lastSeq,
-                [action.task.id]: action.seq,
-            },
+            selectedTask:
+                    state.selectedTaskID === action.task.id ?
+                        action.task :
+                        state.selectedTask,
+            lastSeq:
+                    action.seq === undefined ?
+                        state.lastSeq :
+                        {
+                            ...state.lastSeq,
+                            [action.task.id]: action.seq,
+                        },
         };
     case ACTION_TYPES.DELETE_TASK: {
         const id = action.taskID ?? '';
@@ -191,6 +222,22 @@ export default function reducer(state: TaskState = initialState, action: PluginA
     case ACTION_TYPES.CLOSE_NEW_TASK_DIALOG:
         // Closing the New Task form returns the RHS to the list view.
         return {...state, rhsView: 'list', newTaskDialog: {open: false}};
+    case ACTION_TYPES.COMMENT_REV_BUMP: {
+        // Bump the comment-change signal for the open task so its comment-refetch
+        // effect re-runs. A stale seq (not newer than the current value) is
+        // ignored, reusing the same guard pattern as UPSERT_TASK. An absent seq
+        // (a local optimistic bump) always advances the counter.
+        const id = action.taskID ?? '';
+        if (!id) {
+            return state;
+        }
+        const seen = state.commentRev[id] ?? 0;
+        if (action.seq !== undefined && action.seq <= seen) {
+            return state;
+        }
+        const next = action.seq ?? seen + 1;
+        return {...state, commentRev: {...state.commentRev, [id]: next}};
+    }
     default:
         return state;
     }

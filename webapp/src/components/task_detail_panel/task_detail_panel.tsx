@@ -32,10 +32,17 @@ import {isDueSoon} from 'components/task_sidebar/quick_list';
 import {
     useResolvedUser,
     useResolvedUsers,
+    useResolvedStatuses,
 } from 'components/user_picker/use_resolved_user';
 import UserPicker from 'components/user_picker/user_picker';
 
-import type {Task, Comment, PatchTaskInput, TaskPriority} from 'types/tasks';
+import type {
+    Task,
+    Comment,
+    PatchTaskInput,
+    TaskEvent,
+    TaskPriority,
+} from 'types/tasks';
 
 // The plugin reducer is mounted by registerReducer at
 // state['plugins-<pluginId>'] (Mattermost convention), so the slice lives at a
@@ -43,6 +50,7 @@ import type {Task, Comment, PatchTaskInput, TaskPriority} from 'types/tasks';
 interface PluginState {
     selectedTaskID: string;
     selectedTask: Task | null;
+    commentRev: Record<string, number>;
 }
 
 type GlobalStateWithPlugin = Record<string, unknown> & {
@@ -52,7 +60,13 @@ type GlobalStateWithPlugin = Record<string, unknown> & {
 const PLUGIN_STATE_KEY = 'plugins-com.mattermost.plugin-task';
 
 function selectSlice(state: GlobalStateWithPlugin): PluginState {
-    return state[PLUGIN_STATE_KEY] ?? {selectedTaskID: '', selectedTask: null};
+    return (
+        state[PLUGIN_STATE_KEY] ?? {
+            selectedTaskID: '',
+            selectedTask: null,
+            commentRev: {},
+        }
+    );
 }
 
 export interface TaskDetailPanelProps {
@@ -86,9 +100,18 @@ export default function TaskDetailPanel({
     const taskID = taskIDProp ?? slice.selectedTaskID;
     const task = taskIDProp ? null : slice.selectedTask;
 
+    // Comment-change signal: the reducer bumps commentRev[taskID] on a WS
+    // task_updated with changedFields=["comment"] (Decision 2). Keying the
+    // comment-refetch effect on this value lets a second viewer's open panel
+    // refetch comments WITHOUT reselecting the task (AC3).
+    const commentRevForTask = slice.commentRev[taskID] ?? 0;
+
     const [full, setFull] = useState<Task | null>(task);
     const [subtasks, setSubtasks] = useState<Task[]>([]);
     const [comments, setComments] = useState<Comment[]>([]);
+
+    // events is the task's audit trail for the merged Activity feed (Decision 3).
+    const [events, setEvents] = useState<TaskEvent[]>([]);
     const [error, setError] = useState<string>('');
     const [newComment, setNewComment] = useState('');
     const [newSubtask, setNewSubtask] = useState('');
@@ -106,7 +129,12 @@ export default function TaskDetailPanel({
     const [saving, setSaving] = useState(false);
     const subtaskInputRef = useRef<HTMLInputElement>(null);
 
-    // Load the task + subtasks + comments whenever the selected id changes.
+    // composerRef backs the auto-growing textarea (AC7) so onInput can read
+    // scrollHeight and cap it at 120px.
+    const composerRef = useRef<HTMLTextAreaElement>(null);
+
+    // Load the task + subtasks + comments + activity events whenever the
+    // selected id changes.
     useEffect(() => {
         let cancelled = false;
         const load = async () => {
@@ -115,10 +143,11 @@ export default function TaskDetailPanel({
                 return;
             }
             try {
-                const [detail, subs, coms] = await Promise.all([
+                const [detail, subs, coms, evs] = await Promise.all([
                     client.getTask(taskID),
                     client.listSubtasks(taskID),
                     client.listComments(taskID),
+                    client.listTaskEvents(taskID),
                 ]);
                 if (cancelled) {
                     return;
@@ -126,6 +155,7 @@ export default function TaskDetailPanel({
                 setFull(detail);
                 setSubtasks(subs ?? []);
                 setComments(coms ?? []);
+                setEvents(evs ?? []);
                 setEditingTitle(false);
                 setEditingDue(false);
                 setEditingDescription(false);
@@ -147,12 +177,88 @@ export default function TaskDetailPanel({
         };
     }, [taskID, dispatch]);
 
+    // Comment-only refetch on a WS changedFields=["comment"] event (AC3):
+    // a separate effect keyed on commentRevForTask refetches ONLY comments so a
+    // second viewer's open panel updates without reselecting the task and
+    // without clobbering in-flight edits. The full-load effect above handles
+    // selection changes; this effect handles realtime comment changes only.
+    const inflightRef = useRef<Promise<void> | null>(null);
+    const pendingRef = useRef<boolean>(false);
+    useEffect(() => {
+        if (!taskID) {
+            return undefined;
+        }
+
+        // If a refetch is already in flight, coalesce: remember to re-run once it
+        // settles instead of starting a parallel duplicate fetch (AC3 dedupe).
+        if (inflightRef.current) {
+            pendingRef.current = true;
+            return undefined;
+        }
+        const controller = new AbortController();
+        const run = async () => {
+            try {
+                // Refetch comments AND activity events so the merged feed stays
+                // consistent (a new comment also appends a commented event).
+                const [coms, evs] = await Promise.all([
+                    client.listComments(taskID),
+                    client.listTaskEvents(taskID),
+                ]);
+                if (controller.signal.aborted) {
+                    return;
+                }
+                setComments(coms ?? []);
+                setEvents(evs ?? []);
+            } catch (err) {
+                if (controller.signal.aborted) {
+                    return;
+                }
+
+                // A refetch failure is non-fatal here; the next bump retries.
+                setError(messageFor(err));
+            } finally {
+                inflightRef.current = null;
+                if (pendingRef.current) {
+                    pendingRef.current = false;
+
+                    // Re-run once after settling. Reassign inflightRef so the
+                    // dedupe guard keeps covering the rerun (AC3).
+                    inflightRef.current = run();
+                }
+            }
+        };
+        inflightRef.current = run();
+        return () => {
+            controller.abort();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [taskID, commentRevForTask]);
+
     // Resolve the assignee id → "@username" for display, and comment author
     // ids → labels. Hooks run before the early returns so the order is stable.
     const assigneeLabel = useResolvedUser(full?.assignee_id ?? '').label;
-    const commentAuthorLabels = useResolvedUsers(
-        comments.map((c) => c.user_id).filter(Boolean),
+
+    // Resolve labels for BOTH comment authors and event actors (the merged
+    // Activity feed interleaves them, Decision 3).
+    const actorIDs = Array.from(
+        new Set(
+            [
+                ...comments.map((c) => c.author_id),
+                ...events.map((e) => e.actor_id),
+            ].filter(Boolean),
+        ),
     );
+    const actorLabels = useResolvedUsers(actorIDs);
+
+    // Resolve each actor's presence status (online/away/dnd/offline) to drive
+    // the avatar status-dot modifier class (AC5/AC6 — data-driven, not a
+    // hardcoded offline default). Missing keys fall back to the offline
+    // modifier via actorStatusClass.
+    const actorStatuses = useResolvedStatuses(actorIDs);
+
+    // The merged newest-first Activity feed (events + comments interleaved,
+    // Decision 3 / AC5). Computed from the fetched comments + events.
+    const activity = mergeActivity(comments, events);
 
     // Resolve the channel display name (not the raw id) for the meta-table.
     // Called unconditionally (rules-of-hooks) before the early return; the
@@ -365,8 +471,14 @@ export default function TaskDetailPanel({
             return;
         }
         try {
-            const created = await client.createComment(full.id, {content});
-            setComments((prev) => [...prev, created]);
+            // Change B: pass the active channel so the server threads the comment
+            // under the task's card IN this channel (e.g. a shared card), not the
+            // home channel card.
+            const created = await client.createComment(full.id, {
+                content,
+                channel_id: currentChannelID || undefined,
+            });
+            setComments((prev) => [created, ...prev]);
             setNewComment('');
         } catch (err) {
             setError(messageFor(err));
@@ -433,7 +545,9 @@ export default function TaskDetailPanel({
                     disabled={!currentChannelID}
                     aria-label={t('webapp.task.share.button')}
                     title={
-                        currentChannelID ? t('webapp.task.share.button') : t('webapp.task.share.no_channel')
+                        currentChannelID ?
+                            t('webapp.task.share.button') :
+                            t('webapp.task.share.no_channel')
                     }
                 >
                     <ShareIcon/>
@@ -601,11 +715,13 @@ export default function TaskDetailPanel({
                                 tabIndex={0}
                             >
                                 <CalendarIcon/>
-                                {full.due ? formatDueRelative({
-                                    dueMs: full.due,
-                                    locale,
-                                    isOverdue: isOverdue(full),
-                                }) : t('webapp.task.due.pick')}
+                                {full.due ?
+                                    formatDueRelative({
+                                        dueMs: full.due,
+                                        locale,
+                                        isOverdue: isOverdue(full),
+                                    }) :
+                                    t('webapp.task.due.pick')}
                             </span>
                         )}
                     </div>
@@ -800,10 +916,10 @@ export default function TaskDetailPanel({
                 </div>
 
                 <div className='task-detail__section-label'>
-                    {t('webapp.task.comments')}
+                    {t('webapp.task.activity')}
                 </div>
-                <ul className='task-detail__comment-list'>
-                    {comments.length === 0 && (
+                <ul className='task-detail__activity-list'>
+                    {activity.length === 0 && (
                         <li
                             style={{
                                 padding: '8px 0',
@@ -814,51 +930,82 @@ export default function TaskDetailPanel({
                             {t('webapp.task.empty')}
                         </li>
                     )}
-                    {comments.map((c) => {
-                        const label = commentAuthorLabels[c.user_id] || c.user_id || '?';
+                    {activity.map((item) => {
+                        const isComment = item.kind === 'comment';
+                        const c = item.comment;
+                        const ev = item.event;
+                        const actorID = isComment ?
+                            (c?.author_id ?? '') :
+                            (ev?.actor_id ?? '');
+                        const label = isComment ?
+                            commentAuthorLabel(c as Comment, actorLabels) :
+                            actorLabels[actorID] || actorID || '?';
                         const initials =
 							label.replace(/^@/, '').trim().slice(0, 2).toUpperCase() || '?';
+                        const actionLabel = isComment ?
+                            t(activityLabelKey('commented')) :
+                            t(activityLabelKey(ev?.event_type ?? ''));
+                        const statusClass = actorStatusClass(actorStatuses[actorID]);
                         return (
                             <li
-                                key={c.id}
+                                key={item.id}
                                 className='task-detail__activity-item'
                             >
                                 <span
-                                    className='task-detail__activity-avatar'
+                                    className={`task-detail__activity-avatar ${statusClass}`}
                                     title={label}
                                 >
                                     {initials}
                                 </span>
                                 <div className='task-detail__activity-body'>
-                                    <strong>{label}</strong> {t('webapp.task.comments.commented')}
+                                    <strong>{label}</strong> {actionLabel}
                                     <span className='task-detail__activity-time'>
-                                        {formatTimestamp(c.created_at, locale)}
+                                        {formatTimestamp(item.created_at, locale)}
                                     </span>
-                                    <div className='task-detail__activity-comment'>
-                                        {c.content}
-                                    </div>
+                                    {isComment && c && (
+                                        <div className='task-detail__activity-comment'>
+                                            {commentBodyText(
+                                                c,
+                                                t('webapp.task.comments.deleted_placeholder'),
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </li>
                         );
                     })}
                 </ul>
                 <div className='task-detail__comment-input'>
-                    <input
-                        className='task-input'
+                    <textarea
+                        ref={composerRef}
+                        className='task-input task-detail__composer-textarea'
                         value={newComment}
                         onChange={(e) => setNewComment(e.target.value)}
+                        onInput={(e) => {
+                            // Auto-grow: reset then cap at 120px (AC7).
+                            const el = e.currentTarget;
+                            el.style.height = 'auto';
+                            el.style.height = composerCappedHeight(el.scrollHeight) + 'px';
+                        }}
                         placeholder={t('webapp.task.add_comment')}
                         onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
+                            const decision = composerKeyDown({
+                                key: e.key,
+                                shiftKey: e.shiftKey,
+                            });
+                            if (decision === 'send') {
                                 e.preventDefault();
                                 addComment();
                             }
+
+                            // 'newline' => let the default insert a newline; 'none' => default.
                         }}
                     />
                     <button
                         className='task-btn task-btn--primary'
                         onClick={addComment}
                         type='button'
+                        disabled={!composerInputValid(newComment)}
                     >
                         {t('webapp.task.comments.post')}
                     </button>
@@ -924,6 +1071,132 @@ export function messageFor(err: unknown): string {
         return err.message || 'request failed';
     }
     return err instanceof Error ? err.message : 'request failed';
+}
+
+// commentAuthorLabel resolves a comment's display label from the row author_id
+// snapshot via the resolved-users map, falling back to the raw author_id (so
+// the UI shows the opaque id — never '?' — while the name is resolving).
+// Exported for unit testing (Task 5, AC1).
+export function commentAuthorLabel(
+    c: Comment,
+    labels: Record<string, string>,
+): string {
+    return labels[c.author_id] || c.author_id || '?';
+}
+
+// commentBodyText returns the text to render for a comment: the placeholder
+// when the backing post was deleted out-of-band, otherwise the post content.
+// Exported for unit testing (Task 5, AC2).
+export function commentBodyText(
+    c: Comment,
+    deletedPlaceholder: string,
+): string {
+    return c.deleted ? deletedPlaceholder : c.content;
+}
+
+// composerCappedHeight returns the textarea height for the auto-grow behavior:
+// the content's scrollHeight, capped at max (120px by default, AC7). Beyond the
+// cap the textarea scrolls internally instead of growing unbounded.
+// Exported for unit testing (Task 8, AC7).
+export function composerCappedHeight(scrollHeight: number, max = 120): number {
+    return Math.min(scrollHeight, max);
+}
+
+// composerKeyDown decides the composer's response to a keydown event (AC7):
+// 'send' on Enter without Shift (the comment is submitted, no newline);
+// 'newline' on Shift+Enter (a newline is inserted, the comment is NOT sent);
+// 'none' for every other key (default handling). Exported for unit testing.
+export function composerKeyDown(e: {
+    key: string;
+    shiftKey: boolean;
+}): 'send' | 'newline' | 'none' {
+    if (e.key === 'Enter') {
+        return e.shiftKey ? 'newline' : 'send';
+    }
+    return 'none';
+}
+
+// composerInputValid reports whether the composer input has non-whitespace
+// content, driving the send button's disabled state (AC7). Exported for testing.
+export function composerInputValid(text: string): boolean {
+    return text.trim().length > 0;
+}
+
+// ActivityItem is the unified feed item: either a comment or a task event,
+// normalized to a common shape for the merged newest-first Activity list.
+export type ActivityItem = {
+    kind: 'comment' | 'event';
+    id: string;
+    created_at: number;
+    comment?: Comment;
+    event?: TaskEvent;
+};
+
+// activityLabelKey maps a server event_type to its i18n key
+// (webapp.task.activity.label.<event_type>). The map covers all 14 Event*
+// constants; an unknown type falls back to the commented label key so the UI
+// never renders an English/empty string (AC6).
+export function activityLabelKey(eventType: string): string {
+    return `webapp.task.activity.label.${eventType}`;
+}
+
+// actorStatusClass maps a presence status (online/away/dnd/offline) to the
+// avatar status-dot modifier class (AC5/AC6, task-details-panel styling). The
+// map is data-driven from useResolvedStatuses; a missing/unknown status falls
+// back to the explicit offline modifier (NOT a dead default — the class is
+// always derived from the resolved status). Exported for unit testing.
+export function actorStatusClass(status: string | undefined): string {
+    switch (status) {
+    case 'online':
+    case 'away':
+    case 'dnd':
+    case 'offline':
+        return `task-detail__activity-avatar--${status}`;
+    default:
+        return 'task-detail__activity-avatar--offline';
+    }
+}
+
+// mergeActivity merges comments and task events into one newest-first list
+// (Decision 3, AC5). Sort: created_at descending; tie-breaker typeRank
+// (comment=0 sorts above event=1 at equal timestamp, so the latest user input is
+// visually prominent); final tie-breaker id descending (deterministic).
+export function mergeActivity(
+    comments: Comment[],
+    events: TaskEvent[],
+): ActivityItem[] {
+    const typeRank = (item: ActivityItem) => (item.kind === 'comment' ? 0 : 1);
+    const items: ActivityItem[] = [
+        ...comments.map((c) => ({
+            kind: 'comment' as const,
+            id: c.id,
+            created_at: c.created_at,
+            comment: c,
+        })),
+        ...events.map((e) => ({
+            kind: 'event' as const,
+            id: e.id,
+            created_at: e.created_at,
+            event: e,
+        })),
+    ];
+    items.sort((a, b) => {
+        if (a.created_at !== b.created_at) {
+            return b.created_at - a.created_at;
+        }
+        const r = typeRank(a) - typeRank(b);
+        if (r !== 0) {
+            return r;
+        }
+        if (a.id < b.id) {
+            return 1;
+        }
+        if (a.id > b.id) {
+            return -1;
+        }
+        return 0;
+    });
+    return items;
 }
 
 // BackIcon / CheckIcon are the inline glyphs.

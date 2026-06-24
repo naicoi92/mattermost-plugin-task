@@ -5,7 +5,6 @@
   "error.permission_denied": "Bạn không có quyền thực hiện hành động này.",
   "error.unknown_command": "Lệnh không xác định: %s",
   "error.empty_command": "Lệnh rỗng.",
-
   "task.created": "Đã tạo task: %s",
   "task.updated": "Đã cập nhật task: %s",
   "task.deleted": "Đã xóa task.",
@@ -17,20 +16,16 @@
   "task.reopened": "Đã mở lại task: %s",
   "task.assigned": "Đã gán task cho %s.",
   "task.unassigned": "Đã bỏ gán task.",
-
   "reminder.set": "Đã đặt nhắc trước %s.",
   "reminder.removed": "Đã tắt nhắc.",
-
   "comment.added": "Đã thêm bình luận.",
   "subtask.added": "Đã thêm subtask: %s",
-
   "notification.assigned": "Bạn được gán vào task **%s** bởi %s.",
   "notification.completed": "Task **%s** đã được đánh dấu hoàn thành bởi %s.",
   "notification.cancelled": "Task **%s** đã bị hủy bởi %s.",
   "notification.commented": "%s đã bình luận trên task **%s**.",
   "notification.reminder": "Nhắc nhở: task **%s** sắp đến hạn.",
   "notification.overdue": "Quá hạn: task **%s** đã đến hạn lúc %s.",
-
   "command.help.header": "Các lệnh Task hỗ trợ:\n",
   "command.help.add": "`/task add \"<tiêu đề>\"` - Tạo task mới",
   "command.help.list": "`/task list [mine|channel|all] [status ...] [due ...]` - Liệt kê và lọc task",
@@ -46,7 +41,6 @@
   "command.help.board": "`/task board [mine|channel]` - Mở bảng Kanban",
   "command.help.search": "`/task search <từ khóa>` - Tìm kiếm task",
   "command.help.footer": "Dùng `/task help` để hiển thị lại hướng dẫn này.",
-
   "webapp.task.title": "Danh sách task",
   "webapp.task.quicklist": "Danh sách nhanh",
   "webapp.task.new": "Tạo task",
@@ -106,6 +100,21 @@
   "webapp.task.subtasks.progress": "Đã xong %s/%s",
   "webapp.task.comments": "Bình luận",
   "webapp.task.comments.commented": "đã bình luận",
+  "webapp.task.comments.deleted_placeholder": "(comment đã bị xóa)",
+  "webapp.task.activity.label.created": "đã tạo task",
+  "webapp.task.activity.label.status_changed": "đã đổi trạng thái",
+  "webapp.task.activity.label.assigned": "đã gán người làm",
+  "webapp.task.activity.label.unassigned": "đã bỏ gán người làm",
+  "webapp.task.activity.label.due_changed": "đã đổi hạn chót",
+  "webapp.task.activity.label.summary_changed": "đã đổi tiêu đề",
+  "webapp.task.activity.label.description_changed": "đã đổi mô tả",
+  "webapp.task.activity.label.priority_changed": "đã đổi mức ưu tiên",
+  "webapp.task.activity.label.reminder_set": "đã đặt nhắc nhở",
+  "webapp.task.activity.label.reminder_fired": "nhắc nhở đã kích hoạt",
+  "webapp.task.activity.label.reminder_cleared": "đã xóa nhắc nhở",
+  "webapp.task.activity.label.commented": "đã bình luận",
+  "webapp.task.activity.label.subtask_added": "đã thêm subtask",
+  "webapp.task.activity.label.deleted": "đã xóa task",
   "webapp.task.add_subtask": "Thêm subtask",
   "webapp.task.add_subtask.placeholder": "Nhập subtask rồi Enter…",
   "webapp.task.add_comment": "Thêm bình luận",
@@ -118,5 +127,6 @@
   "webapp.task.post.caption.assigned": "%s đã khởi tạo task cho %s",
   "webapp.kanban.title": "Bảng Kanban",
   "webapp.error.required": "Trường này là bắt buộc.",
-  "webapp.error.create_failed": "Không tạo được task. Vui lòng thử lại."
+  "webapp.error.create_failed": "Không tạo được task. Vui lòng thử lại.",
+  "webapp.task.activity": "Hoạt động"
 }

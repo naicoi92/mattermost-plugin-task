@@ -23,11 +23,14 @@ interface UsersSlice {
     users?: Record<string, UserProfile>;
 }
 
-type GlobalStateWithUsers = GlobalState & {entities?: {users?: UsersSlice}};
+type GlobalStateWithUsers = GlobalState & { entities?: { users?: UsersSlice } };
 
 // selectUser reads a cached profile from the host Redux store. Returns
 // undefined when the user isn't cached or the store shape is unexpected.
-function selectUser(state: GlobalStateWithUsers, userID: string): UserProfile | undefined {
+function selectUser(
+    state: GlobalStateWithUsers,
+    userID: string,
+): UserProfile | undefined {
     return state.entities?.users?.users?.[userID];
 }
 
@@ -43,8 +46,13 @@ function labelFor(user: UserProfile | undefined, userID: string): string {
     return userID;
 }
 
-export function useResolvedUser(userID: string): {label: string; user: UserProfile | undefined} {
-    const storeUser = useSelector((state: GlobalStateWithUsers) => selectUser(state, userID));
+export function useResolvedUser(userID: string): {
+    label: string;
+    user: UserProfile | undefined;
+} {
+    const storeUser = useSelector((state: GlobalStateWithUsers) =>
+        selectUser(state, userID),
+    );
     const [fetched, setFetched] = useState<UserProfile | undefined>(undefined);
 
     // Fetch only when the store doesn't have the user and we haven't fetched
@@ -55,7 +63,8 @@ export function useResolvedUser(userID: string): {label: string; user: UserProfi
             return undefined;
         }
         let cancelled = false;
-        client.getUser(userID).
+        client.
+            getUser(userID).
             then((u) => {
                 if (!cancelled && u) {
                     // Normalize to a minimal UserProfile shape for labelFor.
@@ -95,8 +104,8 @@ export function useResolvedUsers(userIDs: string[]): Record<string, string> {
         // Do NOT seed the map with raw ids — that would flash the opaque id
         // before the name resolves. Only entries that resolve successfully are
         // added; absent keys mean "still loading".
-        Promise.all(unique.map((id) => client.getUser(id).catch(() => null))).
-            then((results) => {
+        Promise.all(unique.map((id) => client.getUser(id).catch(() => null))).then(
+            (results) => {
                 if (cancelled) {
                     return;
                 }
@@ -110,7 +119,8 @@ export function useResolvedUsers(userIDs: string[]): Record<string, string> {
                     });
                     return merged;
                 });
-            });
+            },
+        );
 
         return () => {
             cancelled = true;
@@ -121,4 +131,46 @@ export function useResolvedUsers(userIDs: string[]): Record<string, string> {
     }, [userIDs.join(',')]);
 
     return labels;
+}
+
+// useResolvedStatuses resolves a set of user ids to their presence status
+// (online/away/dnd/offline) via client.getUserStatus (host
+// /api/v4/users/<id>/status). Returns a map id → status; a *missing* key
+// means "not resolved yet" and the caller falls back to the offline modifier
+// (explicit, data-driven — never a dead default). Used by the Task Details
+// Activity feed to drive the avatar status-dot modifier class (AC5/AC6,
+// task-details-panel styling).
+export function useResolvedStatuses(userIDs: string[]): Record<string, string> {
+    const [statuses, setStatuses] = useState<Record<string, string>>({});
+
+    useEffect(() => {
+        let cancelled = false;
+        const unique = Array.from(new Set(userIDs.filter(Boolean)));
+
+        Promise.all(
+            unique.map((id) => client.getUserStatus(id).catch(() => null)),
+        ).then((results) => {
+            if (cancelled) {
+                return;
+            }
+            setStatuses((prev) => {
+                const merged = {...prev};
+                results.forEach((s, i) => {
+                    const id = unique[i];
+                    if (s && s.status) {
+                        merged[id] = s.status;
+                    }
+                });
+                return merged;
+            });
+        });
+
+        return () => {
+            cancelled = true;
+        };
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userIDs.join(',')]);
+
+    return statuses;
 }

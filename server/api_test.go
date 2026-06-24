@@ -521,11 +521,171 @@ func TestCreateComment_PersistsAndReturns(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 }
 
+// TestCreateComment_NonRegression_PathUnchanged (AC9) pins the existing
+// create-comment flow end-to-end: the contract fix + UI redesign must NOT alter
+// it. The create handler (server/api.go createComment) is untouched by design;
+// this test asserts it still yields (a) a reply post authored by the HUMAN
+// commenter (Change A: post.UserId == actorID; bot-ownership is retained ONLY
+// for card posts), (b) a linked task_comments row with the AuthorID snapshot,
+// (c) an EventCommented row, and (d) a task_updated WS broadcast whose
+// changed_fields contains "comment".
+func TestCreateComment_NonRegression_PathUnchanged(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	var capturedPost *mmmodel.Post
+	api := p.API.(*plugintest.API)
+	// Re-register the CreatePost mock with a Run hook that captures the post the
+	// handler creates, without changing its return (the default mock mints a
+	// unique post id per call; we re-implement the same Run here).
+	var postSeq int
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "CreatePost" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+	api.On("CreatePost", mock.Anything).Run(func(arguments mock.Arguments) {
+		postSeq++
+		post := arguments.Get(0).(*mmmodel.Post)
+		post.Id = fmt.Sprintf("post-%d", postSeq)
+		capturedPost = post
+	}).Return(func(post *mmmodel.Post) (*mmmodel.Post, *mmmodel.AppError) {
+		return post, nil
+	}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments", `{"content":"looks good"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// (a) the comment post is authored by the HUMAN commenter, NOT the bot.
+	require.NotNil(t, capturedPost, "a reply post was created")
+	assert.Equal(t, "u1", capturedPost.UserId, "Change A: comment post UserId == actorID (human author), not bot")
+
+	// (b) a linked task_comments row carries the caller's AuthorID snapshot.
+	rows, err := st.ListComments(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "u1", rows[0].AuthorID, "AuthorID is the caller snapshot")
+
+	// (c) an EventCommented row exists in task_events.
+	events, err := st.ListTaskEvents(context.Background(), created.ID, 50)
+	require.NoError(t, err)
+	var sawCommented bool
+	for _, e := range events {
+		if e.EventType == model.EventCommented {
+			sawCommented = true
+			break
+		}
+	}
+	assert.True(t, sawCommented, "create-comment appends an EventCommented")
+
+	// (d) a task_updated WS broadcast with changed_fields containing "comment".
+	var sawCommentBroadcast bool
+	for _, c := range api.Calls {
+		if c.Method != "PublishWebSocketEvent" {
+			continue
+		}
+		payload, _ := c.Arguments[1].(map[string]any)
+		cf, _ := payload["changed_fields"].([]string)
+		for _, f := range cf {
+			if f == "comment" {
+				sawCommentBroadcast = true
+			}
+		}
+	}
+	assert.True(t, sawCommentBroadcast, `broadcast changed_fields contains "comment"`)
+}
+
 func TestCreateComment_TaskNotFound(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/ghost/comments", `{"content":"x"}`, "u1"))
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestCreateComment_ThreadsUnderCardInRequestedChannel (Change B) asserts the
+// channel/root reconciliation for a SHARED task: the task lives in ch-home but
+// is shared via a kind="share" card into ch-shared. When the webapp passes
+// channel_id=ch-shared (the channel the viewer is acting from), the comment
+// post MUST thread under the SHARE card (RootId == share post id) and post into
+// ch-shared (ChannelId == ch-shared) — NOT root under the home channel card.
+// Currently the handler ignores channel_id and roots under t.ChannelPostID
+// (empty for a shared task here) => RootId=="" (a root channel message): the bug.
+func TestCreateComment_ThreadsUnderCardInRequestedChannel(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
+	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
+
+	api := p.API.(*plugintest.API)
+	reseedGetPost(t, api, map[string]*mmmodel.Post{
+		"sharepost": {Id: "sharepost", ChannelId: "ch-shared"},
+	})
+	api.On("GetChannelMember", "ch-shared", "sharer").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+	api.On("GetChannelMember", "ch-home", "sharer").Return(nil, &mmmodel.AppError{}).Maybe()
+
+	var capturedPost *mmmodel.Post
+	var postSeq int
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "CreatePost" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+	api.On("CreatePost", mock.Anything).Run(func(arguments mock.Arguments) {
+		postSeq++
+		post := arguments.Get(0).(*mmmodel.Post)
+		post.Id = fmt.Sprintf("post-%d", postSeq)
+		capturedPost = post
+	}).Return(func(post *mmmodel.Post) (*mmmodel.Post, *mmmodel.AppError) {
+		return post, nil
+	}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments",
+		`{"content":"hi","channel_id":"ch-shared"}`, "sharer"))
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	require.NotNil(t, capturedPost)
+	assert.Equal(t, "sharepost", capturedPost.RootId, "comment threads under the share card in the requested channel")
+	assert.Equal(t, "ch-shared", capturedPost.ChannelId, "comment posts into the requested channel")
+}
+
+// TestCreateComment_PersonalTaskFallsBackWhenNoChannelRequested (Change B
+// non-regression): a personal task (no channel) with no channel_id in the
+// request keeps the legacy resolution — channelID = assignee context, rootID =
+// DM card (empty here). Confirms adding channel_id did not break the personal
+// path.
+func TestCreateComment_PersonalTaskFallsBackWhenNoChannelRequested(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "personal", CreatorID: "u1"})
+
+	var capturedPost *mmmodel.Post
+	var postSeq int
+	api := p.API.(*plugintest.API)
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "CreatePost" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+	api.On("CreatePost", mock.Anything).Run(func(arguments mock.Arguments) {
+		postSeq++
+		post := arguments.Get(0).(*mmmodel.Post)
+		post.Id = fmt.Sprintf("post-%d", postSeq)
+		capturedPost = post
+	}).Return(func(post *mmmodel.Post) (*mmmodel.Post, *mmmodel.AppError) {
+		return post, nil
+	}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments", `{"content":"hi"}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+	require.NotNil(t, capturedPost)
+	assert.Equal(t, "", capturedPost.RootId, "no card => legacy empty root for a personal task")
 }
 
 func TestCreateComment_EmptyContentRejected(t *testing.T) {
@@ -561,6 +721,189 @@ func TestListComments_ForbiddenForNonParticipant(t *testing.T) {
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u-stranger"))
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// TestListComments_AssigneeAllowedViaAssignAction (AC4) is the deterministic
+// repro for the assignee-403 gap: a personal task (no channel) is created by
+// one user, then a second user is assigned via the real Assign service path
+// (SetAssignee writes the role='assignee' task_members row — not a hand-
+// crafted fixture). The assignee must be permitted to list the task's
+// comments because CanUserCommentTask follows CanUserViewTask, which allows
+// userID == task.AssigneeID (server/permission/permission.go). This test pins
+// the write path (Assign persists the assignee edge) + the load path
+// (assembleTask populates task.AssigneeID) + the permission rule end-to-end.
+func TestListComments_AssigneeAllowedViaAssignAction(t *testing.T) {
+	p, st := newTestPlugin(t)
+	// Personal task, no channel: only creator + assignee may view/comment.
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u-creator"})
+
+	// Assign via the real Assign service path (server/task/service.go Assign ->
+	// SetAssignee -> AddMember role='assignee'). This is the action path, not a
+	// hand-crafted member row.
+	assigned, _, err := p.taskService.Assign("u-creator", created.ID, "u-assignee")
+	require.NoError(t, err)
+
+	// Debug checkpoints (AC4 diagnosis): assert the assignee edge was written
+	// and that assembleTask loaded it onto task.AssigneeID. These pinpoint the
+	// write vs load path should a 403 ever surface.
+	ctx := context.Background()
+	assigneeEdge, err := st.GetMemberByRole(ctx, created.ID, model.MemberRoleAssignee)
+	require.NoError(t, err, "assignee task_members row must be persisted by Assign")
+	assert.Equal(t, "u-assignee", assigneeEdge, "assignee edge carries the new assignee user id")
+	assert.Equal(t, "u-assignee", assigned.AssigneeID, "assembleTask loaded task.AssigneeID from the assignee edge")
+
+	// AC4: the assignee calling GET /tasks/:id/comments must get 200, not 403.
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u-assignee"))
+	assert.Equal(t, http.StatusOK, w.Code, "assignee (via Assign action) may list comments; body=%s", w.Body.String())
+}
+
+// commentListItem mirrors the listComments transport response (server/api.go
+// commentResponse): the DB row fields plus the transport-only Content/Deleted.
+// Decoding into model.TaskComment would drop content/deleted, so this struct is
+// the test's view of the wire contract.
+type commentListItem struct {
+	ID        string `json:"id"`
+	TaskID    string `json:"task_id"`
+	PostID    string `json:"post_id"`
+	AuthorID  string `json:"author_id"`
+	CreatedAt int64  `json:"created_at"`
+	Content   string `json:"content"`
+	Deleted   bool   `json:"deleted"`
+}
+
+// seedCommentRow inserts a task_comments row directly via the store with an
+// explicit post_id, author_id and created_at, so tests can control ordering
+// and the backing-post lookup independently of the create-comment flow.
+func seedCommentRow(t *testing.T, st store.Store, taskID, id, postID, authorID string, createdAt int64) {
+	t.Helper()
+	_, err := st.LinkComment(context.Background(), id, taskID, postID, authorID, createdAt)
+	require.NoError(t, err)
+}
+
+// TestListComments_JoinsContentAndAuthorIDViaOneGetPostThread asserts AC1: the
+// payload includes content sourced from the post.Message and author_id from
+// the row snapshot, resolved via a SINGLE GetPostThread(rootID) call (no N+1).
+func TestListComments_JoinsContentAndAuthorIDViaOneGetPostThread(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+	// Card post (thread root) tracked as kind=channel.
+	require.NoError(t, st.AddPost(context.Background(), "tp-1", created.ID, "cardroot", model.PostKindChannel))
+	seedCommentRow(t, st, created.ID, "c1", "p1", "alice", 1000)
+	seedCommentRow(t, st, created.ID, "c2", "p2", "alice", 2000)
+
+	api := p.API.(*plugintest.API)
+	thread := &mmmodel.PostList{Posts: map[string]*mmmodel.Post{
+		"cardroot": {Id: "cardroot", Message: ""},
+		"p1":       {Id: "p1", Message: "hello"},
+		"p2":       {Id: "p2", Message: "world"},
+	}}
+	api.On("GetPostThread", "cardroot").Return(thread, nil)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []commentListItem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got, 2)
+	byPost := map[string]commentListItem{}
+	for _, c := range got {
+		byPost[c.PostID] = c
+	}
+	assert.Equal(t, "hello", byPost["p1"].Content, "content for p1 must come from post.Message")
+	assert.Equal(t, "world", byPost["p2"].Content, "content for p2 must come from post.Message")
+	assert.Equal(t, "alice", byPost["p1"].AuthorID, "author_id is the row snapshot, not re-derived")
+	assert.False(t, byPost["p1"].Deleted)
+	assert.False(t, byPost["p2"].Deleted)
+	// AC1: exactly one batched GetPostThread call for the whole request.
+	api.AssertNumberOfCalls(t, "GetPostThread", 1)
+}
+
+// TestListComments_DeletedFlagForMissingPost asserts AC2: a comment whose
+// backing post is absent from the GetPostThread result is returned with
+// deleted:true, content:"" and is NOT omitted.
+func TestListComments_DeletedFlagForMissingPost(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+	require.NoError(t, st.AddPost(context.Background(), "tp-1", created.ID, "cardroot", model.PostKindChannel))
+	seedCommentRow(t, st, created.ID, "c1", "p-alive", "alice", 1000)
+	seedCommentRow(t, st, created.ID, "c2", "p-gone", "alice", 2000)
+
+	api := p.API.(*plugintest.API)
+	thread := &mmmodel.PostList{Posts: map[string]*mmmodel.Post{
+		"cardroot": {Id: "cardroot", Message: ""},
+		"p-alive":  {Id: "p-alive", Message: "hi"},
+		// p-gone is intentionally absent (post deleted out-of-band).
+	}}
+	api.On("GetPostThread", "cardroot").Return(thread, nil)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []commentListItem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got, 2, "the deleted comment must NOT be omitted")
+	byPost := map[string]commentListItem{}
+	for _, c := range got {
+		byPost[c.PostID] = c
+	}
+	assert.True(t, byPost["p-gone"].Deleted, "absent post => deleted:true")
+	assert.Equal(t, "", byPost["p-gone"].Content, "deleted comment has no content")
+	assert.False(t, byPost["p-alive"].Deleted)
+}
+
+// TestListComments_NewestFirstOrder asserts AC5/AC8: given comments at
+// t1<t2<t3, the response array is ordered [t3, t2, t1].
+func TestListComments_NewestFirstOrder(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+	require.NoError(t, st.AddPost(context.Background(), "tp-1", created.ID, "cardroot", model.PostKindChannel))
+	seedCommentRow(t, st, created.ID, "c1", "pa", "alice", 1000)
+	seedCommentRow(t, st, created.ID, "c2", "pb", "alice", 2000)
+	seedCommentRow(t, st, created.ID, "c3", "pc", "alice", 3000)
+
+	api := p.API.(*plugintest.API)
+	thread := &mmmodel.PostList{Posts: map[string]*mmmodel.Post{
+		"cardroot": {Id: "cardroot"},
+		"pa":       {Id: "pa", Message: "m1"},
+		"pb":       {Id: "pb", Message: "m2"},
+		"pc":       {Id: "pc", Message: "m3"},
+	}}
+	api.On("GetPostThread", "cardroot").Return(thread, nil)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []commentListItem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got, 3)
+	assert.Equal(t, int64(3000), got[0].CreatedAt, "newest first")
+	assert.Equal(t, int64(2000), got[1].CreatedAt)
+	assert.Equal(t, int64(1000), got[2].CreatedAt, "oldest last")
+}
+
+// TestListComments_RootIDEmptyReturnsDeletedFlag asserts the defensive branch:
+// when the task has no card post (ChannelPostID and DMPostID both empty), the
+// handler returns all comments with content:"" and deleted:true (no N+1
+// fallback, no panic). Covers the Personal-task DMPostID empty edge case.
+func TestListComments_RootIDEmptyReturnsDeletedFlag(t *testing.T) {
+	p, st := newTestPlugin(t)
+	// Personal task: no channel, no card posts added => ChannelPostID/DMPostID empty.
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	seedCommentRow(t, st, created.ID, "c1", "p1", "alice", 1000)
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []commentListItem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got, 1)
+	assert.True(t, got[0].Deleted, "no root post => deleted placeholder")
+	assert.Equal(t, "", got[0].Content)
 }
 
 func TestAuthorization_Required(t *testing.T) {
@@ -1004,4 +1347,73 @@ func TestPatchTaskStatus_ReopenFromDoneToInProgress(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	p.ServeHTTP(nil, w2, authedRequest(http.MethodPatch, "/api/v1/tasks/"+parent.ID+"/status", `{"status":"in_progress"}`, "u1"))
 	assert.Equal(t, http.StatusOK, w2.Code, "reopen from done to in_progress must not 500")
+}
+
+// reseedGetPost strips any previously-registered GetPost expectations from the
+// plugintest API and re-registers a specific post-id→post mapping followed by a
+// generic fallback. Required because plugintest matches expectations FIFO, so a
+// generic mock.Anything registered first by newTestPlugin would shadow a
+// later specific one. Mirrors the pattern used by the share-task tests.
+func reseedGetPost(t *testing.T, api *plugintest.API, byID map[string]*mmmodel.Post) {
+	t.Helper()
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "GetPost" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+	for id, post := range byID {
+		p := post
+		api.On("GetPost", id).Return(p, nil).Maybe()
+	}
+	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
+}
+
+// TestListComments_SharedChannelMemberAllowed (Change C) asserts the permission
+// rule expansion at the API layer: a task lives in ch-home, but is shared via a
+// kind="share" card into ch-shared. A member of ch-shared (NOT a member of
+// ch-home) must GET 200 on listComments. The card-channel set is resolved by
+// the caller from task_posts (cardChannelIDs). This exercises the GetPost→
+// ChannelId resolution path the pure permission package cannot.
+func TestListComments_SharedChannelMemberAllowed(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
+	// Track a share card post in ch-shared (kind=share).
+	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
+
+	api := p.API.(*plugintest.API)
+	reseedGetPost(t, api, map[string]*mmmodel.Post{
+		"sharepost": {Id: "sharepost", ChannelId: "ch-shared"},
+	})
+	// sharer is a member of ch-shared only; ch-home lookup is a non-member
+	// (return nil member + an AppError so IsChannelMember reports false).
+	api.On("GetChannelMember", "ch-shared", "sharer").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+	api.On("GetChannelMember", "ch-home", "sharer").Return(nil, &mmmodel.AppError{}).Maybe()
+	// listComments content resolution: no thread needed for the permission assertion.
+	api.On("GetPostThread", mock.Anything).Return(&mmmodel.PostList{Posts: map[string]*mmmodel.Post{}}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "sharer"))
+	assert.Equal(t, http.StatusOK, w.Code, "member of a shared card channel may list comments; body=%s", w.Body.String())
+}
+
+// TestListComments_OutsiderStillForbidden (Change C non-regression): a user who
+// is a member of NEITHER the home channel NOR any card channel is still denied
+// 403 — the card-channel expansion does not open the task to everyone.
+func TestListComments_OutsiderStillForbidden(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
+	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
+
+	api := p.API.(*plugintest.API)
+	reseedGetPost(t, api, map[string]*mmmodel.Post{
+		"sharepost": {Id: "sharepost", ChannelId: "ch-shared"},
+	})
+	// outsider is not a member of any channel: every lookup is a non-member.
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(nil, &mmmodel.AppError{}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "outsider"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "non-member of home AND card channels is denied")
 }

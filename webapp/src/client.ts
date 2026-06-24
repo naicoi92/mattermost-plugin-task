@@ -12,23 +12,24 @@
 // Host-provided libraries (react, redux, react-router-dom) are declared as
 // webpack externals; this client depends only on the browser fetch API.
 
-import manifest from "manifest";
+import manifest from 'manifest';
 
-import { Client4 } from "mattermost-redux/client";
+import {Client4} from 'mattermost-redux/client';
 
 import type {
-	Comment,
-	CreateCommentInput,
-	CreateSubtaskInput,
-	CreateTaskInput,
-	ListTasksParams,
-	PatchTaskInput,
-	SetAssigneeInput,
-	SetReminderInput,
-	ShareTaskResult,
-	Task,
-	TaskStatus,
-} from "types/tasks";
+    Comment,
+    CreateCommentInput,
+    CreateSubtaskInput,
+    CreateTaskInput,
+    ListTasksParams,
+    PatchTaskInput,
+    SetAssigneeInput,
+    SetReminderInput,
+    ShareTaskResult,
+    Task,
+    TaskEvent,
+    TaskStatus,
+} from 'types/tasks';
 
 // Base URL prefix for every plugin REST call. Matches the prefix registered in
 // server/api.go (PathPrefix("/api/v1")) under /plugins/<plugin id>.
@@ -37,60 +38,60 @@ export const PLUGIN_API_BASE_URL = `/plugins/${manifest.id}/api/v1`;
 // ClientError carries the server's status code and message so callers can branch
 // on well-known codes (404 not found, 403 forbidden, 409 parent-done conflict).
 export class ClientError extends Error {
-	status: number;
-	message: string;
+    status: number;
+    message: string;
 
-	constructor(status: number, message: string) {
-		super(message);
-		this.name = "ClientError";
-		this.status = status;
-		this.message = message;
+    constructor(status: number, message: string) {
+        super(message);
+        this.name = 'ClientError';
+        this.status = status;
+        this.message = message;
 
-		// Restore the prototype chain, which Object.setPrototypeOf-based
-		// subclasses lose under some transpilers; keeps instanceof reliable.
-		Object.setPrototypeOf(this, ClientError.prototype);
-	}
+        // Restore the prototype chain, which Object.setPrototypeOf-based
+        // subclasses lose under some transpilers; keeps instanceof reliable.
+        Object.setPrototypeOf(this, ClientError.prototype);
+    }
 }
 
 // Options for doFetch. `method` defaults to GET; `body` is JSON-serialized.
 interface FetchOptions {
-	method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
-	body?: unknown;
+    method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+    body?: unknown;
 }
 
 // buildQuery converts the list params into a URL query string, omitting empty
 // values so the server sees clean, optional filters.
 function buildQuery(params?: ListTasksParams): string {
-	if (!params) {
-		return "";
-	}
-	const q = new URLSearchParams();
-	if (params.scope) {
-		q.set("scope", params.scope);
-	}
-	if (params.channel_id) {
-		q.set("channel_id", params.channel_id);
-	}
-	if (params.partner_id) {
-		q.set("partner_id", params.partner_id);
-	}
-	if (params.status) {
-		q.set("status", params.status);
-	}
-	if (params.priority) {
-		q.set("priority", params.priority);
-	}
-	if (params.due) {
-		q.set("due", params.due);
-	}
-	if (params.after_order_key) {
-		q.set("after_order_key", params.after_order_key);
-	}
-	if (params.limit) {
-		q.set("limit", String(params.limit));
-	}
-	const str = q.toString();
-	return str ? `?${str}` : "";
+    if (!params) {
+        return '';
+    }
+    const q = new URLSearchParams();
+    if (params.scope) {
+        q.set('scope', params.scope);
+    }
+    if (params.channel_id) {
+        q.set('channel_id', params.channel_id);
+    }
+    if (params.partner_id) {
+        q.set('partner_id', params.partner_id);
+    }
+    if (params.status) {
+        q.set('status', params.status);
+    }
+    if (params.priority) {
+        q.set('priority', params.priority);
+    }
+    if (params.due) {
+        q.set('due', params.due);
+    }
+    if (params.after_order_key) {
+        q.set('after_order_key', params.after_order_key);
+    }
+    if (params.limit) {
+        q.set('limit', String(params.limit));
+    }
+    const str = q.toString();
+    return str ? `?${str}` : '';
 }
 
 // doFetch performs a JSON request against the plugin API, returning the parsed
@@ -106,48 +107,48 @@ function buildQuery(params?: ListTasksParams): string {
 // by default) and never injects the Mattermost-User-Id header, so the plugin's
 // auth middleware returns 401 even though the session cookie was sent.
 export async function doFetch<T>(
-	path: string,
-	options: FetchOptions = {},
+    path: string,
+    options: FetchOptions = {},
 ): Promise<T> {
-	const { method = "GET", body } = options;
-	const url = `${PLUGIN_API_BASE_URL}${path}`;
+    const {method = 'GET', body} = options;
+    const url = `${PLUGIN_API_BASE_URL}${path}`;
 
-	const res = await fetch(
-		url,
-		Client4.getOptions({
-			method,
-			headers:
-				body === undefined ? undefined : { "Content-Type": "application/json" },
-			body: body === undefined ? undefined : JSON.stringify(body),
-		}),
-	);
+    const res = await fetch(
+        url,
+        Client4.getOptions({
+            method,
+            headers:
+				body === undefined ? undefined : {'Content-Type': 'application/json'},
+            body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+    );
 
-	if (!res.ok) {
-		// The server uses plain-text error bodies (writeError in api.go); fall
-		// back to the status text when the body is empty.
-		let message = "";
-		try {
-			message = (await res.text()).trim();
-		} catch {
-			message = "";
-		}
-		throw new ClientError(
-			res.status,
-			message || res.statusText || "request failed",
-		);
-	}
+    if (!res.ok) {
+        // The server uses plain-text error bodies (writeError in api.go); fall
+        // back to the status text when the body is empty.
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(
+            res.status,
+            message || res.statusText || 'request failed',
+        );
+    }
 
-	// 204 No Content (DELETE endpoints): nothing to parse.
-	if (res.status === 204) {
-		return undefined as T;
-	}
+    // 204 No Content (DELETE endpoints): nothing to parse.
+    if (res.status === 204) {
+        return undefined as T;
+    }
 
-	// Some GET handlers may return an empty body; guard against JSON parse errors.
-	const text = await res.text();
-	if (!text) {
-		return undefined as T;
-	}
-	return JSON.parse(text) as T;
+    // Some GET handlers may return an empty body; guard against JSON parse errors.
+    const text = await res.text();
+    if (!text) {
+        return undefined as T;
+    }
+    return JSON.parse(text) as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,28 +156,28 @@ export async function doFetch<T>(
 // ---------------------------------------------------------------------------
 
 export function createTask(input: CreateTaskInput): Promise<Task> {
-	return doFetch<Task>("/tasks", { method: "POST", body: input });
+    return doFetch<Task>('/tasks', {method: 'POST', body: input});
 }
 
 export function getTask(id: string): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}`);
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}`);
 }
 
 export function listTasks(params?: ListTasksParams): Promise<Task[]> {
-	return doFetch<Task[]>(`/tasks${buildQuery(params)}`);
+    return doFetch<Task[]>(`/tasks${buildQuery(params)}`);
 }
 
 export function patchTask(id: string, input: PatchTaskInput): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}`, {
-		method: "PATCH",
-		body: input,
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: input,
+    });
 }
 
 export function deleteTask(id: string): Promise<void> {
-	return doFetch<void>(`/tasks/${encodeURIComponent(id)}`, {
-		method: "DELETE",
-	});
+    return doFetch<void>(`/tasks/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -185,23 +186,23 @@ export function deleteTask(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export function setTaskStatus(id: string, status: TaskStatus): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/status`, {
-		method: "PATCH",
-		body: { status },
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/status`, {
+        method: 'PATCH',
+        body: {status},
+    });
 }
 
 export function setTaskAssignee(id: string, userID: string): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/assignee`, {
-		method: "POST",
-		body: { user_id: userID } satisfies SetAssigneeInput,
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/assignee`, {
+        method: 'POST',
+        body: {user_id: userID} satisfies SetAssigneeInput,
+    });
 }
 
 export function removeTaskAssignee(id: string): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/assignee`, {
-		method: "DELETE",
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/assignee`, {
+        method: 'DELETE',
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -209,16 +210,16 @@ export function removeTaskAssignee(id: string): Promise<Task> {
 // ---------------------------------------------------------------------------
 
 export function setReminder(id: string, offsetMS: number): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/reminder`, {
-		method: "POST",
-		body: { offset_ms: offsetMS } satisfies SetReminderInput,
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/reminder`, {
+        method: 'POST',
+        body: {offset_ms: offsetMS} satisfies SetReminderInput,
+    });
 }
 
 export function removeReminder(id: string): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/reminder`, {
-		method: "DELETE",
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/reminder`, {
+        method: 'DELETE',
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -226,17 +227,17 @@ export function removeReminder(id: string): Promise<Task> {
 // ---------------------------------------------------------------------------
 
 export function createSubtask(
-	parentID: string,
-	input: CreateSubtaskInput,
+    parentID: string,
+    input: CreateSubtaskInput,
 ): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(parentID)}/subtasks`, {
-		method: "POST",
-		body: input,
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(parentID)}/subtasks`, {
+        method: 'POST',
+        body: input,
+    });
 }
 
 export function listSubtasks(parentID: string): Promise<Task[]> {
-	return doFetch<Task[]>(`/tasks/${encodeURIComponent(parentID)}/subtasks`);
+    return doFetch<Task[]>(`/tasks/${encodeURIComponent(parentID)}/subtasks`);
 }
 
 // ---------------------------------------------------------------------------
@@ -244,17 +245,34 @@ export function listSubtasks(parentID: string): Promise<Task[]> {
 // ---------------------------------------------------------------------------
 
 export function createComment(
-	taskID: string,
-	input: CreateCommentInput,
+    taskID: string,
+    input: CreateCommentInput,
 ): Promise<Comment> {
-	return doFetch<Comment>(`/tasks/${encodeURIComponent(taskID)}/comments`, {
-		method: "POST",
-		body: input,
-	});
+    return doFetch<Comment>(`/tasks/${encodeURIComponent(taskID)}/comments`, {
+        method: 'POST',
+        body: input,
+    });
 }
 
 export function listComments(taskID: string): Promise<Comment[]> {
-	return doFetch<Comment[]>(`/tasks/${encodeURIComponent(taskID)}/comments`);
+    return doFetch<Comment[]>(`/tasks/${encodeURIComponent(taskID)}/comments`);
+}
+
+// ---------------------------------------------------------------------------
+// Activity / task events (server/api.go: GET /tasks/:id/events)
+// ---------------------------------------------------------------------------
+
+// listTaskEvents fetches a task's audit trail (newest-first), permission-gated
+// by the view rule. The optional limit caps the page (server default 50). Used
+// by the Task Details Activity feed to interleave events with comments.
+export function listTaskEvents(
+    taskID: string,
+    limit?: number,
+): Promise<TaskEvent[]> {
+    const qs = limit ? `?limit=${encodeURIComponent(limit)}` : '';
+    return doFetch<TaskEvent[]>(
+        `/tasks/${encodeURIComponent(taskID)}/events${qs}`,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -266,13 +284,13 @@ export function listComments(taskID: string): Promise<Comment[]> {
 // already had a card in that channel). The server authorizes the caller (must
 // be able to view the task and be a member of channelID).
 export function shareTask(
-	id: string,
-	channelID: string,
+    id: string,
+    channelID: string,
 ): Promise<ShareTaskResult> {
-	return doFetch<ShareTaskResult>(`/tasks/${encodeURIComponent(id)}/share`, {
-		method: "POST",
-		body: { channel_id: channelID },
-	});
+    return doFetch<ShareTaskResult>(`/tasks/${encodeURIComponent(id)}/share`, {
+        method: 'POST',
+        body: {channel_id: channelID},
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -284,10 +302,10 @@ export function shareTask(
 // setTaskOrder re-orders a task for Kanban drag-and-drop. The server endpoint is
 // not yet implemented; this stub keeps the client surface complete per #31.
 export function setTaskOrder(id: string, orderKey: string): Promise<Task> {
-	return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/order`, {
-		method: "PATCH",
-		body: { order_key: orderKey },
-	});
+    return doFetch<Task>(`/tasks/${encodeURIComponent(id)}/order`, {
+        method: 'PATCH',
+        body: {order_key: orderKey},
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +316,8 @@ export function setTaskOrder(id: string, orderKey: string): Promise<Task> {
 
 // User is the minimal slice of model.User the picker needs.
 export interface User {
-	id: string;
-	username: string;
+    id: string;
+    username: string;
 }
 
 // getUserByUsername resolves a username (without the leading @) to a user via
@@ -310,21 +328,21 @@ export interface User {
 // consistent (GET needs no CSRF token, but credentials: 'include' and
 // X-Requested-With still apply).
 export async function getUserByUsername(username: string): Promise<User> {
-	const url = `/api/v4/users/username/${encodeURIComponent(username)}`;
-	const res = await fetch(url, Client4.getOptions({}));
-	if (!res.ok) {
-		let message = "";
-		try {
-			message = (await res.text()).trim();
-		} catch {
-			message = "";
-		}
-		throw new ClientError(
-			res.status,
-			message || res.statusText || "request failed",
-		);
-	}
-	return JSON.parse(await res.text()) as User;
+    const url = `/api/v4/users/username/${encodeURIComponent(username)}`;
+    const res = await fetch(url, Client4.getOptions({}));
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(
+            res.status,
+            message || res.statusText || 'request failed',
+        );
+    }
+    return JSON.parse(await res.text()) as User;
 }
 
 // getUser resolves a user id to a user via the host REST API
@@ -335,34 +353,66 @@ export async function getUserByUsername(username: string): Promise<User> {
 // selector) for already-loaded profiles; this is the fallback when the user
 // isn't cached.
 export async function getUser(userID: string): Promise<User> {
-	const url = `/api/v4/users/${encodeURIComponent(userID)}`;
-	const res = await fetch(url, Client4.getOptions({}));
-	if (!res.ok) {
-		let message = "";
-		try {
-			message = (await res.text()).trim();
-		} catch {
-			message = "";
-		}
-		throw new ClientError(
-			res.status,
-			message || res.statusText || "request failed",
-		);
-	}
-	return JSON.parse(await res.text()) as User;
+    const url = `/api/v4/users/${encodeURIComponent(userID)}`;
+    const res = await fetch(url, Client4.getOptions({}));
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(
+            res.status,
+            message || res.statusText || 'request failed',
+        );
+    }
+    return JSON.parse(await res.text()) as User;
+}
+
+// UserStatus is the minimal slice of the host presence response
+// (GET /api/v4/users/<id>/status): `status` is one of
+// online/away/dnd/offline. The Activity feed's avatar status dot is driven
+// from this (AC5/AC6, task-details-panel styling — data-driven, not a
+// hardcoded offline default).
+export interface UserStatus {
+    user_id: string;
+    status: string;
+}
+
+// getUserStatus resolves a user's presence status via the host REST API
+// (GET /api/v4/users/<id>/status). Throws ClientError on a non-2xx reply.
+// Used by useResolvedStatuses to drive the Activity avatar status-dot
+// modifier class (online/away/dnd/offline).
+export async function getUserStatus(userID: string): Promise<UserStatus> {
+    const url = `/api/v4/users/${encodeURIComponent(userID)}/status`;
+    const res = await fetch(url, Client4.getOptions({}));
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(
+            res.status,
+            message || res.statusText || 'request failed',
+        );
+    }
+    return JSON.parse(await res.text()) as UserStatus;
 }
 
 // UserSearchResult is the minimal slice of model.User the listing endpoints
 // return. Kept compatible with getUserByUsername's User (id + username) but
 // also carries the display name for richer picker rows.
 export interface UserSearchResult {
-	id: string;
-	username: string;
-	first_name?: string;
-	last_name?: string;
-	nickname?: string;
-	is_bot?: boolean;
-	delete_at?: number;
+    id: string;
+    username: string;
+    first_name?: string;
+    last_name?: string;
+    nickname?: string;
+    is_bot?: boolean;
+    delete_at?: number;
 }
 
 // searchUsers lists users for the assignee picker. When channelID is provided
@@ -378,54 +428,56 @@ export interface UserSearchResult {
 // matches the rest of the client. Bots and deleted users are filtered out
 // client-side so the picker only offers real, active people.
 export async function searchUsers(
-	term?: string,
-	channelID?: string,
-	perPage = 50,
+    term?: string,
+    channelID?: string,
+    perPage = 50,
 ): Promise<UserSearchResult[]> {
-	const q = new URLSearchParams();
-	q.set("per_page", String(perPage));
-	if (channelID) {
-		q.set("in_channel", channelID);
-	}
-	if (term && term.trim()) {
-		q.set("term", term.trim());
-	}
-	const url = `/api/v4/users?${q.toString()}`;
-	const res = await fetch(url, Client4.getOptions({}));
-	if (!res.ok) {
-		let message = "";
-		try {
-			message = (await res.text()).trim();
-		} catch {
-			message = "";
-		}
-		throw new ClientError(
-			res.status,
-			message || res.statusText || "request failed",
-		);
-	}
-	const list = JSON.parse(await res.text()) as UserSearchResult[];
-	return list.filter((u) => !u.is_bot && !u.delete_at);
+    const q = new URLSearchParams();
+    q.set('per_page', String(perPage));
+    if (channelID) {
+        q.set('in_channel', channelID);
+    }
+    if (term && term.trim()) {
+        q.set('term', term.trim());
+    }
+    const url = `/api/v4/users?${q.toString()}`;
+    const res = await fetch(url, Client4.getOptions({}));
+    if (!res.ok) {
+        let message = '';
+        try {
+            message = (await res.text()).trim();
+        } catch {
+            message = '';
+        }
+        throw new ClientError(
+            res.status,
+            message || res.statusText || 'request failed',
+        );
+    }
+    const list = JSON.parse(await res.text()) as UserSearchResult[];
+    return list.filter((u) => !u.is_bot && !u.delete_at);
 }
 
 export default {
-	createTask,
-	getTask,
-	listTasks,
-	patchTask,
-	deleteTask,
-	setTaskStatus,
-	setTaskAssignee,
-	removeTaskAssignee,
-	setReminder,
-	removeReminder,
-	createSubtask,
-	listSubtasks,
-	createComment,
-	listComments,
-	shareTask,
-	setTaskOrder,
-	getUserByUsername,
-	getUser,
-	searchUsers,
+    createTask,
+    getTask,
+    listTasks,
+    patchTask,
+    deleteTask,
+    setTaskStatus,
+    setTaskAssignee,
+    removeTaskAssignee,
+    setReminder,
+    removeReminder,
+    createSubtask,
+    listSubtasks,
+    createComment,
+    listComments,
+    listTaskEvents,
+    shareTask,
+    setTaskOrder,
+    getUserByUsername,
+    getUser,
+    getUserStatus,
+    searchUsers,
 };

@@ -2034,3 +2034,115 @@
 }
 
 // --- New Task dialog (legacy modal — kept for registration compat) ---------
+
+// --- Activity feed + composer (Task Details redesign — task-details-comment) -
+// Combined newest-first feed of task events + comments (Decision 3) and the
+// auto-growing composer textarea (Decision 5). Reuses the existing --task-*
+// tokens; adds net-new tokens only for the Activity surface. Matches the
+// open-design target (cool gray palette, Mattermost Blue #1f66e1, Open Sans,
+// compact density, visible focus ring, status dots, avatar gradient pills).
+
+.task-detail__activity-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.task-detail__activity-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 0;
+}
+
+.task-detail__activity-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    color: var(--task-accent-on);
+    background: linear-gradient(135deg, var(--task-accent), #1e325c);
+    font-size: 10px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    position: relative;
+}
+
+// Status dot (online/away/dnd/offline) overlaid on the avatar pill.
+.task-detail__activity-avatar::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 1.5px solid var(--task-bg);
+    background: var(--task-meta); // offline default
+}
+
+.task-detail__activity-avatar--online::after { background: var(--task-success); }
+.task-detail__activity-avatar--away::after { background: var(--task-warning); }
+.task-detail__activity-avatar--dnd::after { background: var(--task-danger); }
+
+.task-detail__activity-body {
+    min-width: 0;
+    flex: 1;
+    font-size: 13px;
+    color: var(--task-fg);
+    line-height: 1.4;
+}
+
+.task-detail__activity-body strong {
+    font-weight: 600;
+}
+
+.task-detail__activity-time {
+    display: block;
+    margin-top: 1px;
+    color: var(--task-meta);
+    font-size: 11px;
+}
+
+.task-detail__activity-comment {
+    margin-top: 4px;
+    padding: 6px 8px;
+    background: var(--task-surface);
+    border-radius: var(--task-radius-md);
+    font-size: 13px;
+    color: var(--task-fg);
+    overflow-wrap: break-word;
+}
+
+// Composer: auto-growing textarea (replaces the single-line input, AC7).
+.task-detail__composer-textarea {
+    resize: none;
+    min-height: 32px;
+    max-height: 120px; // cap; content scrolls internally beyond this
+    overflow-y: auto;
+    line-height: 1.4;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 7px 9px;
+    border: 1px solid var(--task-border);
+    border-radius: var(--task-radius-md);
+    background: var(--task-bg);
+    color: var(--task-fg);
+    width: 100%;
+
+    &:focus {
+        outline: none;
+        border-color: var(--task-accent);
+        box-shadow: var(--task-focus-ring);
+    }
+}
+
+// Disabled send button state (empty/whitespace input, AC7).
+.task-btn--primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
