@@ -1522,9 +1522,30 @@ func TestDeleteTask_ForbiddenForChannelMember(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 
+	// Mock the "member" fixture as a real member of ch1 so this represents a
+	// genuine channel member (not an outsider). Delete is still creator-only.
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "ch1", "member").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "member"))
 	assert.Equal(t, http.StatusForbidden, w.Code, "channel member cannot delete")
+}
+
+// CodeRabbit nitpick hardening: a real channel member (mocked membership) must
+// still be denied manage actions — guards against a future view/list-based
+// regression where channel members accidentally gain write access.
+func TestPatchTask_ForbiddenForChannelMember(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "ch1", "member").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID,
+		`{"update_fields":["summary"],"summary":"hacked"}`, "member"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "channel member cannot patch")
 }
 
 func TestDeleteTask_AllowedForCreator(t *testing.T) {

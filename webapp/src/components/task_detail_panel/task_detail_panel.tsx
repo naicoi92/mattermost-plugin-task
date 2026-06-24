@@ -157,10 +157,14 @@ export default function TaskDetailPanel({
                 if (cancelled) {
                     return;
                 }
-                const detail = results[0].status === 'fulfilled' ? results[0].value : undefined;
-                const subs = results[1].status === 'fulfilled' ? results[1].value : undefined;
-                const coms = results[2].status === 'fulfilled' ? results[2].value : undefined;
-                const evs = results[3].status === 'fulfilled' ? results[3].value : undefined;
+                const detail =
+					results[0].status === 'fulfilled' ? results[0].value : undefined;
+                const subs =
+					results[1].status === 'fulfilled' ? results[1].value : undefined;
+                const coms =
+					results[2].status === 'fulfilled' ? results[2].value : undefined;
+                const evs =
+					results[3].status === 'fulfilled' ? results[3].value : undefined;
                 if (!detail) {
                     // The task itself failed to load — surface the reason.
                     const r = results[0] as PromiseRejectedResult;
@@ -168,9 +172,19 @@ export default function TaskDetailPanel({
                     return;
                 }
                 setFull(detail);
-                setSubtasks(subs ?? []);
-                setComments(coms ?? []);
-                setEvents(evs ?? []);
+
+                // On partial failure, keep whatever was already loaded rather than
+                // blanking the panel: a failing slice (e.g. a transient comment/event
+                // 403) must not discard the successful ones or previously-loaded data.
+                if (subs) {
+                    setSubtasks(subs);
+                }
+                if (coms) {
+                    setComments(coms);
+                }
+                if (evs) {
+                    setEvents(evs);
+                }
                 setEditingTitle(false);
                 setEditingDue(false);
                 setEditingDescription(false);
@@ -223,10 +237,19 @@ export default function TaskDetailPanel({
                 if (controller.signal.aborted) {
                     return;
                 }
-                const coms = results[0].status === 'fulfilled' ? results[0].value : undefined;
-                const evs = results[1].status === 'fulfilled' ? results[1].value : undefined;
-                setComments(coms ?? []);
-                setEvents(evs ?? []);
+                const coms =
+					results[0].status === 'fulfilled' ? results[0].value : undefined;
+                const evs =
+					results[1].status === 'fulfilled' ? results[1].value : undefined;
+
+                // Only overwrite state for slices that succeeded; a failing slice
+                // keeps the previously-loaded data (no blanking on transient error).
+                if (coms) {
+                    setComments(coms);
+                }
+                if (evs) {
+                    setEvents(evs);
+                }
             } catch (err) {
                 if (controller.signal.aborted) {
                     return;
