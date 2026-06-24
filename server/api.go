@@ -335,7 +335,7 @@ func (p *Plugin) getTask(w http.ResponseWriter, r *http.Request) {
 				memberErr = "member exists (check should have allowed)"
 			}
 		}
-		p.API.LogDebug("[DEBUG-perm] view denied",
+		p.API.LogError("[DEBUG-perm] view denied",
 			"task_id", t.ID, "actor", actor,
 			"creator_id", t.CreatorID, "assignee_id", t.AssigneeID,
 			"channel_id", t.ChannelID, "card_channels", strings.Join(cardChans, ","),
