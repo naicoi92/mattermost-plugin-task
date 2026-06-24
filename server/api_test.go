@@ -33,6 +33,16 @@ func newTestPlugin(t *testing.T) (*Plugin, store.Store) {
 	st := newTestTaskStore(t)
 	api := &plugintest.API{}
 	api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	// LogDebug is variadic in usage; register per-arity stubs so the
+	// temporary [DEBUG-perm] instrumentation (many key/value pairs) is
+	// tolerated. Remove with the instrumentation.
+	for n := 1; n <= 15; n++ {
+		args := make([]any, n)
+		for i := range args {
+			args[i] = mock.Anything
+		}
+		api.On("LogDebug", args...).Return().Maybe()
+	}
 	// LogError is variadic in usage (handlers pass message + N key/value
 	// pairs). Register per-arity stubs so any call is tolerated.
 	for n := 1; n <= 9; n++ {

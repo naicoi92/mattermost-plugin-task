@@ -320,7 +320,26 @@ func (p *Plugin) getTask(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserViewTask(currentUserID(r), t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+	cardChans := p.cardChannelIDs(t.ID)
+	actor := currentUserID(r)
+	if !permission.CanUserViewTask(actor, t, cardChans, p.channelMembership()) {
+		// [DEBUG-perm] temporary instrumentation: capture why a view was denied
+		// for a task that the caller expected to read. Remove after diagnosis.
+		var memberErr string
+		if t.ChannelID != "" {
+			if m, e := p.API.GetChannelMember(t.ChannelID, actor); e != nil {
+				memberErr = "GetChannelMember error: " + e.Error()
+			} else if m == nil {
+				memberErr = "GetChannelMember returned nil member"
+			} else {
+				memberErr = "member exists (check should have allowed)"
+			}
+		}
+		p.API.LogDebug("[DEBUG-perm] view denied",
+			"task_id", t.ID, "actor", actor,
+			"creator_id", t.CreatorID, "assignee_id", t.AssigneeID,
+			"channel_id", t.ChannelID, "card_channels", strings.Join(cardChans, ","),
+			"membership", memberErr)
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
 		return
 	}
