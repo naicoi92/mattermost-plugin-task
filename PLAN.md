@@ -36,6 +36,7 @@ Rất dễ nhầm vì cả hai đều dùng chữ “list”. Đây là 2 thứ 
 | **Tasklist** (khái niệm Lark) | **ENTITY — một “dự án/nhóm” chứa task**. Là dữ liệu: có tên, thành viên, vai trò owner/editor/viewer. Task *thuộc về* tasklist. | Dự án "Sprint 42", "Marketing Q3", "Onboarding" | ⏸ Hoãn |
 
 **So sánh thực tế:**
+
 - **List (Quick List/Kanban)** giống *chế độ xem* trong file explorer (xem theo “của tôi”, “kênh”, “theo status”) — chỉ là cách sắp xếp hiển thị.
 - **Tasklist** giống một *thư mục/dự án* bạn tự tạo để gom task: vd bạn lập tasklist **“Ra mắt web mới”**, thêm 10 task vào đó; tasklist có 3 thành viên với vai trò khác nhau. Nó giống *Board* của Trello, *Project* của Asana, *Danh sách* của Microsoft To Do.
 
@@ -99,6 +100,7 @@ Template `mattermost-plugin-starter-template` đã cung cấp sẵn các pattern
 | Đa ngôn ngữ | `registerTranslations(getTranslationsForLocale)` + `en.json`/`vi.json` |
 
 ### 2.3 API server then chốt (ref: server-reference)
+
 `p.API` / `pluginapi.Client`: `CreateBot`/`EnsureBot` (tạo bot user cho DM — trong `OnActivate`, khai báo trong `plugin.json` `server.runtime_config`/bot), `CreatePost`, `SendEphemeralPost`, `UpdatePost` (dùng `ChannelPostID`/`DMPostID` để update card), `OpenInteractiveDialog`, `GetDirectChannel`/`CreateDirectChannel` (DM với bot), `KV.Set`(+`SetAtomic`/`SetAtomicWithRetries`)/`Get`/`Delete`/`ListKeys`, `RegisterCommand`, `PublishWebSocketEvent`, `UploadFile`. Reminder qua `cluster.Schedule`.
 
 > **Bot account (chốt — theo doc bot-accounts)**: plugin tạo bot qua **`p.API.EnsureBot(&model.Bot{...})` trong `OnActivate`** (đây là cách chính thức cho plugin, không phụ thuộc manifest). Lưu `botUserID`; mọi DM/card/task post **dùng bot làm tác giả**. Bots do plugin tạo dùng plugin ID làm owner.
@@ -138,6 +140,7 @@ Lưu trữ dùng **DB chính của server Mattermost** (không tạo DB riêng),
 | `task_events` | Audit trail (append-only) | id, task_id FK CASCADE, actor_id, event_type, from_value, to_value (TEXT JSON), created_at. |
 
 **Lý do 6 bảng** (thay vì 1 KV entity phẳng):
+
 - **Query**: WHERE/JOIN/LIMIT đẩy xuống DB — List/Search/Reminders là 1 query thay vì N+1 ListKeys+Get.
 - **Atomicity**: WithTx đảm bảo multi-table write commit/roll back cùng nhau (Create = task + members + reminder + event).
 - **FK CASCADE**: Delete 1 task tự xoá members/reminders/posts/comments/events — không cần cascade thủ công.
@@ -168,6 +171,7 @@ Dialect: **postgres** (production mặc định), **sqlite** (test in-memory qua
 ```
 
 ### 4.2 Model (Go DTO)
+
 ```go
 type Task struct {
     ID             string   // ULID (toàn cục, sortable, không dùng seq counter)
@@ -201,6 +205,7 @@ type Comment struct {
 ```
 
 ### 4.3 Concurrency, atomic & truy vấn (sửa theo review)
+
 - **KHÔNG dùng `KV.CompareAndSet` (đã deprecated).** Dùng `client.KV.Set(key, value, pluginapi.SetAtomic(oldValue))` cho ghi có điều kiện; hoặc helper `SetAtomicWithRetries` cho read-modify-write tự retry khi conflict.
 - **Index = key-per-edge**: thêm/xoá quan hệ = 1 `Set`/`Delete` (không CAS, không contention) → phù hợp đông user. Truy vấn “tasks của user” = `ListKeys("idx:u:{uid}:assigned:")` → load entity.
 - **Reminder**: scheduler chỉ `ListKeys("idx:reminder:")` + đọc value nhỏ `{due, offset}` → fire khi đến hạn → xoá key + set `ReminderFired`. **Không load toàn bộ task entity** → scalable tới hàng chục nghìn task.
@@ -241,6 +246,7 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 ### 5.1 Chi tiết chức năng theo nhóm thao tác
 
 #### A. Tạo task
+
 - **Cách gọi**: `/task add "<tiêu đề>"` (chỉ tiêu đề) → mở **New Task dialog pre-filled tiêu đề**; HOẶC **`/task new`** mở dialog trống (hoặc `/task new "<tiêu đề>"` pre-fill) — điểm vào chính cho **mobile** (#107); HOẶC nút **➕ New Task** trong **composer** (desktop, `registerPostEditorActionComponent`, #107) hoặc trong RHS; HOẶC message action **"Tạo task từ tin nhắn"** (nội dung message → `summary` + `description`). KHÔNG parse inline `@assignee`/`due`/`desc` — mọi trường khác nhập trong dialog.
 - **Đầu vào** (trong dialog): `summary` (bắt buộc), `assignee` (**1** user), `due`, `description`.
 - **Scope / trigger**: mặc định **channel task** (`channel_id` = kênh hiện tại). **Task cá nhân** (`ChannelID == ""`): tạo qua **New Task dialog** chọn scope *Personal*, HOẶC `/task add` trong **DM với bot**.
@@ -249,6 +255,7 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 - **Phân quyền**: mọi thành viên kênh đều tạo được.
 
 #### B. Liệt kê & lọc task
+
 - **Cách gọi**: `/task list [mine|channel|all] [status todo|in_progress|done|cancelled] [due overdue|today|week]` HOẶC tab sidebar **My Tasks** / **Channel Tasks** (desktop) HOẶC **Interactive Dialog** (mobile).
 - **Chức năng lọc**: theo **scope** (việc của tôi / kênh này / tất cả), **trạng thái** (todo/in_progress/done/cancelled), **assignee**, **hạn** (quá hạn 🔴 / hôm nay / tuần này). Phân trang + sắp xếp theo due/created.
 - **Hành vi**: desktop → RHS `QuickList`; mobile → **Quick List dialog** (`select` lọc + `select` chọn task → mở Task Detail dialog). "My Tasks" = index `idx:u:{uid}:assigned`; task quá hạn tô đỏ.
@@ -256,60 +263,72 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 - **Phân quyền**: My Tasks tự xem; Channel Tasks cho thành viên kênh.
 
 #### C. Xem chi tiết task
+
 - **Cách gọi**: `/task show <id>`, click 1 task trong Quick List/Kanban, bấm **“Chi tiết”** trên task card, hoặc chọn từ Quick List dialog.
 - **Chức năng**: hiển thị summary, description, due (theo timezone user), assignees, danh sách **subtask kèm tiến độ** (vd: 2/3 xong), **comment** theo thời gian, trạng thái **reminder**.
 - **Render**: **desktop RHS** → `TaskDetailPanel`; **desktop Kanban modal** → panel detail **bên trong modal** (panel phải, không mở RHS phía sau); **mobile (hoặc bất kỳ đâu)** → **Interactive Dialog** xem + sửa các trường (status, assignee, due...) rồi submit lưu. → **Mobile hỗ trợ đầy đủ Task Detail**.
 
 #### D. Sửa task
+
 - **Cách gọi**: `/task edit <id> [summary|due|desc]...` HOẶC nút **sửa** trong chi tiết.
 - **Chức năng**: **partial update** — chỉ trường được chỉ định mới đổi (kiểu `update_fields` của Lark), rõ ràng giữa "không đổi" và "xoá". Cập nhật `UpdatedAt`.
 - **Phân quyền**: **creator HOẶC assignee** (assignee được sửa để điều chỉnh cho phù hợp — mục 5.4).
 
 #### E. Đổi status (Kanban workflow)
+
 - **Cách gọi**: kéo-thả thẻ giữa các cột trên bảng Kanban HOẶC `/task status <id> <todo|in_progress|done|cancelled>`.
 - **Chức năng**: đổi `Status` theo workflow cột. **done** ⇔ set `CompletedAt` + thông báo; **cancelled** = hủy task (không làm nữa, set `CancelledAt`, ngừng reminder, khác done). **Cột cố định 4 cột** `todo`/`in_progress`/`done`/`cancelled` (KHÔNG cấu hình).
 - **Phân quyền**: creator hoặc assignee.
 
 #### F. Hoàn thành / Hủy
+
 - **Cách gọi**: nút **`[✓ Done]`** / **`[🚫 Cancel]`** trên card, `/task done <id>` / `/task cancel <id>`, kéo vào cột done/cancelled.
 - **Chức năng**: tương đương `/task status <id> done|cancelled`. `done` ⇔ set `CompletedAt`; `cancelled` ⇔ set `CancelledAt` (ngừng reminder). Card gạch ngang; **thông báo creator + assignee**. **Không có trạng thái “reopen”** — muốn làm lại thì `/task status <id> todo|in_progress` (xoá CompletedAt/CancelledAt).
 - **Phân quyền**: creator HOẶC assignee (co-owner).
 
 #### G. Xoá task
+
 - **Cách gọi**: `/task delete <id>` hoặc menu trong chi tiết (có dialog xác nhận).
 - **Chức năng**: **hard delete cascade** (theo review) — xoá đệ quy subtask + comment (liệt kê qua `ListKeys` prefix) + gỡ mọi index marker + xoá entity; không để mồ côi.
-- **Phân quyền**: creator (hoặc admin kênh).
+- **Phân quyền**: creator (channel admin không còn quyền xoá — chỉ creator).
 
 #### H. Gán / Bỏ gán (Assign)
+
 - **Cách gọi**: nút **`[👤 Assign]`** (mở user picker), `/task assign <id> @user`, `/task unassign <id>`.
 - **Chức năng**: **gán 1 assignee** (thay assignee hiện tại); **DM người được gán**; cập nhật index `assigned` + `idx:reminder` (nếu cần).
 - **Phân quyền**: creator hoặc assignee.
 
 #### I. Subtask (tạo / xem)
+
 - **Cách gọi**: nút **`[➕ Subtask]`**, `/task subtask <idCha> <tóm tắt>`.
 - **Chức năng**: tạo task con (có `parent_task_id`); **ChannelID kế thừa từ task cha**; **assignee mặc định = assignee task cha** (creator/assignee gán lại sau nếu cần); permission check dùng **ChannelID của chính subtask** (kế thừa). Lồng trong chi tiết task cha; task cha hiển thị **tiến độ subtask** (vd `2/3`); subtask có đầy đủ thuộc tính của task (do, assign, due).
 - **Quy tắc cha-con**: subtask = task độc lập; parent done chỉ khi mọi subtask done/cancelled; parent cancelled → cascade cancel subtask todo/in_progress (xem 5.5).
 - **Phân quyền**: creator hoặc assignee của task cha.
 
 #### J. Comment (thêm / xem)
+
 - **Cách gọi**: nút **`[💬 Comment]`**, `/task comment <id> <nội dung>`.
 - **Chức năng**: thêm comment (nội dung + người + thời gian); list theo thời gian; **thông báo participants** (assignees + creator).
 - **Phân quyền**: thành viên kênh / participant.
 
 #### K. Reminder (đặt / tắt)
+
 - **Cách gọi**: `/task remind <id> <15m|1h|1d|off>`, nút trong chi tiết.
 - **Chức năng**: đặt khoảng nhắc trước `due` (mặc định theo config); scheduler DM assignee **đúng lúc** `due − offset` và **chỉ 1 lần** (đánh dấu `ReminderFired`); `off` để tắt. **Yêu cầu task có due.**
 - **Phân quyền**: creator hoặc assignee.
 
 #### L. Nhận thông báo (tự động)
+
 - **Sự kiện kích hoạt**: được gán task · task được đánh dấu xong · có comment mới · reminder đến hạn · task sắp quá hạn. (KHÔNG thông báo khi bị `unassign`.)
 - **Kênh**: DM bot (mặc định) hoặc ephemeral; bật/tắt qua config.
 
 #### L. Quick List (RHS)
+
 - **Cách gọi**: nút channel header **`📋 Tasks`**.
 - **Chức năng**: mở **RHS** — `QuickList` với tab **My Tasks** / **Channel Tasks**, bộ lọc, nút **➕ New Task** (mở popup dialog); click task → **TaskDetailPanel** (cùng RHS).
 
 #### M. Bảng Kanban (theo dõi task theo status — full page)
+
 - **Cách gọi**: nút **`📊 Kanban`** (trong RHS / channel header) mở **full-page modal overlay**, hoặc `/task board [mine|channel]`.
 - **Chức năng**: hiển thị task dạng **bảng cột theo status** (To Do · In Progress · Done · Cancelled). Bộ chọn scope: **Cá nhân (My Tasks)** / **Kênh (Channel)**. Mỗi cột là 1 status; thẻ hiển thị summary, assignee (avatar), due (tô đỏ nếu quá hạn), số subtask.
 - **Tương tác**: **kéo-thả thẻ** giữa các cột → đổi status (→ done thì đánh dấu hoàn thành + thông báo); kéo để **sắp xếp lại thứ tự** trong cột (`OrderKey` fractional index); click thẻ → mở **TaskDetailPanel**.
@@ -319,6 +338,7 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 ---
 
 ### 5.2 Slash command đầy đủ (tham chiếu nhanh)
+
 ```
 /task new ["<summary>"]                                                mở New Task dialog (trống hoặc pre-fill) — điểm vào chính mobile (#107)
 /task add "<summary>"                                                  tạo task + mở dialog điền assignee/due/desc
@@ -336,9 +356,11 @@ Phần này mô tả **từng thao tác người dùng** và **tính năng chi t
 /task search <keyword>                                              tìm task (escape hatch cho mobile/dialog)
 /task help
 ```
+
 Parser: `@mention` → `userId`; `due` → timestamp theo timezone user (`preference`); autocomplete cho mọi subcommand. **Ưu tiên Interactive Dialog**: `/task new` (không cần tiêu đề, mở dialog trống — điểm vào mobile #107) và `/task add "<tiêu đề>"` (chỉ cần tiêu đề, có/không quote) → mở **dialog tạo task** điền assignee/due/desc; `/task edit`/`/task remind` cũng mở dialog. Parser chỉ parse tiêu đề + mở dialog → đơn giản, cần unit test kỹ.
 
 ### 5.3 REST API (prefix `/plugins/com.mattermost.plugin-task/api/v1/`, middleware auth)
+
 ```
 POST   /tasks                          tạo
 GET    /tasks?scope=mine|channel&channel_id=...&status=...&due=...&after_order_key=...&limit=50  list (phân trang cursor)
@@ -358,31 +380,35 @@ DELETE /tasks/:id/reminder            tắt reminder (xoá ReminderOffset + idx:
 POST   /actions                        callback từ interactive buttons (Done/Cancel/Assign/Subtask/Comment) → mở dialog / cập nhật card
 GET    /me/tasks                       My Tasks (alias /tasks?scope=mine)
 ```
+
 Định dạng JSON + `update_fields` (partial update kiểu Lark). **Không có `client_token` idempotency trong MVP** (bỏ).
 
 ### 5.4 Phân quyền (co-owner model)
-**Assignee = co-owner** để chủ động điều chỉnh công việc (sửa, chuyển giao, đổi status...); **chỉ creator mới xoá** để tránh mất kiểm soát hoàn toàn. MVP chia:
 
-| Hành động | Creator | Assignee | Người khác |
+**Assignee = co-owner** để chủ động điều chỉnh công việc (sửa, chuyển giao, đổi status...); **chỉ creator mới xoá** để tránh mất kiểm soát hoàn toàn. **Không phân biệt channel admin** — admin kênh được đối xử như channel member thường (xem/comment, không sửa/xoá). MVP chia:
+
+| Hành động | Creator | Assignee | Channel member (kể cả admin) |
 |---|---|---|---|
-| Xem task | ✅ | ✅ | ✅ nếu `ChannelID != ""` (kênh) · ❌ nếu personal (`ChannelID == ""`) |
-| Sửa summary/description/due | ✅ | ✅ | ❌ |
+| Xem / list / list-subtasks / list-comments / list-events | ✅ | ✅ | ✅ nếu `ChannelID != ""` (kênh) hoặc card channel · ❌ nếu personal (`ChannelID == ""`) |
+| Sửa summary/description/due/priority | ✅ | ✅ | ❌ |
 | Đổi status (todo/in_progress/done/cancelled) | ✅ | ✅ | ❌ |
 | Complete / Cancel | ✅ | ✅ | ❌ |
-| Assign / Unassign (chuyển giao) | ✅ | ✅ | ❌ |
+| Assign / Unassign (chuyển giao / reassign) | ✅ | ✅ | ❌ |
 | Tạo subtask / đặt reminder | ✅ | ✅ | ❌ |
 | Comment | ✅ | ✅ | ✅ (nếu xem được theo rule trên) |
-| Xoá task (hard delete) | ✅ | ❌ | ✅ **admin kênh** (nếu `ChannelID != ""`) |
+| Xoá task (hard delete) | ✅ | ❌ | ❌ |
 
-> Triết lý: Assignee gần như **co-owner** (sửa, chuyển giao, đổi status, subtask, reminder, comment). **Chỉ creator HOẶC admin kênh (với channel task) mới xoá được**; assignee không xoá được. **Không thông báo creator** khi assignee thay đổi critical field.
+> Triết lý: Assignee gần như **co-owner** (sửa, chuyển giao, đổi status, subtask, reminder, comment). **Chỉ creator mới xoá được**; assignee và channel member/admin đều không xoá được. **Không thông báo creator** khi assignee thay đổi critical field.
 
 **Multi-assignee (MVP):** ❌ KHÔNG dùng — **chỉ 1 assignee/task** (đơn giản hóa, theo review). Multi-assignee + `completion_mode` (or-sign/countersign của Lark) **hoãn** (Vượt MVP). Khi hoãn, `done` rõ ràng = assignee duy nhất đánh dấu xong.
 
-**Quy tắc visibility (theo ChannelID):**
-- `ChannelID != ""` → **mọi thành viên kênh** xem được task.
-- `ChannelID == ""` (personal) → **chỉ creator + assignee** xem được (`/task show` của người khác sẽ bị từ chối).
+**Quy tắc visibility (theo channel surface):**
+
+- **Channel-surfaced task** (`ChannelID != ""` HOẶC có card post) → **bất kỳ ai cũng xem được** (card đã public trong kênh; view KHÔNG gate trên channel membership vì `GetChannelMember` có thể flake gây 403 giả). Khớp với `listTasks` (đã không pre-gate từ trước).
+- **Personal task** (`ChannelID == ""` VÀ không card) → **chỉ creator + assignee** xem được (`/task show` của người khác sẽ bị từ chối).
 
 ### 5.5 Subtask — ngữ nghĩa & hiển thị trong “My Tasks”
+
 - **Subtask là task độc lập**: có đầy đủ thuộc tính, hoàn thành/hủy như task thường.
 - **Quy tắc hoàn thành cha-con**:
   - Parent chỉ được **done** khi **tất cả subtask** đã `done` HOẶC `cancelled` (chặn done nếu còn subtask todo/in_progress).
@@ -409,6 +435,7 @@ Tầng webapp chỉ tiêu thụ REST API đã xây ở server (phase 1–3).
 > Quy ước giao tiếp: Quick List & Task Detail **cùng chia sẻ RHS**; **khi Kanban modal đang mở, click thẻ mở Task Detail ngay bên trong modal** (panel phải) — không mở RHS phía sau; New Task là dialog nổi; toàn bộ UI **đa ngôn ngữ** (Việt/Anh).
 
 ### 6.2 Component & đăng ký (dùng registry method chính xác)
+
 - `webapp/src/index.tsx`:
   - `registry.registerChannelHeaderButtonAction(icon, () => openRHS(), "Tasks", "Mở danh sách task")` — mở RHS.
   - `registry.registerPostEditorActionComponent(NewTaskComposerButton)` — nút **➕ New Task** trong **FormattingBar của composer** (desktop, #107); dùng class `AdvancedTextEditor__action-button` của host + tooltip `react-bootstrap`. Click → dispatch `OPEN_NEW_TASK_DIALOG` với `draft.channelId`. Mobile không render slot này → dùng `/task new`.
@@ -445,6 +472,7 @@ Mattermost mobile (React Native) **KHÔNG render webapp plugin** (`registerRight
 **Nghiên cứu plugin Calls (theo phản hồi):** Calls hiển thị call screen trên mobile nhờ **code native được build sẵn trong app Mattermost mobile** (chia sẻ types/RTC qua shared lib web↔mobile). Đây **KHÔNG phải cơ chế mở** cho plugin bên thứ 3 — muốn UI native riêng phải **fork app mobile** + viết native module (iOS `RCT_EXPORT_MODULE` / Android `ReactContextBaseJavaModule`) rồi tự build/phát hành. Quá nặng cho plugin phân phối → **không áp dụng**.
 
 **Giải pháp mobile (dialog-first) — ref: Mobile plugins:** Doc xác nhận *“Server plugins may use interactive dialogs and interactive messages to build cross-platform interactions compatible with mobile.”* Nên trên mobile, **Task Detail và Quick List dùng Interactive Dialog** (`p.API.OpenInteractiveDialog`):
+
 - **Quick List dialog**: dialog có các phần tử `select` (load sẵn `options` khi mở dialog) để lọc scope (Cá nhân/Kênh) + status, và một `select` liệt kê **top N task gần nhất / cận hạn nhất** (do Interactive Dialog `select` không có search/pagination/`perform_lookup`). **N cấu hình trong System Console, default 20**. **Escape hatch**: `/task search <keyword>` để tìm task cũ/xa. **Desktop dùng RHS làm chính**; dialog chỉ là fallback khi ở mobile.
 - **Task Detail dialog**: dialog hiển thị các trường task dạng **element sửa được**: `text` (summary), `textarea` (description), `select` (status: todo/in_progress/done/cancelled), `select` với `data_source:"users"` cho **1 assignee**, `text` (due); thêm element read-only tóm tắt **subtask (tiến độ)** & **comment gần đây**. Submit → lưu (partial update) + refresh. Nút phụ để thêm subtask/comment (mở dialog con).
 - **Lưu ý API**: Interactive Dialog hỗ trợ phần tử `text`, `textarea`, `select` (với `data_source: "users"|"channels"` HOẶC `options` tĩnh), `radio`, `checkbox`, `bool` (+ multiselect mới). **KHÔNG có** kiểu `users` riêng, **không có** `static_select`/`perform_lookup` (đó là Apps Framework).
@@ -458,7 +486,9 @@ Mattermost mobile (React Native) **KHÔNG render webapp plugin** (`registerRight
 - **Tương lai (tuỳ chọn):** muốn modal/Kanban thật trên mobile → **Mattermost Apps Framework** (cross-platform, data-driven bindings) hoặc fork app mobile. Đưa vào "Vượt MVP".
 
 ### 6.3 Task card message (channel & DM) — ref: interactive-messages
+
 Khi tạo task (`/task add`, New Task dialog, hoặc "tạo task từ tin nhắn"), plugin post một **interactive message attachment** làm task card. **Hoạt động trong cả channel và Direct Message** (vì chỉ là post có attachment + buttons):
+
 - Dùng `model.SlackAttachment` với `Actions[]`: `[✓ Done] [🚫 Cancel] [👤 Assign] [➕ Subtask] [💬 Comment]`, mỗi action có `integration.url` = endpoint plugin (URL tương đối) + `context: {action, task_id}`; dùng `style` (primary/danger/default) + `tooltip` (v10.5+).
 - Khi click button → server `ServeHTTP` nhận `{user_id, post_id, channel_id, context}` → xử lý → phản hồi `{update, ephemeral_text}` (cập nhật card) hoặc `{error}`.
 - Card hiển thị: summary, assignee (mention), due (đỏ nếu quá hạn), status, tiến độ subtask. Khi done/cancel → card cập nhật gạch ngang.
@@ -473,7 +503,7 @@ Khi tạo task (`/task add`, New Task dialog, hoặc "tạo task từ tin nhắn
 
 - **Reminder**: mỗi task có `ReminderOffset` (ms trước due) + `ReminderFired`. Khi tạo qua `/task remind <id> <offset>`.
 - **Scheduler**: `cluster.Schedule(p.API, "TaskReminderJob", cluster.MakeWaitForRoundedInterval(1*time.Minute), p.runReminderJob)` (chạy 1 node/cluster nhờ `cluster`). `runReminderJob` **KHÔNG quét toàn bộ task** — chỉ `client.KV.ListKeys(page, count, pluginapi.WithPrefix("idx:reminder:"))` (phân trang; key-per-edge `idx:reminder:{taskID}` chứa `{due, offset}`), đọc value nhỏ, fire khi `now >= due-offset` **VÀ** `now <= due + grace` (grace vd 1 phút). Nếu `due` đã ở quá khứ (ngay khi set) → fire **một lần ngay lập tức**. Fire → DM assignee (`GetDirectChannel` + `CreatePost`) → xoá key + set `ReminderFired=true`. Index được duy trì mỗi khi due/status/reminder đổi → **scalable tới hàng chục nghìn task**.
-- **Notification events**: 
+- **Notification events**:
   - Gán assignee khi tạo/`assign` → **DM người được gán** (trừ `assignee==creator`). **KHÔNG DM** người bị `unassign` (đã chốt).
   - Hoàn thành / **hủy (cancel)** → thông báo creator + assignee.
   - Thêm comment → thông báo participants (assignee + creator).
@@ -488,17 +518,20 @@ Khi tạo task (`/task add`, New Task dialog, hoặc "tạo task từ tin nhắn
 Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/mattermost-plugin-task`, `id` = `com.mattermost.plugin-task`):
 
 **Cấu hình khung**
+
 - [ ] `plugin.json` — `id`, `name`, `description`, `min_server_version`, `settings_schema` (reminder default, DM on/off), `server`. **KHÔNG khai báo bot metadata** (bot tạo hoàn toàn qua `EnsureBot` trong OnActivate)
 - [ ] `go.mod` — module path mới
 - [ ] `.golangci.yml` — `local-prefixes` mới
 
 **Server — model & store**
+
 - [ ] `server/model/task.go`, `server/model/comment.go` — DTO (mục 4.2)
 - [ ] `server/store/kvstore/kvstore.go` — mở rộng interface `KVStore` (GetTask/SaveTask/DeleteTask, ListByIndex, GetComments/SaveComment, GetSubtasks...)
 - [ ] `server/store/kvstore/task.go`, `.../comment.go`, `.../index.go`, `.../reminder.go` — key-per-edge entity/index + ghi qua `SetAtomic`/`SetAtomicWithRetries`; ListKeys cho truy vấn
 - [ ] `server/store/kvstore/store_test.go` — test concurrency/pagination
 
 **Server — logic**
+
 - [ ] `server/api.go` — router `/api/v1` + endpoint tasks/comments/actions (REST dùng **PATCH** cho partial update — mục 5.3)
 - [ ] `server/command/command.go` — `/task` + subcommands + autocomplete; `add/edit/remind` **ưu tiên mở Interactive Dialog** (mục 5.2)
 - [ ] `server/plugin.go` — `OnActivate`: khởi tạo store, đăng ký command, `cluster.Schedule` reminder job
@@ -512,6 +545,7 @@ Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/
 - [ ] `server/dialog.go` — dựng **Interactive Dialog** cho Quick List & Task Detail (xem+sửa) + New Task/Assign — cross-platform (mobile) qua `OpenInteractiveDialog`
 
 **Webapp**
+
 - [ ] `webapp/src/index.tsx` — đăng ký: `registerChannelHeaderButtonAction`, `registerPostEditorActionComponent` (nút New Task trong composer #107), `registerRightHandSidebarComponent` (RHS), `registerRootComponent` (Kanban modal gần full màn + NewTask dialog), `registerWebSocketEventHandler`, `registerReducer`, `registerTranslations` (i18n)
 - [ ] `webapp/src/components/{TaskSidebar,QuickList,TaskDetailPanel,NewTaskDialog,KanbanModal,KanbanBoard,TaskCard}.tsx`
 - [ ] `webapp/src/client.ts` — wrapper gọi REST API
@@ -519,9 +553,11 @@ Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/
 - [ ] `webapp/i18n/{en,vi}.json` — chuỗi đa ngôn ngữ; **format flat key-value** (`{"task.list.empty":"Không có task"}`) dùng chung cho server & webapp; server tự viết helper `T(locale, key, args)` load map; Makefile copy `assets/i18n/*.json` → `webapp/i18n/` mỗi build (**single source**)
 
 **CI / build**
+
 - [ ] `.github/workflows/ci.yml` — giữ nguyên; đảm bảo `make dist` xanh.
 
 ## Reuse (tận dụng code có sẵn)
+
 - `cluster.Schedule` / `cluster.Job` (`server/plugin.go`) → scheduler reminder.
 - Pattern `KVStore` interface + `pluginapi.Client.KV` (`server/store/kvstore/`) → lớp lưu trữ.
 - Pattern `command.Handler`/`Register`/`Handle` + `model.NewAutocompleteData` (`server/command/command.go`) → slash command.
@@ -559,6 +595,7 @@ Cấu trúc dựa trên starter template (đổi module path `github.com/<user>/
 - **Kiểm pagination**: tạo >100 task, duyệt `list` qua các trang.
 
 ## Rủi ro & lưu ý
+
 - **Dialect postgres/mysql + sqlite test**: production chạy **postgres** (mặc định Mattermost). Test suite dùng **sqlite in-memory** pure-Go (`modernc.org/sqlite`, không cgo). MySQL chưa test đầy đủ (`CREATE INDEX IF NOT EXISTS` không hỗ trợ trước 8.0; `UPDATE ... RETURNING` không hỗ trợ). Plugin MVP hỗ trợ postgres + sqlite.
 - **Migration cluster-safe**: `RunMigrationsClusterSafe` dùng `cluster.Mutex` + morph idempotency → chỉ 1 node chạy migration. `task_schema_migrations` bookkeeping table.
 - **Transaction trong handler createTask** (M4-2): service.Create commit task (WithTx: task + members + reminder + event) TRƯỚC, post card SAU. `CreatePost` là server RPC không tham gia DB transaction → đây là boundary đúng. Crash giữa Create và post card → task tồn tại không card (rebuild được); crash sau post nhưng trước AddPost → card mồ côi (harmless).
@@ -587,6 +624,7 @@ func orderKeyBetween(prev, next string) string {
 // Rebalance cục bộ khi len(OrderKey) > 50 hoặc hết khoảng trống:
 //   gán lại keyMin..keyMax đều cho các thẻ trong cột (hiếm).
 ```
+
 - Thẻ mới cuối cột → key lớn hơn keyMax hiện tại (append); chèn đầu → midpoint(keyMin, firstKey).
 
 **Tạo task mới (OrderKey toàn cục):** OrderKey = **giá trị lớn hơn OrderKey lớn nhất hiện có toàn cục** (append suffix, vd nếu max="m" thì mới="m0"; luôn lớn hơn) → task mới luôn nằm **cuối cột** của status khởi tạo (todo). Khi user kéo-thả sang vị trí/cột khác → tính lại OrderKey = midpoint giữa 2 thẻ lân cận tại chỗ thả. **Đơn giản, ít rắc rối**; rebalance chỉ khi chuỗi OrderKey quá dài (>50 ký tự, hiếm).
@@ -594,6 +632,7 @@ func orderKeyBetween(prev, next string) string {
 **UX behavior (OrderKey toàn cục):** khi kéo thẻ từ cột A sang cột B, client tính OrderKey mới = midpoint giữa 2 thẻ lân cận tại vị trí thả trong cột B (theo thứ tự OrderKey hiện có trong cột). Mỗi cột hiển thị các thẻ của status đó **sắp theo OrderKey tăng dần** → vị trí thả quyết định OrderKey, độc lập với cột nguồn. Kết quả: kéo-thả luôn đặt thẻ đúng chỗ user thấy — trực giác như Trello/Lark, không “bất ngờ”.
 
 ## Phụ lục B — WebSocket event schema (real-time)
+
 Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{...})`; webapp `registerWebSocketEventHandler`.
 
 ```json
@@ -608,6 +647,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
   }
 }
 ```
+
 - **Khi publish**: tạo/cập nhật/xoá task, đổi status/assignee/due, thêm comment, reminder fire.
 - **Broadcast scope**: theo `ChannelID` (thành viên kênh) nếu channel task; personal → gửi riêng creator + assignee (`UserId` broadcast). Versioning: thêm `seq`/`updated_at` để client drop stale.
 
@@ -632,6 +672,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Chốt:** UI = Hybrid (slash command + channel header button + interactive message card + sidebar React + **Kanban board**). Phạm vi task = Hybrid (có `channel_id` tuỳ chọn nhưng vẫn hiện toàn cục trong My Tasks).
 
 ### Đợt review kiến trúc (scale & correctness)
+
 - **Rejected:** `KV.CompareAndSet`. **Why:** Đã **deprecated**. Dùng `client.KV.Set(key, value, pluginapi.SetAtomic(oldValue))` hoặc helper `SetAtomicWithRetries` (mục 4.3).
 - **Rejected:** Lưu index dạng `[]taskID` lớn trong 1 key KV. **Why:** Gây O(n) marshal + CAS retry khi đông user. Chuyển sang **key-per-edge** (`idx:u:{uid}:assigned:{taskID}`) — ghi 1 Set/Delete không contention, query bằng `ListKeys(prefix)` (mục 4.1).
 - **Rejected:** Lưu comment inline `t:{id}:comments -> []Comment`. **Why:** Phình object + CAS contention khi nhiều người comment. Chuyển sang **1 key/comment** `t:{id}:c:{ulid}` (thêm = 1 Set không conflict; list = ListKeys theo ULID) (mục 4.1).
@@ -640,6 +681,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Rejected:** TaskID tuần tự `seq:task`. **Why:** Counter chung là hotspot contention. Chuyển sang **ULID** (toàn cục, sortable) (mục 4.1/4.2).
 
 ### Đợt review #10 — chuyển KV sang SQL (milestone 12)
+
 - **Accepted:** Chuyển toàn bộ lớp lưu trữ từ KVStore sang **DB quan hệ** (postgres/sqlite) qua `pluginapi.Store.GetMasterDB`. **Why:** KV `ListKeys` client-side filter không scale (giới hạn ~2.000 task/user); query push-down (WHERE/JOIN/LIMIT) loại bỏ N+1 ListKeys+Get. 6 bảng chuẩn hoá (task_tasks/members/reminders/posts/comments/events) + WithTx atomicity + FK CASCADE. Tham chiếu: `docs/SQL_MIGRATION_PLAN.md`.
 - **Accepted:** `model.TaskView` đổi tên thành `model.Task` (entity đầy đủ cho consumer); `model.TaskRow` = storage row. **Why:** Đặt tên trung thực — `TaskView` là tên tránh đụng `model.Task` cũ; sau khi xoá KV model, entity assembled mới là "Task" thật.
 - **Accepted:** Comment-as-thread hybrid — `task_comments` chỉ lưu ánh xạ `(task_id, post_id)`, content nằm trong MM post. **Why:** Giảm ~70% logic comment; native notification/reaction/@mention free; `MessageHasBeenPosted` hook auto-link reply.
@@ -654,6 +696,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Rejected:** Thứ tự phase cũ (Reminder ở Phase 3, Kanban gộp Phase 4). **Why:** Giá trị sử dụng đến từ Task+Assignee+Reminder; Kanban (drag-and-drop) tốn UI nhất. Đưa **Reminder vào Phase 1**, **Kanban tách ra Phase 4 cuối** (mục 9).
 
 ### Đợt review #2 (correctness & UX)
+
 - **Rejected:** Multi-assignee trong MVP. **Why:** Người dùng quyết định **chỉ 1 assignee/task** cho đơn giản. `AssigneeIDs []string` → `AssigneeID string`; `completion_mode` hoãn (mục 4.2, 5.4).
 - **Rejected:** Task Detail từ Kanban mở RHS phía sau modal. **Why:** Modal phủ gần kín màn → RHS phía sau không thấy. Đổi: click thẻ trong Kanban mở **Task Detail panel bên trong modal** (mục 6.1/6.2).
 - **Rejected:** Soft-delete + GC quét tìm subtask mồ côi. **Why:** Tìm mồ côi phải scan toàn bộ task → tốn kém. Đổi sang **HARD DELETE cascade** (liệt kê comment/subtask qua `ListKeys` prefix tại thời điểm xoá rồi xoá đệ quy) — không mồ côi, không cần GC (mục 4.3).
@@ -664,6 +707,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Verify:** `pluginapi.SetAtomic(oldValue)` & `SetAtomicWithRetries` **đã xác nhận tồn tại** (đọc source `server/public/pluginapi/kv.go`); `ListKeys(page,count,WithPrefix)` phân trang. Không phải đổi API (mục 4.3).
 
 ### Đợt review #3 (model/UX/API)
+
 - **Rejected:** My Tasks chỉ hiện task gốc. **Why:** Assignee subtask mà không phải của cha sẽ không tìm thấy subtask. Đổi: My Tasks hiện **cả task gốc + subtask được gán**, UI phân biệt (badge `sub`, indent, group) (mục 5.5).
 - **Rejected:** Model thiếu post_id của card. **Why:** Không update được card khi đổi status. Thêm `ChannelPostID` + `DMPostID` (mục 4.2).
 - **Rejected:** Bảng quyền “Xem” mơ hồ. **Why:** ✅ chỉ cho channel task. Làm rõ trong bảng (mục 5.4).
@@ -674,6 +718,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Rejected:** Subtask có ChannelID riêng. **Why:** Visibility không nhất quán. **Subtask kế thừa ChannelID từ task cha** (mục 4.2). Parser slash đơn giản hóa: ưu tiên dialog cho `add/edit/remind` (mục 5.2).
 
 ### Đợt review #4 (đồng bộ & làm rõ)
+
 - **Rejected:** Assignee không được edit/assign (tách vai cứng). **Why:** Review muốn assignee linh hoạt chuyển giao + sửa. Assignee = **co-owner** (edit, assign/unassign, status, complete, subtask, reminder, comment); chỉ **DELETE = creator** (mục 5.4, 5.1.D/H).
 - **Rejected:** Subtask semantics chưa rõ. **Why:** Cần quy tắc cha-con. Subtask = task độc lập; **parent done chỉ khi mọi subtask done/cancelled**; **parent cancelled → cascade cancel** subtask todo/in_progress (mục 5.5).
 - **Rejected:** Hard delete không có thứ tự. **Why:** Crash để rác. Thứ tự chặt: subtask→comment→index→entity (mục 4.3). + in-memory cache + ULID time-range paging giảm N+1.
@@ -684,6 +729,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Verify:** Bot qua `EnsureBot` (Go) đáng tin hơn khai báo manifest; manifest `server.bots` cần verify template (mục 2.3). i18n **flat key-value** dùng chung server+webapp (Files). `/task add "title"` → mở dialog (mục 5.2). Rate limiting **hoãn** (Rủi ro).
 
 ### Đợt review #5 (đồng bộ nội bộ)
+
 - **Rejected:** Intro 5.4 dùng lý do “tách vai cứng”. **Why:** Mâu thuẫn bảng (assignee = co-owner). Sửa intro: co-owner, chỉ creator xoá (mục 5.4).
 - **Rejected:** Cột Kanban “cấu hình qua settings_schema” / thiếu Cancelled. **Why:** Trái quyết định 4 cột cố định. Đồng bộ: **4 cột cố định không cấu hình**, thêm Cancelled vào 5.1.E/M (mục 5.1).
 - **Rejected:** Quick List group/sub-task cha-con. **Why:** Trái review #5. Quick List = **danh sách phẳng task độc lập** (gồm cả subtask), không group (mục 5.5, Phase 3).
@@ -694,6 +740,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Rejected:** In-memory cache TTL 5s (MVP). **Why:** Cluster nhiều node → stale, chưa invalidation. **Bỏ cache trong MVP**; chỉ thêm sau benchmark + invalidation (mục 4.3).
 
 ### Đợt review #6 (làm rõ)
+
 - **Rejected:** Bảng 5.0 #13 “📋 Tasks → chế độ Kanban”. **Why:** Trái quyết định. Sửa: 📋 Tasks → RHS, 📊 Kanban → modal (mục 5.0).
 - **Làm rõ:** OrderKey toàn cục — giải thích UX: thả ở đâu đặt OrderKey midpoint tại đó, mỗi cột sort theo OrderKey tăng dần (Phụ lục A).
 - **Làm rõ:** DB riêng = **roadmap, hoãn** (Rủi ro).
@@ -703,6 +750,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Làm rõ:** Error handling — `SetAtomicWithRetries` 5 retry/backoff 10ms; lỗi user → trả ephemeral; job nền → silent+log (Phase 0).
 
 ### Đợt review #7 (chốt cuối)
+
 - **Chốt (final):** **Assignee = co-owner** (sửa/assign/status/complete/subtask/reminder/comment); chỉ **DELETE = creator**. Không bàn thêm.
 - **Chốt (final):** Bot qua **`EnsureBot` trong `OnActivate`** (theo doc bot-accounts — đây là cách chính thức cho plugin, không phụ thuộc manifest) (mục 2.3).
 - **Làm rõ:** Task cá nhân (`ChannelID==""`) — trigger: New Task dialog chọn scope *Personal* HOẶC `/task add` trong DM với bot (mục 5.1.A).
@@ -711,6 +759,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Chốt (final):** Notification = **gửi DM tới assignee khi được gán** (trừ `assignee==creator`); **@mention trong kênh là NGOÀI scope** (mục 5.1.A).
 
 ### Đợt review #8 — CHỐT CUỐI (không hỏi lại)
+
 - **Chốt:** Notification tạo/gán = **DM-only** (bot gửi DM; card đã post trong kênh). Assignee = **co-owner** (final). **Không thông báo creator** khi assignee đổi field.
 - **Chốt:** `/task list mine` (KHÔNG có `/task mine` riêng).
 - **Chốt:** `/task unassign <id>` (KHÔNG có `@user` — single assignee).
@@ -726,6 +775,7 @@ Server `p.API.PublishWebSocketEvent(event, payload, &model.WebsocketBroadcast{..
 - **Chốt:** **“Tạo task từ tin nhắn” CÓ trong MVP** (`registerPostDropdownMenuAction`; message → summary+description; `server/message_action.go`).
 
 ### Đợt review #9 — CHỐT CUỐI (không hỏi lại)
+
 - **Chốt:** `/task add "<tiêu đề>"` → mở dialog pre-filled tiêu đề (KHÔNG parse inline @assignee/due/desc).
 - **Chốt:** Xoá = **creator HOẶC admin kênh** (channel task); assignee không xoá (sửa text 5.4 cho khớp bảng).
 - **Chốt:** **KHÔNG DM** người bị `unassign`.

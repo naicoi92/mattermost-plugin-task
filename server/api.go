@@ -263,14 +263,17 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: we intentionally do NOT call IsChannelMember here as a hard gate.
-	// The host's GetChannelMember can return an AppError on transient failures
-	// (cache miss, network blip, slow channel load), which would surface as a
-	// spurious 403 to the user. The scope=channel query itself only returns
-	// tasks whose channel_id matches — the data is already bounded by what the
-	// caller passes. The per-task CanUserViewTask rule (wired into
-	// comments/events, tracked for get/search in #157) is the correct place
-	// for membership enforcement, not a pre-query RPC that can flap.
+	// Note: list-level membership is intentionally NOT pre-gated here. The
+	// host's GetChannelMember can flap on transient failures (cache miss,
+	// network blip), surfacing as a spurious 403. The scope=channel query is
+	// already data-bounded (returns only tasks whose channel_id matches the
+	// caller-supplied channelID), and the per-task CanUserViewTask rule gates
+	// getTask/list-subtasks/comments/events. List-level hard enforcement is
+	// tracked separately to avoid read-path flapping.
+	//
+	// TODO(perm): revisit list-level visibility filtering once a reliable,
+	// non-flapping membership signal is available so caller-supplied channel_id
+	// alone cannot discover tasks without CanUserListTask authorization.
 
 	query := task.ListQuery{
 		Scope:         scope,
@@ -321,6 +324,10 @@ func (p *Plugin) getTask(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if !permission.CanUserViewTask(currentUserID(r), t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
+		return
+	}
 	p.writeJSON(w, t)
 }
 
@@ -338,6 +345,9 @@ type patchTaskRequest struct {
 // patchTask handles PATCH /tasks/:id.
 func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	if _, ok := p.loadTaskForManage(w, id, currentUserID(r)); !ok {
+		return
+	}
 	var req patchTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -378,9 +388,23 @@ func (p *Plugin) patchTask(w http.ResponseWriter, r *http.Request) {
 func (p *Plugin) deleteTask(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
-	// Snapshot the task before deleting so the real-time event can target the
-	// right recipients (creator/assignee/channel) and clients can drop it.
-	snapshot, _ := p.taskService.Get(id)
+	// Load the task both to authorize the delete and to snapshot it for the
+	// real-time event. The error MUST be handled: silently ignoring it would
+	// skip the permission guard on a transient failure and let a non-creator
+	// delete a task that actually exists.
+	snapshot, err := p.taskService.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !permission.CanUserDeleteTask(currentUserID(r), snapshot) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to delete this task")
+		return
+	}
 
 	if err := p.taskService.Delete(currentUserID(r), id); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -406,6 +430,9 @@ type patchTaskStatusRequest struct {
 // open subtasks.
 func (p *Plugin) patchTaskStatus(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	if _, ok := p.loadTaskForManage(w, id, currentUserID(r)); !ok {
+		return
+	}
 	var req patchTaskStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -477,6 +504,9 @@ type setReminderRequest struct {
 // setReminder handles POST /tasks/:id/reminder.
 func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	if _, ok := p.loadTaskForManage(w, id, currentUserID(r)); !ok {
+		return
+	}
 	var req setReminderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -509,6 +539,9 @@ func (p *Plugin) setReminder(w http.ResponseWriter, r *http.Request) {
 // deleteReminder handles DELETE /tasks/:id/reminder (turn reminders off).
 func (p *Plugin) deleteReminder(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	if _, ok := p.loadTaskForManage(w, id, currentUserID(r)); !ok {
+		return
+	}
 	updated, err := p.taskService.ClearReminder(currentUserID(r), id)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -534,6 +567,9 @@ type setAssigneeRequest struct {
 // and DMs the new assignee (unless they are the creator).
 func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	if _, ok := p.loadTaskForManage(w, id, currentUserID(r)); !ok {
+		return
+	}
 	var req setAssigneeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -574,6 +610,9 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 // notification is sent on unassign.
 func (p *Plugin) deleteAssignee(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	if _, ok := p.loadTaskForManage(w, id, currentUserID(r)); !ok {
+		return
+	}
 	updated, _, err := p.taskService.Assign(currentUserID(r), id, "")
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -617,7 +656,7 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserModifyTask(actorID, parent) {
+	if !permission.CanUserManageTask(actorID, parent) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to add subtasks to this task")
 		return
 	}
@@ -693,6 +732,19 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 // subtasks sorted by creation order.
 func (p *Plugin) listSubtasks(w http.ResponseWriter, r *http.Request) {
 	parentID := mux.Vars(r)["id"]
+	parent, err := p.taskService.Get(parentID)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !permission.CanUserListTask(currentUserID(r), parent, p.cardChannelIDs(parent.ID), p.channelMembership()) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
+		return
+	}
 	subs, err := p.taskService.ListSubtasks(parentID)
 	if err != nil {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
@@ -1082,6 +1134,27 @@ func (p *Plugin) channelMembership() permission.ChannelMembershipChecker {
 	return channelMembershipChecker{api: p.API}
 }
 
+// loadTaskForManage fetches a task and enforces the "manage" permission
+// (creator or assignee). It is presentation-layer plumbing shared by the write
+// handlers (patch/status/assign/reminder/subtask). On error it writes the HTTP
+// response and returns ok=false; the caller must return immediately.
+func (p *Plugin) loadTaskForManage(w http.ResponseWriter, id, actorID string) (*taskmodel.Task, bool) {
+	t, err := p.taskService.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			p.writeError(w, http.StatusNotFound, "task not found")
+			return nil, false
+		}
+		p.writeError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	if !permission.CanUserManageTask(actorID, t) {
+		p.writeError(w, http.StatusForbidden, "you do not have permission to modify this task")
+		return nil, false
+	}
+	return t, true
+}
+
 // handleCardAction handles the interactive chip callback (POST /api/v1/actions).
 // Mattermost sends a PostActionIntegrationRequest with the user id, the source
 // post id, and the context {action, task_id} the chip was built with.
@@ -1122,6 +1195,10 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 			errMsg = "⚠️ Could not find task."
 			break
 		}
+		if !permission.CanUserManageTask(actorID, t) {
+			writeCardResponse(w, "You do not have permission to change this task's status.", nil)
+			return
+		}
 		next := nextStatus(t.Status)
 		if next == t.Status {
 			// Cancelled is terminal in the cycle — nothing to do.
@@ -1145,6 +1222,10 @@ func (p *Plugin) handleCardAction(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			errMsg = "⚠️ Could not find task."
 			break
+		}
+		if !permission.CanUserManageTask(actorID, t) {
+			writeCardResponse(w, "You do not have permission to change this task's priority.", nil)
+			return
 		}
 		next := nextPriority(t.Priority)
 		updated, err = p.taskService.Patch(actorID, taskID, task.PatchInput{

@@ -33,9 +33,19 @@ func newTestPlugin(t *testing.T) (*Plugin, store.Store) {
 	st := newTestTaskStore(t)
 	api := &plugintest.API{}
 	api.On("LogDebug", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	// LogDebug is variadic in usage; register per-arity stubs so the
+	// temporary [DEBUG-perm] instrumentation (many key/value pairs) is
+	// tolerated. Remove with the instrumentation.
+	for n := 1; n <= 15; n++ {
+		args := make([]any, n)
+		for i := range args {
+			args[i] = mock.Anything
+		}
+		api.On("LogDebug", args...).Return().Maybe()
+	}
 	// LogError is variadic in usage (handlers pass message + N key/value
 	// pairs). Register per-arity stubs so any call is tolerated.
-	for n := 1; n <= 9; n++ {
+	for n := 1; n <= 15; n++ {
 		args := make([]any, n)
 		for i := range args {
 			args[i] = mock.Anything
@@ -956,11 +966,12 @@ func TestDeleteTask_Cascade(t *testing.T) {
 	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "u1"))
 	require.Equal(t, http.StatusNoContent, w.Code)
 
+	// After cascade delete the parent (and its subtasks) are gone, so the
+	// subtasks endpoint reports the parent as not found rather than an empty
+	// list.
 	w2 := httptest.NewRecorder()
 	p.ServeHTTP(nil, w2, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/subtasks", "", "u1"))
-	var subs []model.Task
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &subs))
-	assert.Empty(t, subs)
+	assert.Equal(t, http.StatusNotFound, w2.Code)
 }
 
 func TestListTasks_ScopeChannel_RequiresChannelID(t *testing.T) {
@@ -1398,10 +1409,12 @@ func TestListComments_SharedChannelMemberAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "member of a shared card channel may list comments; body=%s", w.Body.String())
 }
 
-// TestListComments_OutsiderStillForbidden (Change C non-regression): a user who
-// is a member of NEITHER the home channel NOR any card channel is still denied
-// 403 — the card-channel expansion does not open the task to everyone.
-func TestListComments_OutsiderStillForbidden(t *testing.T) {
+// TestListComments_ChannelTaskReadableByOutsider (behavior change): a task
+// with a channel surface (ChannelID != "" or a tracked card post) is now
+// readable by anyone — its card is already public in the channel, so view no
+// longer gates on channel membership. An outsider (member of no channel) may
+// list comments on such a task.
+func TestListComments_ChannelTaskReadableByOutsider(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
 	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
@@ -1412,8 +1425,229 @@ func TestListComments_OutsiderStillForbidden(t *testing.T) {
 	})
 	// outsider is not a member of any channel: every lookup is a non-member.
 	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(nil, &mmmodel.AppError{}).Maybe()
+	// listComments content resolution: no thread needed.
+	api.On("GetPostThread", mock.Anything).Return(&mmmodel.PostList{Posts: map[string]*mmmodel.Post{}}, nil).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "outsider"))
-	assert.Equal(t, http.StatusForbidden, w.Code, "non-member of home AND card channels is denied")
+	assert.Equal(t, http.StatusOK, w.Code, "channel-surfaced task is readable by anyone")
+}
+
+// --- Permission enforcement (task-permissions-review) ---
+//
+// Manage actions (modify/status/assign/reminder) are restricted to creator +
+// assignee (co-owners). Delete is creator-only. Channel members and outsiders
+// are denied. The manage guard does not consult channel membership, so these
+// 403s need no GetChannelMember mock.
+
+func TestPatchTask_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID,
+		`{"update_fields":["summary"],"summary":"hacked"}`, "u2"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "non-owner cannot patch")
+}
+
+func TestPatchTask_AllowedForAssignee(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID,
+		`{"update_fields":["summary"],"summary":"ok"}`, "u2"))
+	assert.Equal(t, http.StatusOK, w.Code, "assignee (co-owner) can patch")
+}
+
+func TestPatchTaskStatus_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID+"/status",
+		`{"status":"in_progress"}`, "u2"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "non-owner cannot change status")
+}
+
+func TestSetAssignee_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee",
+		`{"user_id":"u3"}`, "u2"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "non-owner cannot reassign")
+}
+
+func TestSetAssignee_AssigneeCanReassign(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee",
+		`{"user_id":"u3"}`, "u2"))
+	assert.Equal(t, http.StatusOK, w.Code, "assignee (co-owner) can reassign")
+}
+
+func TestSetReminder_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder",
+		`{"offset_ms":1000}`, "u2"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "non-owner cannot set reminder")
+}
+
+func TestDeleteAssignee_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID+"/assignee", "", "u2"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "non-owner cannot clear assignee")
+}
+
+func TestDeleteTask_ForbiddenForAssignee(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "u2"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "assignee cannot delete")
+}
+
+func TestDeleteTask_ForbiddenForChannelMember(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	// Mock the "member" fixture as a real member of ch1 so this represents a
+	// genuine channel member (not an outsider). Delete is still creator-only.
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "ch1", "member").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "member"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "channel member cannot delete")
+}
+
+// CodeRabbit nitpick hardening: a real channel member (mocked membership) must
+// still be denied manage actions — guards against a future view/list-based
+// regression where channel members accidentally gain write access.
+func TestPatchTask_ForbiddenForChannelMember(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "ch1", "member").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID,
+		`{"update_fields":["summary"],"summary":"hacked"}`, "member"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "channel member cannot patch")
+}
+
+func TestDeleteTask_AllowedForCreator(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "u1"))
+	assert.Equal(t, http.StatusNoContent, w.Code, "creator can delete")
+}
+
+// Guard must not be skipped when the task is missing: a transient/unknown id
+// returns 404 (NotFound), never a silent proceed-to-delete or a misleading 403.
+func TestDeleteTask_NotFound(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/nonexistent", "", "u1"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// View/list guards DO consult channel membership.
+
+func TestGetTask_PersonalTaskHiddenFromOthers(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// Personal task (no ChannelID): only creator + assignee may view.
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "secret", CreatorID: "u1", AssigneeID: "u2"})
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, "", "u3"))
+	assert.Equal(t, http.StatusForbidden, w.Code, "personal task hidden from non creator/assignee")
+}
+
+// Behavior change: a channel-surfaced task (ChannelID != "") is now readable
+// by anyone — its card is already public in the channel, so view does not gate
+// on channel membership. An outsider (not a member of any channel) may view it.
+// Only a personal task (no ChannelID, no card) is restricted.
+func TestGetTask_ChannelTaskReadableByOutsider(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(nil, &mmmodel.AppError{}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, "", "outsider"))
+	assert.Equal(t, http.StatusOK, w.Code, "channel task readable by anyone")
+}
+
+func TestGetTask_AllowedForChannelMember(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", "ch1", "member").Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, "", "member"))
+	assert.Equal(t, http.StatusOK, w.Code, "channel member can view channel task")
+}
+
+// Channel-surfaced task: subtasks are listable by anyone (card is public).
+func TestListSubtasks_ChannelTaskReadableByOutsider(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+
+	api := p.API.(*plugintest.API)
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(nil, &mmmodel.AppError{}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/subtasks", "", "outsider"))
+	assert.Equal(t, http.StatusOK, w.Code, "channel task subtasks listable by anyone")
+}
+
+// Card-action buttons (status/priority) must also respect the manage rule.
+// handleCardAction replies with HTTP 200 + an ephemeral denial message rather
+// than a 403, per the Mattermost action-callback contract.
+
+func TestHandleCardAction_Status_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	body := fmt.Sprintf(`{"user_id":"u2","context":{"action":"status","task_id":%q}}`, created.ID)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions", bytes.NewReader([]byte(body)))
+	req.Header.Set("Mattermost-User-ID", "u2")
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "do not have permission")
+}
+
+func TestHandleCardAction_Priority_ForbiddenForNonOwner(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+
+	body := fmt.Sprintf(`{"user_id":"u2","context":{"action":"priority","task_id":%q}}`, created.ID)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions", bytes.NewReader([]byte(body)))
+	req.Header.Set("Mattermost-User-ID", "u2")
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "do not have permission")
 }
