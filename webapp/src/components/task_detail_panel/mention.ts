@@ -9,8 +9,10 @@
 
 export interface MentionDetection {
     open: boolean;
+
     // start is the character index of the '@' (when open). Undefined when closed.
     start?: number;
+
     // query is the text typed after '@' (may be empty right after pressing '@').
     query: string;
 }
@@ -26,6 +28,7 @@ export function detectMention(text: string, caret: number): MentionDetection {
     if (!m) {
         return {open: false, query: ''};
     }
+
     // start = index of the '@' = (end of before) - len("@query").
     const start = before.length - m[2].length - 1;
     return {open: true, start, query: m[2]};
