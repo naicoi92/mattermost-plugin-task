@@ -98,7 +98,7 @@ func (p *Plugin) OnActivate() error {
 	if err != nil {
 		return errors.Wrap(err, "failed to initialize task sqlstore")
 	}
-	if migErr := sqlStore.RunMigrationsClusterSafe(p.API); migErr != nil {
+	if migErr := sqlStore.RunMigrations(p.API); migErr != nil {
 		return errors.Wrap(migErr, "failed to run task database migrations")
 	}
 	p.taskStore = sqlStore
