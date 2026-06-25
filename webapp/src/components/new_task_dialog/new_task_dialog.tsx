@@ -37,20 +37,23 @@ export interface ChannelLike {
     name?: string;
 }
 
-// NewTaskContext is the derived scope decision. channelId "" means a personal
-// task (only creator + assignee can see it); a non-empty channelId makes a
-// channel task visible to the whole channel. suggestedAssigneeID pre-selects an
-// assignee in the picker (the DM partner).
+// NewTaskContext is the derived scope decision under the all-channel model.
+// channelId is ALWAYS non-empty when there is a channel context (team channel,
+// DM, or self-DM) — every task binds to a real channel id. In a DM context the
+// assignee is forced to the DM partner and the picker is disabled.
+// `canPickAssignee` is false for DM contexts so the caller can render the
+// picker read-only.
 export interface NewTaskContext {
     channelId: string;
     suggestedAssigneeID: string;
+    canPickAssignee: boolean;
 }
 
 // deriveNewTaskContext decides a new task's scope from where it's created:
-//   - Group/public/private channel (type O/P/G) → channel task, no assignee hint.
-//   - Direct message (type D) with a partner → personal task, assignee = partner.
-//   - Direct message with yourself (nota) → personal task, assignee = you.
-//   - No channel context → personal task, assignee = you.
+//   - Group/public/private channel (type O/P/G) → channelId = channel.id, assignee open.
+//   - Direct message (type D) with a partner → channelId = DM id, assignee = partner (locked).
+//   - Direct message with yourself (nota) → channelId = self-DM id, assignee = you (locked).
+//   - No channel context → channelId = '' (caller must resolve self-DM), assignee = you.
 //
 // The DM partner is encoded in channel.name as "<uid1>__<uid2>"; we pick the id
 // that is not the current user. Exported (pure) for unit testing.
@@ -59,17 +62,20 @@ export function deriveNewTaskContext(
     currentUserId: string,
 ): NewTaskContext {
     if (!channel || !channel.id) {
-        return {channelId: '', suggestedAssigneeID: currentUserId};
+        return {channelId: '', suggestedAssigneeID: currentUserId, canPickAssignee: true};
     }
     if (channel.type !== 'D') {
-        return {channelId: channel.id, suggestedAssigneeID: ''};
+        return {channelId: channel.id, suggestedAssigneeID: '', canPickAssignee: true};
     }
     const parts = (channel.name || '').split('__').filter((s) => s.length > 0);
     const partner = parts.find((id) => id !== currentUserId);
-    if (!partner) {
-        return {channelId: '', suggestedAssigneeID: currentUserId};
-    }
-    return {channelId: '', suggestedAssigneeID: partner};
+
+    // Self-DM (me↔me): partner undefined → assignee = me. Partner DM: partner.
+    return {
+        channelId: channel.id,
+        suggestedAssigneeID: partner ?? currentUserId,
+        canPickAssignee: false,
+    };
 }
 
 // channelToContext normalizes a host Channel (or a bare channelID) into the
@@ -98,20 +104,13 @@ export interface CreateInputForm {
     dueLocal: string;
 }
 
-// buildCreateInput assembles the POST /tasks body from the dialog form, the
-// derived scope context, and the originating channel id. Extracted (pure) so
-// the announce-card contract is unit-testable without a Redux/Intl harness,
-// mirroring the quick_list buildParams pattern.
-//
-// post_channel_id is always sent when an originating channel exists so the
-// server posts an announce card even for a personal task created in a DM (the
-// task's own channel_id stays empty; the card destination is decided
-// server-side). For channel tasks it equals channel_id — redundant but
-// harmless, and the server prefers channel_id.
+// buildCreateInput assembles the POST /tasks body from the dialog form and the
+// derived scope context. Under the all-channel model the task's channel_id is
+// always the originating channel (team, DM, or self-DM); there is no separate
+// post_channel_id field anymore.
 export function buildCreateInput(
     form: CreateInputForm,
     ctx: NewTaskContext,
-    channelID: string | undefined,
 ): CreateTaskInput {
     const input: CreateTaskInput = {
         summary: form.summary.trim(),
@@ -120,9 +119,6 @@ export function buildCreateInput(
     };
     if (ctx.channelId) {
         input.channel_id = ctx.channelId;
-    }
-    if (channelID) {
-        input.post_channel_id = channelID;
     }
     const assigneeID = (form.assigneeID || ctx.suggestedAssigneeID).trim();
     if (assigneeID) {
@@ -281,7 +277,7 @@ export default function NewTaskDialog({
             return;
         }
 
-        const input = buildCreateInput(form, ctx, channelID);
+        const input = buildCreateInput(form, ctx);
 
         setSubmitting(true);
         try {
@@ -434,6 +430,7 @@ export default function NewTaskDialog({
                             channelID={ctx.channelId || channelID}
                             onSelect={(u) => update({assigneeID: u ? u.id : ''})}
                             placeholder={t('webapp.task.assignee.placeholder')}
+                            disabled={!ctx.canPickAssignee}
                         />
                     </div>
 

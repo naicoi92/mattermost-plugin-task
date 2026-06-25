@@ -34,9 +34,13 @@ export interface UserPickerProps {
 
     // placeholder overrides the default localized placeholder.
     placeholder?: string;
+
+    // disabled greys out the picker and ignores clicks (used to force the DM
+    // partner as assignee in DM contexts under the all-channel model).
+    disabled?: boolean;
 }
 
-export default function UserPicker({value, valueLabel, channelID, onSelect, placeholder}: UserPickerProps): JSX.Element {
+export default function UserPicker({value, valueLabel, channelID, onSelect, placeholder, disabled}: UserPickerProps): JSX.Element {
     const t = useFormatMessage();
 
     const [open, setOpen] = useState(false);
@@ -110,13 +114,18 @@ export default function UserPicker({value, valueLabel, channelID, onSelect, plac
 
     return (
         <div
-            className='user-picker'
+            className={`user-picker${disabled ? ' user-picker--disabled' : ''}`}
             ref={rootRef}
         >
             <button
                 type='button'
                 className={`task-input user-picker__trigger ${resolved ? '' : 'user-picker__trigger--placeholder'}`}
-                onClick={() => setOpen((v) => !v)}
+                onClick={() => {
+                    if (!disabled) {
+                        setOpen((v) => !v);
+                    }
+                }}
+                disabled={disabled}
                 aria-haspopup='listbox'
                 aria-expanded={open}
             >

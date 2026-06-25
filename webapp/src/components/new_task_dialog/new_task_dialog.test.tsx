@@ -22,28 +22,31 @@ describe('deriveNewTaskContext', () => {
         expect(ctx.suggestedAssigneeID).toBe('');
     });
 
-    test('a DM with a partner yields a personal task with the partner as assignee', () => {
+    test('a DM with a partner yields a channel task bound to the DM with the partner as assignee', () => {
         const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'me__partner'}, 'me');
-        expect(ctx.channelId).toBe('');
+        expect(ctx.channelId).toBe('dm1');
         expect(ctx.suggestedAssigneeID).toBe('partner');
+        expect(ctx.canPickAssignee).toBe(false);
     });
 
     test('a DM with the partner id order reversed still picks the non-me user', () => {
         const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'partner__me'}, 'me');
-        expect(ctx.channelId).toBe('');
+        expect(ctx.channelId).toBe('dm1');
         expect(ctx.suggestedAssigneeID).toBe('partner');
+        expect(ctx.canPickAssignee).toBe(false);
     });
 
-    test('a DM with myself (nota) yields a personal task assigned to me', () => {
+    test('a DM with myself (nota) yields a channel task bound to the self-DM, assigned to me', () => {
         const ctx = deriveNewTaskContext({id: 'dm-self', type: 'D', name: 'me__me'}, 'me');
-        expect(ctx.channelId).toBe('');
+        expect(ctx.channelId).toBe('dm-self');
         expect(ctx.suggestedAssigneeID).toBe('me');
+        expect(ctx.canPickAssignee).toBe(false);
     });
 
-    test('no channel context yields a personal task assigned to me', () => {
-        expect(deriveNewTaskContext(null, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me'});
-        expect(deriveNewTaskContext(undefined, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me'});
-        expect(deriveNewTaskContext({id: '', type: 'O'}, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me'});
+    test('no channel context yields an empty channelId and assignee = me', () => {
+        expect(deriveNewTaskContext(null, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me', canPickAssignee: true});
+        expect(deriveNewTaskContext(undefined, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me', canPickAssignee: true});
+        expect(deriveNewTaskContext({id: '', type: 'O'}, 'me')).toEqual({channelId: '', suggestedAssigneeID: 'me', canPickAssignee: true});
     });
 
     test('a group channel (type G) is treated as a channel task', () => {
@@ -51,10 +54,11 @@ describe('deriveNewTaskContext', () => {
         expect(ctx.channelId).toBe('g1');
     });
 
-    test('a DM whose name fails to parse falls back to personal + me', () => {
+    test('a DM whose name fails to parse still binds to the DM channel with assignee = me', () => {
         const ctx = deriveNewTaskContext({id: 'dm2', type: 'D', name: ''}, 'me');
-        expect(ctx.channelId).toBe('');
+        expect(ctx.channelId).toBe('dm2');
         expect(ctx.suggestedAssigneeID).toBe('me');
+        expect(ctx.canPickAssignee).toBe(false);
     });
 });
 
@@ -176,40 +180,40 @@ describe('assigneeLookupError (#96)', () => {
 // is the fix for "New Task sometimes posts a card, sometimes not": a DM task
 // (personal scope, empty channel_id) must still announce its card into the
 // originating DM via post_channel_id, without changing scope.
-describe('buildCreateInput (post_channel_id announce card)', () => {
+describe('buildCreateInput (all-channel contract)', () => {
     const baseForm = {summary: 'Buy milk', description: '2L', priority: 'standard' as const, assigneeID: '', dueLocal: ''};
 
-    test('a DM task sends post_channel_id (the originating DM) but no channel_id', () => {
-        // DM context: personal scope (channelId empty), partner suggested as assignee.
+    test('a DM task sends the DM channel id as channel_id (no post_channel_id)', () => {
         const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'me__partner'}, 'me');
-        const input = buildCreateInput(baseForm, ctx, 'dm1');
-        expect(input.channel_id).toBeUndefined();
-        expect(input.post_channel_id).toBe('dm1');
+        const input = buildCreateInput(baseForm, ctx);
+        expect(input.channel_id).toBe('dm1');
+        expect(input.post_channel_id).toBeUndefined();
+        expect(input.assignee_id).toBe('partner');
     });
 
-    test('a channel task sends both channel_id and post_channel_id (redundant, harmless)', () => {
+    test('a channel task sends channel_id only (no post_channel_id)', () => {
         const ctx = deriveNewTaskContext({id: 'ch1', type: 'O', name: 'town-square'}, 'me');
-        const input = buildCreateInput(baseForm, ctx, 'ch1');
+        const input = buildCreateInput(baseForm, ctx);
         expect(input.channel_id).toBe('ch1');
-        expect(input.post_channel_id).toBe('ch1');
+        expect(input.post_channel_id).toBeUndefined();
     });
 
     test('no originating channel sends neither channel_id nor post_channel_id', () => {
         const ctx = deriveNewTaskContext(null, 'me');
-        const input = buildCreateInput(baseForm, ctx, undefined);
+        const input = buildCreateInput(baseForm, ctx);
         expect(input.channel_id).toBeUndefined();
         expect(input.post_channel_id).toBeUndefined();
     });
 
     test('summary is trimmed', () => {
         const ctx = deriveNewTaskContext({id: 'ch1', type: 'O'}, 'me');
-        const input = buildCreateInput({...baseForm, summary: '  spaced  '}, ctx, 'ch1');
+        const input = buildCreateInput({...baseForm, summary: '  spaced  '}, ctx);
         expect(input.summary).toBe('spaced');
     });
 
     test('assignee and due are propagated', () => {
         const ctx = deriveNewTaskContext({id: 'dm1', type: 'D', name: 'me__partner'}, 'me');
-        const input = buildCreateInput({...baseForm, assigneeID: 'bob', dueLocal: '2026-06-19T12:00'}, ctx, 'dm1');
+        const input = buildCreateInput({...baseForm, assigneeID: 'bob', dueLocal: '2026-06-19T12:00'}, ctx);
         expect(input.assignee_id).toBe('bob');
         expect(input.due).not.toBeUndefined();
         expect(typeof input.due).toBe('number');

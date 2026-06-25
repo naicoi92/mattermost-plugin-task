@@ -1662,6 +1662,11 @@
 .user-picker {
     position: relative;
 
+    &--disabled {
+        opacity: 0.6;
+        pointer-events: none;
+    }
+
     &__trigger {
         display: flex;
         align-items: center;
