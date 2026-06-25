@@ -140,9 +140,6 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	p.API.LogInfo("createTask: received",
-		"summary", req.Summary, "channel_id", req.ChannelID,
-		"creator", currentUserID(r), "assignee", req.AssigneeID)
 
 	created, err := p.taskService.Create(task.CreateInput{
 		Summary:        strings.TrimSpace(req.Summary),
@@ -182,18 +179,12 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// crash between Create and the card post leaves the task intact with no
 	// card (acceptable — the task is the source of truth; cards are rebuildable).
 	var channelPostID string
-	p.API.LogInfo("createTask: after create",
-		"task_id", created.ID, "channel_id", created.ChannelID)
 	if created.ChannelID != "" {
 		channelPostID = p.postCard(created.ChannelID, created)
-		p.API.LogInfo("createTask: postCard returned",
-			"task_id", created.ID, "channel_post_id", channelPostID)
 		if channelPostID == "" {
 			p.API.LogError("createTask: postCard failed; no card preview",
 				"task_id", created.ID, "channel_id", created.ChannelID)
 		}
-	} else {
-		p.API.LogWarn("createTask: empty ChannelID; skipping card", "task_id", created.ID)
 	}
 	if channelPostID != "" {
 		updated, err := p.taskService.SetPostIDs(created.ID, channelPostID)
