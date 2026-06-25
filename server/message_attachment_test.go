@@ -30,7 +30,7 @@ func sampleTask(status string, due *int64) *taskmodel.Task {
 // buildCard is a thin test helper that assembles a cardInput with the common
 // defaults (resolved creator + assignee mentions, no subtasks/comments) so
 // individual tests can override just the fields they care about.
-func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int, creator, assignee userRef) mmmodel.SlackAttachment {
+func buildCard(t *taskmodel.Task, nowMs int64, subtaskDone, subtaskTotal, commentCount int, creator, assignee userRef) mmmodel.MessageAttachment {
 	return buildTaskCard(cardInput{
 		task:         t,
 		nowMs:        nowMs,

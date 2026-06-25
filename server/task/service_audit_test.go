@@ -104,7 +104,7 @@ func TestAudit_Patch_RecordsPerFieldEvents(t *testing.T) {
 	_, err := svc.Patch("u-actor", task.ID, PatchInput{
 		UpdateFields: []string{"summary", "description"},
 		Summary:      &newSum,
-		Description:  strPtr("newdesc"),
+		Description:  new("newdesc"),
 	})
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestAudit_SetReminder_RecordsReminderSet(t *testing.T) {
 func TestAudit_ClearReminder_RecordsReminderCleared(t *testing.T) {
 	svc, s := newTestService(t)
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: new(int64(60_000))})
 
 	_, err := svc.ClearReminder("u-actor", task.ID)
 	require.NoError(t, err)
@@ -242,9 +242,6 @@ func TestAudit_ActorIDThreaded_NotSystemPlaceholder(t *testing.T) {
 	assert.Equal(t, "u-real-user", events[0].ActorID, "actor must be the real user, not 'system'")
 	assert.NotEqual(t, "system", events[0].ActorID)
 }
-
-// strPtr is a test helper for PatchInput.Description (a *string field).
-func strPtr(s string) *string { return &s }
 
 func TestAudit_CascadeCancel_RecordsEventPerSubtask(t *testing.T) {
 	// Cancelling a parent cascade-cancels its open subtasks; each subtask must

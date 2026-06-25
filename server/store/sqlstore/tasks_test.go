@@ -21,9 +21,6 @@ func tasksTestStore(t *testing.T) *SQLStore {
 	return s
 }
 
-// ptr is a tiny helper for building *int64 timestamps in test fixtures.
-func ptr[T any](v T) *T { return &v }
-
 // mustCreate inserts a task fixture and fails the test on error. CreateTask
 // returns (TaskRow, error); tests only care about success, so this absorbs
 // the returned row.
@@ -113,7 +110,7 @@ func TestUpdateTask_ReturningReflectsWrite(t *testing.T) {
 	updated, err := s.UpdateTask(ctx, fixture("01HXYZUPD000001", "k1", func(t *model.TaskRow) {
 		t.Summary = "renamed"
 		t.Status = model.StatusDone
-		t.CompletedAt = ptr(int64(1_700_000_500_000))
+		t.CompletedAt = new(int64(1_700_000_500_000))
 		t.UpdatedAt = 1_700_000_500_000
 	}))
 	require.NoError(t, err)

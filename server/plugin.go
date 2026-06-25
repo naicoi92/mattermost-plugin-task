@@ -341,7 +341,8 @@ func (c channelMembershipChecker) IsChannelMember(userID, channelID string) bool
 	// produce spurious 403s. Surface both cases and fail open so legitimate
 	// users are not blocked while the root cause is investigated.
 	if appErr != nil {
-		c.api.LogWarn("GetChannelMember error; temporarily allowing access",
+		c.api.LogWarn(
+			"GetChannelMember error; temporarily allowing access",
 			"channel_id", channelID,
 			"user_id", userID,
 			"error_id", appErr.Id,
@@ -349,7 +350,8 @@ func (c channelMembershipChecker) IsChannelMember(userID, channelID string) bool
 			"status_code", appErr.StatusCode,
 		)
 	} else {
-		c.api.LogWarn("GetChannelMember returned nil member without error; allowing access",
+		c.api.LogWarn(
+			"GetChannelMember returned nil member without error; allowing access",
 			"channel_id", channelID,
 			"user_id", userID,
 		)

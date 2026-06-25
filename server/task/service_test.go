@@ -46,12 +46,6 @@ func newTestService(t *testing.T) (*Service, store.Store) {
 	return NewService(st), st
 }
 
-var ulidCounter atomic.Int64
-
-func nextTestULID() string {
-	return fmt.Sprintf("TEST%020d", ulidCounter.Add(1))
-}
-
 func createTaskRow(t *testing.T, s store.Store, id, orderKey string, overrides ...func(*model.TaskRow)) model.TaskRow {
 	t.Helper()
 	ctx := context.Background()
@@ -80,8 +74,6 @@ func mustCreateTask(t *testing.T, svc *Service, in CreateInput) *model.Task {
 	require.NotNil(t, task)
 	return task
 }
-
-func ptrInt64(v int64) *int64 { return &v }
 
 // --- Create ---
 
@@ -161,7 +153,7 @@ func TestCreate_SeedsReminderWhenDueAndOffset(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: new(int64(60_000))})
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	require.Len(t, reminders, 1)
@@ -171,7 +163,7 @@ func TestCreate_SeedsReminderWhenDueAndOffset(t *testing.T) {
 func TestCreate_NoReminderWhenNoDue(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", ReminderOffset: new(int64(60_000))})
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	assert.Empty(t, reminders)
@@ -430,7 +422,7 @@ func TestSetStatus_TerminalClearsReminder(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: new(int64(60_000))})
 	reminders, err := s.ListReminders(ctx, task.ID)
 	require.NoError(t, err)
 	require.Len(t, reminders, 1)
@@ -519,7 +511,7 @@ func TestClearReminder_RemovesRow(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	due := int64(2_000_000)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
+	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", DueAt: &due, ReminderOffset: new(int64(60_000))})
 	_, err := svc.ClearReminder("u-actor", task.ID)
 	require.NoError(t, err)
 	reminders, err := s.ListReminders(ctx, task.ID)
@@ -531,7 +523,7 @@ func TestFireReadyReminders_WithinWindow(t *testing.T) {
 	svc, _ := newTestService(t)
 	now := nowFunc()
 	due := now + 60_000
-	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", DueAt: &due, ReminderOffset: ptrInt64(120_000)})
+	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", DueAt: &due, ReminderOffset: new(int64(120_000))})
 	due2, err := svc.FireReadyReminders(now, 5*time.Minute)
 	require.NoError(t, err)
 	assert.NotEmpty(t, due2)
@@ -541,7 +533,7 @@ func TestFireReadyReminders_NotYetDue(t *testing.T) {
 	svc, _ := newTestService(t)
 	now := nowFunc()
 	due := now + 10_000_000
-	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", DueAt: &due, ReminderOffset: ptrInt64(60_000)})
+	mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-c", AssigneeID: "u-me", DueAt: &due, ReminderOffset: new(int64(60_000))})
 	due2, err := svc.FireReadyReminders(now, 5*time.Minute)
 	require.NoError(t, err)
 	assert.Empty(t, due2)

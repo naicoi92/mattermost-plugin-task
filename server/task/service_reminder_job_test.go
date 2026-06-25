@@ -30,7 +30,7 @@ func TestReminderJob_FullCycle(t *testing.T) {
 		CreatorID:      "u-c",
 		AssigneeID:     "u-me",
 		DueAt:          &due,
-		ReminderOffset: ptrInt64(120_000),
+		ReminderOffset: new(int64(120_000)),
 	})
 
 	// Tick 1: the reminder is due → FireReadyReminders returns it.
@@ -68,7 +68,7 @@ func TestReminderJob_UnassignedTaskSurfacesWithEmptyAssignee(t *testing.T) {
 		Summary:        "no assignee",
 		CreatorID:      "u-c",
 		DueAt:          &due,
-		ReminderOffset: ptrInt64(120_000),
+		ReminderOffset: new(int64(120_000)),
 	})
 
 	due1, err := svc.FireReadyReminders(now, 5*time.Minute)
@@ -89,7 +89,7 @@ func TestReminderJob_TerminalTaskExcluded(t *testing.T) {
 		CreatorID:      "u-c",
 		AssigneeID:     "u-me",
 		DueAt:          &due,
-		ReminderOffset: ptrInt64(120_000),
+		ReminderOffset: new(int64(120_000)),
 	})
 	_, err := svc.SetStatus("u-c", task.ID, "done")
 	require.NoError(t, err)

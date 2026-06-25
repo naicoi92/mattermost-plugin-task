@@ -11,7 +11,7 @@ import (
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
-// statusColors map a task status to a SlackAttachment color (predefined styles
+// statusColors map a task status to a MessageAttachment color (predefined styles
 // or hex). Done/cancelled are de-emphasized; overdue tasks turn red via
 // cardColor overriding this.
 var statusColors = map[string]string{
@@ -31,7 +31,7 @@ type userRef struct {
 	avatarURL string // https://.../avatar
 }
 
-// statusActionStyle maps a task status to a SlackAttachment button style.
+// statusActionStyle maps a task status to a MessageAttachment button style.
 // These style the decorative status chip rendered as a disabled PostAction at
 // the front of the Actions row: Mattermost maps good/warning/danger/primary/
 // default to the active theme's semantic colors, so the chip reads at a glance
@@ -79,7 +79,7 @@ type cardInput struct {
 	commentCount  int
 }
 
-// buildTaskCard builds the SlackAttachment that renders a task as a compact
+// buildTaskCard builds the MessageAttachment that renders a task as a compact
 // card. The Actions row carries four chips: two clickable (Status, Priority)
 // that cycle on click, and two decorative (Creator, Assignee) that surface who
 // the task belongs to.
@@ -89,9 +89,9 @@ type cardInput struct {
 //	Text      = description preview (muted, single line)
 //	Actions   = [ Status ] [ Priority ] [ 👤 creator ] [ 👤 assignee ]
 //	Footer    = "📅 Tomorrow · ✓ 2/5 · 💬 3" (metadata, no people — they're chips)
-func buildTaskCard(in cardInput) model.SlackAttachment {
+func buildTaskCard(in cardInput) model.MessageAttachment {
 	t := in.task
-	card := model.SlackAttachment{
+	card := model.MessageAttachment{
 		Title:     cardTitle(t),
 		Fallback:  cardTitle(t),
 		Text:      descriptionPreview(t.Description),
@@ -409,7 +409,7 @@ func (p *Plugin) getSiteURL() string {
 // renderCard builds the task card with the creator + assignee mentions
 // resolved. Used by the post/update paths so the footer stays current;
 // buildTaskCard itself stays a pure function for tests.
-func (p *Plugin) renderCard(t *taskmodel.Task) model.SlackAttachment {
+func (p *Plugin) renderCard(t *taskmodel.Task) model.MessageAttachment {
 	done, total := p.subtaskProgress(t.ID)
 	comments := p.commentCount(t.ID)
 	return buildTaskCard(cardInput{
@@ -425,9 +425,9 @@ func (p *Plugin) renderCard(t *taskmodel.Task) model.SlackAttachment {
 
 // taskCardProps builds the post.Props for a task card: the attachment plus the
 // task_id the webapp reads to open Task Details on click.
-func taskCardProps(t *taskmodel.Task, attachment *model.SlackAttachment) map[string]any {
+func taskCardProps(t *taskmodel.Task, attachment *model.MessageAttachment) map[string]any {
 	return map[string]any{
-		"attachments": []*model.SlackAttachment{attachment},
+		"attachments": []*model.MessageAttachment{attachment},
 		"task_id":     t.ID,
 	}
 }

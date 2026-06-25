@@ -197,6 +197,7 @@ func TestCreateTask_ChannelIDRequired_NotPostChannelID(t *testing.T) {
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code, "channel_id required; post_channel_id is not a fallback")
 }
+
 func TestCreateTask_RequiresSummary(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
