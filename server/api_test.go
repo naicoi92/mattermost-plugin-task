@@ -88,6 +88,9 @@ func newTestPlugin(t *testing.T) (*Plugin, store.Store) {
 		ServiceSettings: mmmodel.ServiceSettings{SiteURL: &emptySiteURL},
 	}).Maybe()
 	api.On("GetDirectChannel", mock.Anything, mock.Anything).Return(&mmmodel.Channel{Id: "dm-channel"}, nil).Maybe()
+	// GetChannel defaults to a non-DM (team) channel type so the reassign
+	// move-channel path is skipped unless a test explicitly opts in with a DM.
+	api.On("GetChannel", mock.Anything).Return(&mmmodel.Channel{Type: mmmodel.ChannelTypeOpen}, nil).Maybe()
 	// channelMembership.IsChannelMember: default to member so card-resolution
 	// (commentRoot, shareTask) resolves the requested/first card. Tests needing
 	// a non-member path override GetChannelMember AFTER this default and reseed.
@@ -1157,6 +1160,49 @@ func TestSetAssignee_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/missing/assignee", `{"user_id":"u-new"}`, "u1"))
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestSetAssignee_DMTaskMovesChannel: reassigning a DM-scoped task moves its
+// home channel to the DM(creator, newAssignee), reposts the card there, and
+// copies comments. Team-channel tasks are not moved (covered by
+// TestSetAssignee_Endpoint above, which uses ch1 and asserts the card stays).
+func TestSetAssignee_DMTaskMovesChannel(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	api := p.API.(*plugintest.API)
+	reseedGetChannelMember(t, api)
+	// Drop the default team-channel GetChannel + catchall GetDirectChannel mocks
+	// so the DM-specific ones win.
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "GetChannel" && c.Method != "GetDirectChannel" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+
+	// The task starts in a DM(creator, oldAssignee) of type D.
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "dm-old", Summary: "dm task", CreatorID: "u-creator", AssigneeID: "u-old"})
+
+	// GetChannel("dm-old") returns a DM; the new DM with the new assignee is
+	// "dm-new". Card + comment posts are deterministic ids from the postCard /
+	// CreatePost mocks.
+	api.On("GetChannel", "dm-old").Return(&mmmodel.Channel{Id: "dm-old", Type: mmmodel.ChannelTypeDirect}, nil).Maybe()
+	api.On("GetChannel", "dm-new").Return(&mmmodel.Channel{Id: "dm-new", Type: mmmodel.ChannelTypeDirect}, nil).Maybe()
+	api.On("GetDirectChannel", "u-creator", "u-new").Return(&mmmodel.Channel{Id: "dm-new", Type: mmmodel.ChannelTypeDirect}, nil).Maybe()
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(&mmmodel.ChannelMember{}, nil).Maybe()
+	// Existing comment to copy.
+	_, _, lErr := p.taskService.LinkComment(created.ID, "old-comment-post", "u-commenter")
+	require.NoError(t, lErr)
+	api.On("GetPost", "old-comment-post").Return(&mmmodel.Post{Id: "old-comment-post", Message: "note", CreateAt: 123}, nil).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee", `{"user_id":"u-new"}`, "u-creator"))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	api.AssertCalled(t, "GetPost", "old-comment-post")
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "dm-new", got.ChannelID, "DM task moved to DM(creator, newAssignee)")
 }
 
 func TestDeleteAssignee_Endpoint(t *testing.T) {

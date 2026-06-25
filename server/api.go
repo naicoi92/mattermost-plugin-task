@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -568,6 +569,18 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Under the all-channel model a DM-scoped task follows its assignee: when
+	// reassigned, move the card (and its comments) into the DM between creator
+	// and new assignee. Team-channel tasks stay put (shared surface).
+	if ev.OldAssigneeID != "" && ev.NewAssigneeID != "" && ev.OldAssigneeID != ev.NewAssigneeID {
+		if moved, mErr := p.moveTaskChannelIfDM(updated, ev.NewAssigneeID); mErr != nil {
+			p.API.LogWarn("reassign: move channel failed; task stays in old DM",
+				"task_id", updated.ID, "error", mErr)
+		} else if moved != nil {
+			updated = moved
+		}
+	}
+
 	// Notify the newly assigned user. Under the all-channel model this
 	// fires for every non-empty new assignee (self-assign included).
 	if p.notifier != nil {
@@ -582,6 +595,97 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 
 	// Real-time: assignee changed — Quick List "My Tasks" + avatars refresh (#32).
 	p.broadcastTaskUpdated(updated, []string{"assignee_id"})
+}
+
+// moveTaskChannelIfDM relocates a DM-scoped task to the DM between its creator
+// and newAssigneeID when the task's current ChannelID is a direct channel. It:
+//  1. resolves the new DM channel via GetDirectChannel(creator, newAssignee);
+//  2. posts a fresh card into the new DM;
+//  3. copies existing comments (as new posts under the new card, preserving
+//     author and original timestamp);
+//  4. updates task.ChannelID + channel_post_id;
+//  5. deletes the old card post (the old DM keeps its history but loses the
+//     live card).
+//
+// Team-channel tasks (type O/P/G) are NOT moved — the channel is a shared
+// surface and every assignee sees the card there. Returns (nil, nil) when the
+// task is not DM-scoped (no move needed).
+func (p *Plugin) moveTaskChannelIfDM(t *taskmodel.Task, newAssigneeID string) (*taskmodel.Task, error) {
+	if t == nil || t.ChannelID == "" {
+		return nil, nil
+	}
+	ch, err := p.API.GetChannel(t.ChannelID)
+	if err != nil || ch == nil {
+		return nil, fmt.Errorf("move channel: get channel %s: %w", t.ChannelID, err)
+	}
+	if ch.Type != mmmodel.ChannelTypeDirect {
+		return nil, nil // team/group channel: shared surface, do not move
+	}
+	dm, err := p.API.GetDirectChannel(t.CreatorID, newAssigneeID)
+	if err != nil || dm == nil {
+		return nil, fmt.Errorf("move channel: open DM(%s,%s): %w", t.CreatorID, newAssigneeID, err)
+	}
+	if dm.Id == t.ChannelID {
+		return nil, nil // already in the right DM
+	}
+
+	// Post a fresh card into the new DM.
+	newPostID := p.postCard(dm.Id, t)
+	if newPostID == "" {
+		return nil, errors.New("move channel: post card failed")
+	}
+
+	// Copy comments under the new card root (best-effort: a failed copy is
+	// logged but does not abort the move).
+	p.copyCommentsUnderCard(t.ID, newPostID, dm.Id)
+
+	// Update task: new home channel + new card post id.
+	updated, uErr := p.taskService.UpdateChannel(t.ID, dm.Id, newPostID)
+	if uErr != nil {
+		return nil, fmt.Errorf("move channel: update task: %w", uErr)
+	}
+
+	// Delete the old card so the old DM stops rendering a live card; the old
+	// comment posts (if any) remain in the old DM as history.
+	if t.ChannelPostID != nil && *t.ChannelPostID != "" {
+		if dErr := p.API.DeletePost(*t.ChannelPostID); dErr != nil {
+			p.API.LogWarn("move channel: failed to delete old card",
+				"task_id", t.ID, "old_post_id", *t.ChannelPostID, "error", dErr)
+		}
+	}
+	return updated, nil
+}
+
+// copyCommentsUnderCard re-creates the task's existing comments as new posts
+// threaded under newCardPostID in newChannelID. Each copy preserves the
+// original author and created-at timestamp (plugin posts run system-context,
+// so impersonating the author is allowed). Best-effort: per-copy failures are
+// logged and skipped so one bad comment can't block the move.
+func (p *Plugin) copyCommentsUnderCard(taskID, newCardPostID, newChannelID string) {
+	comments, err := p.taskService.ListComments(taskID)
+	if err != nil {
+		p.API.LogWarn("move channel: list comments failed", "task_id", taskID, "error", err)
+		return
+	}
+	for _, c := range comments {
+		old, gErr := p.API.GetPost(c.PostID)
+		if gErr != nil || old == nil {
+			p.API.LogDebug("move channel: skip unreadable comment", "post_id", c.PostID)
+			continue
+		}
+		post := &mmmodel.Post{
+			UserId:    c.AuthorID,
+			ChannelId: newChannelID,
+			RootId:    newCardPostID,
+			Message:   old.Message,
+			CreateAt:  old.CreateAt,
+			Type:      mmmodel.PostTypeDefault,
+		}
+		if _, pErr := p.API.CreatePost(post); pErr != nil {
+			p.API.LogWarn("move channel: copy comment failed",
+				"task_id", taskID, "old_post_id", c.PostID, "error", pErr)
+		}
+	}
 }
 
 // deleteAssignee handles DELETE /tasks/:id/assignee (clears the assignee). No

@@ -507,6 +507,29 @@ func (s *Service) SetPostIDs(id, channelPostID string) (*model.Task, error) {
 	return s.Get(id)
 }
 
+// UpdateChannel updates a task's ChannelID and channel_post_id atomically. Used
+// by the reassign move-channel flow (moveTaskChannelIfDM) to relocate a
+// DM-scoped task to the DM between creator and new assignee.
+func (s *Service) UpdateChannel(id, channelID, channelPostID string) (*model.Task, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	row, err := s.loadTaskRow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	row.ChannelID = channelID
+	if channelPostID == "" {
+		row.ChannelPostID = nil
+	} else {
+		row.ChannelPostID = &channelPostID
+	}
+	row.UpdatedAt = nowFunc()
+	if _, err := s.store.UpdateTask(ctx, *row); err != nil {
+		return nil, err
+	}
+	return s.Get(id)
+}
+
 // SetStatus transitions the task to newStatus using the canonical state machine
 // (taskutil.ApplyStatus), and applies side effects atomically via WithTx:
 //
@@ -942,6 +965,7 @@ func derefBool(p *bool) bool {
 // ptrString returns a pointer to s; used for TaskEvent.FromValue/ToValue which
 // are *string.
 //
+//go:fix inline
 //go:fix inline
 //go:fix inline
 //go:fix inline
