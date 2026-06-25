@@ -615,24 +615,6 @@ func (p *Plugin) commentRoot(taskID string, t *taskmodel.Task, commenterID, reqC
 	return "", "", false
 }
 
-// cardPostInChannel returns the post id of the task's card post that lives in
-// channelID (any kind: channel card, DM card, or a shared card), or "" if none.
-// Used by createComment (Change B) to resolve the thread root for the channel
-// the viewer is acting from, so a shared task's comment replies to the SHARE
-// card in the shared channel. Mirrors the idempotency lookup in shareTask.
-func (p *Plugin) cardPostInChannel(taskID, channelID string) string {
-	for _, tp := range p.taskPosts(taskID) {
-		post, gerr := p.API.GetPost(tp.PostID)
-		if gerr != nil || post == nil {
-			continue
-		}
-		if post.ChannelId == channelID {
-			return tp.PostID
-		}
-	}
-	return ""
-}
-
 // cardChannelIDs returns the set of channel ids that hold one of the task's
 // card posts (channel card, DM card, OR a shared card). It resolves each
 // tracked task_post to its post's ChannelId via GetPost. Used to feed the
