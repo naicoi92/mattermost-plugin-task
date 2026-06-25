@@ -805,7 +805,12 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	// fall back to the first tracked card. The comment goes into THAT card's
 	// channel, so channel + root stay consistent and the reply is always in the
 	// fetched thread.
-	rootID, channelID, ok := p.commentRoot(taskID, t, actorID, req.ChannelID)
+	rootID, channelID, ok, err := p.commentRoot(taskID, t, actorID, req.ChannelID)
+	if err != nil {
+		p.API.LogError("createComment: transient error resolving card root", "task_id", taskID, "error", err)
+		p.writeError(w, http.StatusInternalServerError, "failed to resolve task card")
+		return
+	}
 	if !ok {
 		p.API.LogWarn("createComment: task has no card root; rejecting comment",
 			"task_id", taskID, "requested_channel_id", req.ChannelID)
@@ -945,16 +950,35 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 	// the content lives in the Mattermost post. A direct GetPost per comment is
 	// used (NOT GetPostThread over card roots): it is robust to root/channel
 	// resolution mismatches and to thread-cache lag — the post is always
-	// retrievable by its id. A missing post (deleted out-of-band) yields
-	// deleted:true. The number of comments per task is small (activity feed),
-	// so this is not an unbounded scan.
+	// retrievable by its id.
+	//
+	// Error handling distinguishes a truly-missing post (deleted out-of-band;
+	// AppError 404) from a transient backend failure (5xx/network). Only the
+	// former yields deleted:true; a transient error aborts the whole request so
+	// the caller can retry instead of silently showing comments as deleted.
 	out := make([]commentResponse, len(comments))
 	for i, c := range comments {
 		post, pErr := p.API.GetPost(c.PostID)
-		if pErr == nil && post != nil {
+		switch {
+		case pErr == nil && post != nil:
 			out[i] = toCommentResponse(c, post.Message, false)
-		} else {
+		case pErr != nil && pErr.StatusCode == http.StatusNotFound:
+			// The backing post was deleted out-of-band. Mark deleted but keep the
+			// row so the feed shows the placeholder.
 			out[i] = toCommentResponse(c, "", true)
+		default:
+			// Transient backend error (or an unexpected nil post without error).
+			// Fail the request instead of rendering a live comment as deleted.
+			p.API.LogError("listComments: transient error resolving comment post",
+				"task_id", taskID, "comment_id", c.ID, "post_id", c.PostID,
+				"status_code", func() int {
+					if pErr != nil {
+						return pErr.StatusCode
+					}
+					return 0
+				}())
+			p.writeError(w, http.StatusInternalServerError, "failed to load comments")
+			return
 		}
 	}
 

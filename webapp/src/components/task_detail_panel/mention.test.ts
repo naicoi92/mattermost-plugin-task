@@ -83,4 +83,25 @@ describe('applyMention — insert @username and reposition caret (FEAT-C)', () =
         expect(ins.text).toBe('hello');
         expect(ins.caret).toBe(5);
     });
+
+    // CR #3: when the caret sits INSIDE an existing @word token (not at the
+    // end), detectMention must capture the WHOLE word (including the suffix
+    // after the caret) so applyMention replaces the entire token, not a
+    // truncated prefix that would leave the old suffix behind.
+    test('detects the full token when the caret is in the middle of @word', () => {
+        // text: "hi @alice bye", caret between '@ali' and 'ce' (index 6)
+        const d = detectMention('hi @alice bye', 6);
+        expect(d.open).toBe(true);
+        expect(d.query).toBe('alice');
+        expect(d.start).toBe(3);
+        expect(d.tokenEnd).toBe(9);
+    });
+
+    test('applyMention replaces the whole token even when the caret is mid-token', () => {
+        const text = 'hi @alice bye';
+        const d = detectMention(text, 6); // caret inside @ali|ce
+        const ins = applyMention(text, 6, d, 'bob');
+        expect(ins.text).toBe('hi @bob  bye');
+        expect(ins.caret).toBe(3 + '@bob '.length);
+    });
 });

@@ -154,6 +154,17 @@ export default function TaskDetailPanel({
 
     // Load the task + subtasks + comments + activity events whenever the
     // selected id changes.
+    // Reset the panel's data state immediately on taskID change so the UI never
+    // briefly renders task A's content while task B loads (CR #4). The fetch
+    // effect below repopulates these once the new task's data arrives.
+    useEffect(() => {
+        setFull(null);
+        setSubtasks([]);
+        setComments([]);
+        setEvents([]);
+        setError('');
+    }, [taskID]);
+
     useEffect(() => {
         let cancelled = false;
         const load = async () => {
@@ -576,20 +587,28 @@ export default function TaskDetailPanel({
         const cacheKey = `${query}@${mentionChannelID}`;
         const mergeParticipants = (
             list: UserSearchResult[],
+            query: string,
         ): UserSearchResult[] => {
             // Seed with the known assignee (if resolved and not already present)
-            // so the dropdown is never empty while the fetch is in flight.
+            // so the dropdown is never empty while the fetch is in flight — but
+            // ONLY when the current query is empty or matches the assignee's
+            // username. Otherwise the dropdown would preselect an unrelated
+            // assignee for a query they don't match (CR #5).
             const seed: UserSearchResult[] = [];
             if (assigneeUser?.username && assigneeUser.id) {
-                seed.push({
-                    id: assigneeUser.id,
-                    username: assigneeUser.username,
-                    first_name: assigneeUser.first_name,
-                    last_name: assigneeUser.last_name,
-                    nickname: assigneeUser.nickname,
-                    is_bot: assigneeUser.is_bot,
-                    delete_at: assigneeUser.delete_at,
-                });
+                const q = query.trim().toLowerCase();
+                const matches = q === '' || assigneeUser.username.toLowerCase().includes(q);
+                if (matches) {
+                    seed.push({
+                        id: assigneeUser.id,
+                        username: assigneeUser.username,
+                        first_name: assigneeUser.first_name,
+                        last_name: assigneeUser.last_name,
+                        nickname: assigneeUser.nickname,
+                        is_bot: assigneeUser.is_bot,
+                        delete_at: assigneeUser.delete_at,
+                    });
+                }
             }
             const seen = new Set<string>();
             const merged: UserSearchResult[] = [];
@@ -613,7 +632,7 @@ export default function TaskDetailPanel({
         const apply = (list: UserSearchResult[]) => {
             setMention((s) => ({
                 ...s,
-                candidates: mergeParticipants(list),
+                candidates: mergeParticipants(list, query),
                 highlight: 0,
             }));
         };
@@ -1206,7 +1225,8 @@ export default function TaskDetailPanel({
                                     e.preventDefault();
                                     setMention((s) => ({
                                         ...s,
-                                        highlight: (((s.highlight - 1) + s.candidates.length) % s.candidates.length),
+                                        // eslint-disable-next-line no-mixed-operators
+                                        highlight: (s.highlight - 1 + s.candidates.length) % s.candidates.length,
                                     }));
                                     return;
                                 }

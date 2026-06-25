@@ -187,13 +187,32 @@ func TestCreateTask_PersonalTaskWithAssigneePostsChannelCardAndDMCard(t *testing
 	p.API.(*plugintest.API).AssertNumberOfCalls(t, "CreatePost", 2)
 }
 
-// TestCreateTask_PostChannelID_IgnoredWhenNotMember is OBSOLETE: the
-// post_channel_id announce path was removed (the card-preview simplification
-// posts into the task's own channel only). Kept as a comment marker; the
-// non-member defense no longer applies because post_channel_id is ignored in
-// all cases now.
-func TestCreateTask_PostChannelID_ObsoleteRemoved(t *testing.T) {
-	t.Skip("post_channel_id announce path removed; see TestCreateTask_PersonalTaskNoChannelCard")
+// TestCreateTask_PostChannelID_IgnoredWhenNotMember is the defense-in-depth
+// guard for client-controlled post_channel_id: if the requesting user is NOT a
+// member of post_channel_id, the announce card is NOT posted there. The task is
+// still created (personal scope preserved). Restored after the IsChannelMember
+// gate was re-added to createTask (review R1 + CodeRabbit nitpick).
+func TestCreateTask_PostChannelID_IgnoredWhenNotMember(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	api := p.API.(*plugintest.API)
+	// Drop the default member-true mock; caller is not a member of "secret".
+	reseedGetChannelMember(t, api)
+	api.On("GetChannelMember", "secret", "u1").Return(nil, nil).Maybe()
+	body := `{"summary":"sneak","post_channel_id":"secret"}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var got model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	// The task is still created (personal scope, no assignee).
+	assert.Equal(t, "", got.ChannelID)
+	assert.Equal(t, "sneak", got.Summary)
+	// But NO announce card was posted: the caller couldn't direct the bot into
+	// a channel they don't belong to.
+	assert.Equal(t, "", got.ChannelPostID)
+	assert.Equal(t, "", got.DMPostID)
+	api.AssertNumberOfCalls(t, "CreatePost", 0)
 }
 
 // TestShareTask_PostsCardAndLinks verifies the happy path: sharing an existing
@@ -912,7 +931,7 @@ func TestListComments_DeletedFlagForMissingPost(t *testing.T) {
 	api.ExpectedCalls = kept
 	api.On("GetPost", "cardroot").Return(&mmmodel.Post{Id: "cardroot", ChannelId: "ch1"}, nil).Maybe()
 	api.On("GetPost", "p-alive").Return(&mmmodel.Post{Id: "p-alive", Message: "hi"}, nil).Maybe()
-	api.On("GetPost", "p-gone").Return((*mmmodel.Post)(nil), &mmmodel.AppError{}).Maybe()
+	api.On("GetPost", "p-gone").Return((*mmmodel.Post)(nil), &mmmodel.AppError{StatusCode: http.StatusNotFound}).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u1"))
@@ -1016,7 +1035,7 @@ func TestListComments_RootIDEmptyReturnsDeletedFlag(t *testing.T) {
 		}
 	}
 	api.ExpectedCalls = kept
-	api.On("GetPost", "p1").Return((*mmmodel.Post)(nil), &mmmodel.AppError{}).Maybe()
+	api.On("GetPost", "p1").Return((*mmmodel.Post)(nil), &mmmodel.AppError{StatusCode: http.StatusNotFound}).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u1"))

@@ -3,9 +3,9 @@
 // are unit-testable in isolation; the component wires them into textarea
 // onChange/onKeyDown.
 //
-// detectMention inspects the text BEFORE the caret and decides whether the
-// caret is inside an active @<query> token. applyMention replaces that token
-// with @<username> (plus a trailing space) and returns the new caret position.
+// detectMention finds the @<word> token that SURROUNDS the caret (the @word may
+// extend past the caret). applyMention replaces that whole token with
+// @<username> (plus a trailing space) and returns the new caret position.
 
 export interface MentionDetection {
     open: boolean;
@@ -13,25 +13,43 @@ export interface MentionDetection {
     // start is the character index of the '@' (when open). Undefined when closed.
     start?: number;
 
-    // query is the text typed after '@' (may be empty right after pressing '@').
+    // tokenEnd is the index just past the '@word' token (when open).
+    tokenEnd?: number;
+
+    // query is the ENTIRE word after '@' (including any suffix past the caret).
     query: string;
 }
 
-// detectMention returns whether the caret sits in an @<query> token. The token
-// is recognized only when the '@' is preceded by either the start of the text
-// or a whitespace character — so an '@' inside an email (a@b.com) or an
-// already-mention-shaped word does NOT trigger. The query is the run of
-// username-legal characters (\w) after the '@'.
+const MENTION_TOKEN = /(^|\s)@(\w*)/g;
+
+// detectMention returns whether the caret sits inside (or immediately after) an
+// @<word> token. The token's '@' must be preceded by start-of-text or a
+// whitespace char, so an '@' inside an email (a@b.com) does NOT trigger. The
+// query covers the WHOLE word following the '@' — including characters past
+// the caret — so applyMention replaces the complete token, not a truncated
+// prefix.
 export function detectMention(text: string, caret: number): MentionDetection {
-    const before = text.slice(0, caret);
-    const m = before.match(/(^|\s)@(\w*)$/);
-    if (!m) {
+    if (caret < 0 || caret > text.length) {
         return {open: false, query: ''};
     }
+    let m: RegExpExecArray | null;
+    MENTION_TOKEN.lastIndex = 0;
+    while ((m = MENTION_TOKEN.exec(text)) !== null) {
+        // m.index is the start of the leading (^|\s) group; the '@' sits one
+        // char after it (or at m.index when the group matched '^').
+        const atIdx = m.index + m[1].length;
+        const word = m[2];
+        const tokenEnd = atIdx + 1 + word.length;
 
-    // start = index of the '@' = (end of before) - len("@query").
-    const start = before.length - m[2].length - 1;
-    return {open: true, start, query: m[2]};
+        // Caret must be inside the token: after the '@' and at/before tokenEnd.
+        if (caret > atIdx && caret <= tokenEnd) {
+            return {open: true, start: atIdx, tokenEnd, query: word};
+        }
+        if (m.index === text.length) {
+            break; // zero-length progress guard
+        }
+    }
+    return {open: false, query: ''};
 }
 
 export interface MentionInsert {
@@ -39,22 +57,21 @@ export interface MentionInsert {
     caret: number;
 }
 
-// applyMention replaces the @<query> token (described by detection.start +
-// detection.query) with "@<username> " and returns the resulting full text plus
-// the caret position immediately after the trailing space. The leading
-// whitespace captured by detectMention (the char before '@') is PRESERVED —
-// only the '@query' run is substituted.
+// applyMention replaces the @<word> token (described by detection.start /
+// detection.tokenEnd) with "@<username> " and returns the resulting full text
+// plus the caret position immediately after the trailing space. The leading
+// whitespace before the '@' is PRESERVED — only the '@word' run is substituted.
 export function applyMention(
     text: string,
     caret: number,
     detection: MentionDetection,
     username: string,
 ): MentionInsert {
-    if (!detection.open || detection.start === undefined) {
+    if (!detection.open || detection.start === undefined || detection.tokenEnd === undefined) {
         return {text, caret};
     }
     const atIdx = detection.start;
-    const tokenEnd = atIdx + 1 + detection.query.length; // past '@query'
+    const tokenEnd = detection.tokenEnd;
     const mention = `@${username} `;
     const next = text.slice(0, atIdx) + mention + text.slice(tokenEnd);
     const nextCaret = atIdx + mention.length;
