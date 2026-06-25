@@ -114,16 +114,13 @@ func (p *Plugin) OnActivate() error {
 
 	p.router = p.initRouter()
 
-	reminderJob, err := cluster.Schedule(
-		p.API,
-		"TaskReminderJob",
-		cluster.MakeWaitForRoundedInterval(1*time.Minute),
-		p.runReminderJob,
-	)
-	if err != nil {
-		return errors.Wrap(err, "failed to schedule reminder job")
-	}
-	p.reminderJob = reminderJob
+	// NOTE(reminders): cluster.Schedule is disabled while diagnosing an RPC
+	// shutdown that spam-blocks all plugin API calls after the first task card.
+	// The reminder job's cluster mutex uses KVSetWithOptions, which appears to
+	// crash the plugin RPC connection in this environment. Re-enable once the
+	// root cause is fixed.
+	_ = p.runReminderJob // keep referenced
+	p.API.LogInfo("reminder job temporarily disabled (RPC shutdown investigation)")
 
 	return nil
 }
