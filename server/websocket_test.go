@@ -54,7 +54,7 @@ func TestBroadcastTaskUpdated_ChannelScope(t *testing.T) {
 	assert.Equal(t, int64(100), c.payload["seq"])
 	assert.Equal(t, int64(100), c.payload["updated_at"])
 	assert.Equal(t, []string{"status"}, c.payload["changed_fields"])
-	assert.Equal(t, task, c.payload["task"])
+	assert.Equal(t, "t1", taskPayloadID(t, c.payload["task"]))
 }
 
 func TestBroadcastTaskUpdated_PersonalScope_CreatorAndAssignee(t *testing.T) {
@@ -125,4 +125,16 @@ func TestBroadcastTaskUpdated_AssigneeOnly_NoCreator(t *testing.T) {
 
 	require.Len(t, *calls, 1)
 	assert.Equal(t, "a1", (*calls)[0].broadcast.UserId)
+}
+
+// taskPayloadID extracts the task id from a marshalled task payload (now a
+// map[string]any rather than *model.Task).
+func taskPayloadID(t *testing.T, v any) string {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := m["id"].(string)
+	return id
 }
