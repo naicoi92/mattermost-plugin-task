@@ -167,6 +167,12 @@ type Store interface {
 	// DM-scoped tasks that may need migrating away from the deactivated user.
 	ListTasksByMember(ctx context.Context, userID string, limit int) ([]model.TaskRow, error)
 
+	// ListTasksWithoutChannel returns every task whose channel_id is empty
+	// (legacy personal tasks predating the all-channel model), ordered by
+	// order_key. Used by the activation-time backfill to relocate them into a
+	// real DM channel.
+	ListTasksWithoutChannel(ctx context.Context, limit int) ([]model.TaskRow, error)
+
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error
 	RemoveMember(ctx context.Context, taskID, userID, role string) error

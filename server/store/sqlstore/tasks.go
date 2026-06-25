@@ -411,7 +411,25 @@ func (s *SQLStore) ListTasksByMember(ctx context.Context, userID string, limit i
 	return scanTaskRows(rows)
 }
 
-// applyTaskFilters returns a SelectBuilder with the WHERE clauses implied by
+// ListTasksWithoutChannel returns every task whose channel_id is empty
+// (legacy personal tasks predating the all-channel model), ordered by
+// order_key. Used by the activation-time backfill.
+func (s *SQLStore) ListTasksWithoutChannel(ctx context.Context, limit int) ([]model.TaskRow, error) {
+	qb := s.builder().
+		Select(taskColumns...).
+		From(s.tableName(taskTableShort)).
+		Where(sq.Eq{"channel_id": ""}).
+		OrderByClause(s.escapeField("order_key") + " ASC")
+	if limit > 0 {
+		qb = qb.Limit(uint64(limit))
+	}
+	rows, err := qb.QueryContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks without channel: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanTaskRows(rows)
+}
 // the ListQuery (scope, status, priority, due). Columns selects what to
 // project; both ListTasks and CountTasksByStatus use it so the WHERE stays
 // identical.

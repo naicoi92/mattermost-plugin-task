@@ -174,7 +174,7 @@ func (p *Plugin) forceMoveTaskToChannel(t *taskmodel.Task, targetChannelID strin
 	if t.ChannelPostID != nil && *t.ChannelPostID != "" {
 		if dErr := p.API.DeletePost(*t.ChannelPostID); dErr != nil {
 			p.API.LogWarn("force move: delete old card failed",
-			"task_id", t.ID, "old_post_id", *t.ChannelPostID, "error", dErr)
+				"task_id", t.ID, "old_post_id", *t.ChannelPostID, "error", dErr)
 		}
 	}
 	return updated, nil

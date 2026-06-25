@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 
+	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/notification"
 	"github.com/naicoi92/mattermost-plugin-task/server/store"
 	"github.com/naicoi92/mattermost-plugin-task/server/store/sqlstore"
@@ -103,6 +105,13 @@ func (p *Plugin) OnActivate() error {
 
 	p.taskService = task.NewService(p.taskStore, &p.client.Log)
 
+	// Backfill any legacy personal tasks (channel_id="") into a real DM
+	// channel so they conform to the all-channel model. Idempotent: tasks
+	// already migrated are skipped by the WHERE channel_id="" filter.
+	if bfErr := p.backfillChannelIDs(); bfErr != nil {
+		p.API.LogError("channel-id backfill failed (non-fatal)", "error", bfErr)
+	}
+
 	p.router = p.initRouter()
 
 	reminderJob, err := cluster.Schedule(
@@ -144,6 +153,52 @@ func (p *Plugin) OnDeactivate() error {
 				p.API.LogError("Failed to close job", "err", err)
 			}
 		}
+	}
+	return nil
+}
+
+// backfillChannelIDs relocates legacy personal tasks (channel_id="") into a
+// real DM channel so every task conforms to the all-channel model. For each
+// such task:
+//   - if it has an assignee ≠ creator → DM(creator, assignee);
+//   - otherwise → self-DM(creator, creator).
+//
+// Orphans (a deleted/unknown user so GetDirectChannel fails) are logged and
+// left with channel_id="" for admin follow-up; the backfill is best-effort
+// and non-fatal. Idempotent: re-running is a no-op because the query filters
+// on channel_id="".
+func (p *Plugin) backfillChannelIDs() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	rows, err := p.taskStore.ListTasksWithoutChannel(ctx, 0)
+	if err != nil {
+		return fmt.Errorf("list legacy tasks: %w", err)
+	}
+	for _, row := range rows {
+		creatorID, _ := p.taskStore.GetMemberByRole(ctx, row.ID, taskmodel.MemberRoleCreator)
+		if creatorID == "" {
+			p.API.LogWarn("backfill: task has no creator; skipping", "task_id", row.ID)
+			continue
+		}
+		assigneeID, _ := p.taskStore.GetMemberByRole(ctx, row.ID, taskmodel.MemberRoleAssignee)
+		partner := assigneeID
+		if partner == "" || partner == creatorID {
+			partner = creatorID // self-DM
+		}
+		dm, dErr := p.API.GetDirectChannel(creatorID, partner)
+		if dErr != nil || dm == nil {
+			p.API.LogWarn("backfill: could not resolve DM channel; leaving as orphan",
+				"task_id", row.ID, "creator_id", creatorID, "partner_id", partner, "error", dErr)
+			continue
+		}
+		if _, uErr := p.taskService.UpdateChannel(row.ID, dm.Id, ""); uErr != nil {
+			p.API.LogError("backfill: update channel failed",
+				"task_id", row.ID, "channel_id", dm.Id, "error", uErr)
+		}
+	}
+	if n := len(rows); n > 0 {
+		p.API.LogInfo("channel-id backfill processed legacy tasks", "count", n)
 	}
 	return nil
 }

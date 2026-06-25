@@ -187,4 +187,3 @@ func TestUserHasBeenDeactivated_MigratesDMTask(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "dm-a-self", got.ChannelID, "task relocated to active participant's self-DM")
 }
-
