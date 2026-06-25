@@ -430,7 +430,25 @@ func (s *SQLStore) ListTasksWithoutChannel(ctx context.Context, limit int) ([]mo
 	defer func() { _ = rows.Close() }()
 	return scanTaskRows(rows)
 }
-// the ListQuery (scope, status, priority, due). Columns selects what to
+
+// ListTasksWithCardPost returns every task that has a channel_post_id, ordered
+// by order_key. Used by the activation-time repair pass.
+func (s *SQLStore) ListTasksWithCardPost(ctx context.Context, limit int) ([]model.TaskRow, error) {
+	qb := s.builder().
+		Select(taskColumns...).
+		From(s.tableName(taskTableShort)).
+		Where("channel_post_id IS NOT NULL").
+		OrderByClause(s.escapeField("order_key") + " ASC")
+	if limit > 0 {
+		qb = qb.Limit(uint64(limit))
+	}
+	rows, err := qb.QueryContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks with card post: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanTaskRows(rows)
+}
 // project; both ListTasks and CountTasksByStatus use it so the WHERE stays
 // identical.
 //

@@ -171,30 +171,52 @@ func (p *Plugin) backfillChannelIDs() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Repair pass first: a previous (buggy) backfill may have set channel_id
+	// to a DM while the task's card actually lives in a team channel. For any
+	// task whose ChannelPostID resolves to a post in a DIFFERENT channel than
+	// task.ChannelID, realign ChannelID to the card's real channel. This is the
+	// source of truth: the card post's channel IS the task's home.
+	if repErr := p.repairChannelIDFromCard(ctx); repErr != nil {
+		p.API.LogError("channel-id repair failed (non-fatal)", "error", repErr)
+	}
+
 	rows, err := p.taskStore.ListTasksWithoutChannel(ctx, 0)
 	if err != nil {
 		return fmt.Errorf("list legacy tasks: %w", err)
 	}
 	for _, row := range rows {
-		creatorID, _ := p.taskStore.GetMemberByRole(ctx, row.ID, taskmodel.MemberRoleCreator)
-		if creatorID == "" {
-			p.API.LogWarn("backfill: task has no creator; skipping", "task_id", row.ID)
-			continue
+		// Prefer the channel the task's card actually lives in (a legacy
+		// personal-scope task could still have a card posted in a real channel
+		// via the old share/post_channel_id path). Only fall back to a DM when
+		// there is no card post to anchor the home channel.
+		targetChannel := ""
+		if row.ChannelPostID != nil && *row.ChannelPostID != "" {
+			if post, pErr := p.API.GetPost(*row.ChannelPostID); pErr == nil && post != nil && post.ChannelId != "" {
+				targetChannel = post.ChannelId
+			}
 		}
-		assigneeID, _ := p.taskStore.GetMemberByRole(ctx, row.ID, taskmodel.MemberRoleAssignee)
-		partner := assigneeID
-		if partner == "" || partner == creatorID {
-			partner = creatorID // self-DM
+		if targetChannel == "" {
+			creatorID, _ := p.taskStore.GetMemberByRole(ctx, row.ID, taskmodel.MemberRoleCreator)
+			if creatorID == "" {
+				p.API.LogWarn("backfill: task has no creator and no card; skipping", "task_id", row.ID)
+				continue
+			}
+			assigneeID, _ := p.taskStore.GetMemberByRole(ctx, row.ID, taskmodel.MemberRoleAssignee)
+			partner := assigneeID
+			if partner == "" || partner == creatorID {
+				partner = creatorID // self-DM
+			}
+			dm, dErr := p.API.GetDirectChannel(creatorID, partner)
+			if dErr != nil || dm == nil {
+				p.API.LogWarn("backfill: could not resolve DM channel; leaving as orphan",
+					"task_id", row.ID, "creator_id", creatorID, "partner_id", partner, "error", dErr)
+				continue
+			}
+			targetChannel = dm.Id
 		}
-		dm, dErr := p.API.GetDirectChannel(creatorID, partner)
-		if dErr != nil || dm == nil {
-			p.API.LogWarn("backfill: could not resolve DM channel; leaving as orphan",
-				"task_id", row.ID, "creator_id", creatorID, "partner_id", partner, "error", dErr)
-			continue
-		}
-		if _, uErr := p.taskService.UpdateChannel(row.ID, dm.Id, ""); uErr != nil {
+		if _, uErr := p.taskService.UpdateChannel(row.ID, targetChannel, ""); uErr != nil {
 			p.API.LogError("backfill: update channel failed",
-				"task_id", row.ID, "channel_id", dm.Id, "error", uErr)
+				"task_id", row.ID, "channel_id", targetChannel, "error", uErr)
 		}
 	}
 	if n := len(rows); n > 0 {
@@ -203,7 +225,40 @@ func (p *Plugin) backfillChannelIDs() error {
 	return nil
 }
 
-// See https://developers.mattermost.com/extend/plugins/server/reference/
+// repairChannelIDFromCard corrects tasks whose channel_id does not match the
+// channel their card post actually lives in. This repairs data left wrong by
+// a previous buggy backfill that set channel_id to a DM while the card was
+// posted in a team channel. The card post's channel is the source of truth
+// for the task's home channel.
+func (p *Plugin) repairChannelIDFromCard(ctx context.Context) error {
+	rows, err := p.taskStore.ListTasksWithCardPost(ctx, 0)
+	if err != nil {
+		return fmt.Errorf("list tasks with card: %w", err)
+	}
+	fixed := 0
+	for _, row := range rows {
+		if row.ChannelPostID == nil || *row.ChannelPostID == "" {
+			continue
+		}
+		post, pErr := p.API.GetPost(*row.ChannelPostID)
+		if pErr != nil || post == nil || post.ChannelId == "" {
+			continue
+		}
+		if post.ChannelId == row.ChannelID {
+			continue // already correct
+		}
+		if _, uErr := p.taskService.UpdateChannel(row.ID, post.ChannelId, *row.ChannelPostID); uErr != nil {
+			p.API.LogError("repair: update channel failed",
+				"task_id", row.ID, "channel_id", post.ChannelId, "error", uErr)
+			continue
+		}
+		fixed++
+	}
+	if fixed > 0 {
+		p.API.LogInfo("channel-id repair realigned tasks to their card channel", "count", fixed)
+	}
+	return nil
+}
 
 // notifierAPI adapts plugin.API to notification.API. plugin.API returns
 // *model.AppError (which implements error); the notifier works with plain

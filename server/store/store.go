@@ -173,6 +173,11 @@ type Store interface {
 	// real DM channel.
 	ListTasksWithoutChannel(ctx context.Context, limit int) ([]model.TaskRow, error)
 
+	// ListTasksWithCardPost returns every task that has a channel_post_id,
+	// ordered by order_key. Used by the activation-time repair pass to
+	// realign channel_id with the card post's actual channel.
+	ListTasksWithCardPost(ctx context.Context, limit int) ([]model.TaskRow, error)
+
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error
 	RemoveMember(ctx context.Context, taskID, userID, role string) error
