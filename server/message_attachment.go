@@ -633,38 +633,6 @@ func (p *Plugin) commentRoot(taskID string, t *taskmodel.Task, commenterID, reqC
 	return "", "", false, nil
 }
 
-// cardChannelIDs returns the set of channel ids that hold one of the task's
-// card posts (channel card, DM card, OR a shared card). It resolves each
-// tracked task_post to its post's ChannelId via GetPost. Used to feed the
-// permission rule (Change C): a member of ANY of these channels may view and
-// comment, so a shared-card channel member is not wrongly denied 403.
-//
-// The set is small and bounded (channel card + DM card + at most one share
-// card, due to the UNIQUE(task_id, kind) share constraint), so this is NOT an
-// N+1 over comments — it is at most 3 GetPost calls. Best-effort: a missing
-// post is skipped (defensive self-heal). Duplicates are deduped. The task's
-// home ChannelID is NOT included here; the permission rule unions it itself.
-func (p *Plugin) cardChannelIDs(taskID string) []string {
-	posts := p.taskPosts(taskID)
-	if len(posts) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(posts))
-	var out []string
-	for _, tp := range posts {
-		post, gerr := p.API.GetPost(tp.PostID)
-		if gerr != nil || post == nil || post.ChannelId == "" {
-			continue
-		}
-		if _, dup := seen[post.ChannelId]; dup {
-			continue
-		}
-		seen[post.ChannelId] = struct{}{}
-		out = append(out, post.ChannelId)
-	}
-	return out
-}
-
 // commentCount returns the number of comments on taskID, or 0 on error
 // (best-effort — a card without the indicator is better than no card). Used to
 // render the "Comments: N" indicator (issue #25).

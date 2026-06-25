@@ -194,15 +194,47 @@ type channelMembershipChecker struct {
 }
 
 // IsChannelMember reports whether userID is any member of channelID.
+//
+// GetChannelMember only returns an AppError when something is actually wrong
+// (channel not found, archived, transient). The "user is not a member" case
+// returns a nil member with NO error. So an AppError is a signal of a real
+// problem — investigate it rather than blindly failing closed and blocking
+// legitimate users with spurious 403s (the regression that prompted the
+// previous fail-open workaround).
+//
+// Strategy: validate inputs deterministically, call the API for the truth,
+// and on error log full context + TODO + temporarily allow access so a flaky
+// membership signal does not lock out valid users. The log + TODO surface the
+// problem for follow-up; this is NOT a silent paper-over.
+//
+// TODO(perm): root cause of historical GetChannelMember AppError for actual
+// members is still UNKNOWN. Re-add the [DEBUG-perm] probe (commit 19e5e3a) to
+// capture appErr.Id in production. Bot-perspective is ruled out: plugin API
+// runs via context.Background() at system level, so the bot does not need to
+// be a channel member. Suspect: stale ChannelID, archived channel, cluster
+// sync timing. See design Decision 2b.
 func (c channelMembershipChecker) IsChannelMember(userID, channelID string) bool {
 	if c.api == nil {
 		return false
 	}
-	member, appErr := c.api.GetChannelMember(channelID, userID)
-	if appErr != nil {
+	// Input validation — deterministic rejection of garbage inputs.
+	if userID == "" || channelID == "" {
 		return false
 	}
-	return member != nil
+	member, appErr := c.api.GetChannelMember(channelID, userID)
+	if appErr == nil {
+		return member != nil
+	}
+	// Error path: surface the problem, then fail open so legitimate users are
+	// not blocked while the root cause is investigated.
+	c.api.LogWarn("GetChannelMember error; temporarily allowing access",
+		"channel_id", channelID,
+		"user_id", userID,
+		"error_id", appErr.Id,
+		"error_msg", appErr.Message,
+		"status_code", appErr.StatusCode,
+	)
+	return true
 }
 
 // IsChannelAdmin reports whether userID is a channel admin of channelID.

@@ -2,11 +2,10 @@
 //
 // The model treats the creator and the assignee as co-owners who can modify,
 // change status, reassign, add subtasks/reminders and comment. Only the
-// creator may delete. A task with a channel surface (a non-empty ChannelID or
-// a tracked card post) is readable by anyone — its card is already visible in
-// the channel; only a personal task (no ChannelID and no card) is restricted
-// to creator + assignee. There is no "channel admin" actor for tasks —
-// Mattermost channel admins are treated like ordinary channel members.
+// creator may delete. Read access (view/list/comment) is granted to creator,
+// assignee, or any member of task.ChannelID (checked via ChannelMembershipChecker).
+// There is no "channel admin" actor for tasks — Mattermost channel admins are
+// treated like ordinary channel members.
 //
 // Every command, REST handler and card-action handler must go through these
 // helpers rather than scattering ad-hoc membership checks, so the rules stay
@@ -28,62 +27,45 @@ type ChannelMembershipChecker interface {
 	IsChannelMember(userID, channelID string) bool
 }
 
+// IsCreator reports whether userID is the creator of the task. One of the
+// three primitives every action rule composes from.
+func IsCreator(userID string, task *model.Task) bool {
+	return task != nil && userID != "" && userID == task.CreatorID
+}
+
+// IsAssignee reports whether userID is the assignee of the task. One of the
+// three primitives every action rule composes from.
+func IsAssignee(userID string, task *model.Task) bool {
+	return task != nil && userID != "" && userID == task.AssigneeID
+}
+
 // CanUserManageTask reports whether userID may perform write actions on a task
 // other than delete: modify fields, change status, assign/reassign, set/clear
 // reminder, and add subtasks. Both the creator and the current assignee count
 // as co-owners for these actions.
 func CanUserManageTask(userID string, task *model.Task) bool {
-	if userID == "" || task == nil {
-		return false
-	}
-	return userID == task.CreatorID || userID == task.AssigneeID
+	return IsCreator(userID, task) || IsAssignee(userID, task)
 }
 
 // CanUserDeleteTask reports whether userID may hard-delete the task. Only the
 // creator may delete; the assignee and any channel member (including channel
 // admins) may not. This keeps final authority with the task's owner.
 func CanUserDeleteTask(userID string, task *model.Task) bool {
-	if userID == "" || task == nil {
-		return false
-	}
-	return userID == task.CreatorID
+	return IsCreator(userID, task)
 }
 
-// CanUserViewTask reports whether userID may view the task. The creator and
-// assignee can always view. A task with a channel surface — a non-empty
-// task.ChannelID (the home channel) or any tracked card post (cardChannelIDs)
-// — is treated as readable: its card is already visible in the channel, so
-// anyone who can see the card can see the task details. This deliberately does
-// NOT consult channel membership: GetChannelMember can flap on transient
-// failures (cache miss, slow load) and would surface as a spurious 403, the
-// same reason listTasks does not pre-gate. Only a personal task (no ChannelID
-// AND no card post) is restricted to creator + assignee.
-//
-// cardChannelIDs is the set of channel ids holding the task's card posts,
-// resolved by the caller (REST/command layer) from task_posts; it is the only
-// signal this package uses for channel surface, keeping the package free of
-// pluginapi (the caller does the post→channel resolution).
-//
-// TODO(perm): this read-path is intentionally fail-open for channel-surfaced
-// tasks because GetChannelMember flakes deterministically in our environment.
-// Revisit when we have a reliable membership signal (e.g. a cached/cluster-safe
-// membership API) to tighten view access without reintroducing spurious 403s.
-func CanUserViewTask(userID string, task *model.Task, cardChannelIDs []string, _ ChannelMembershipChecker) bool {
+// CanUserViewTask reports whether userID may view the task. Access is granted
+// to creator, assignee, or any member of task.ChannelID (via the checker).
+// One rule for every channel type (team O/P/G, DM D, self-DM).
+func CanUserViewTask(userID string, task *model.Task, checker ChannelMembershipChecker) bool {
 	if userID == "" || task == nil {
 		return false
 	}
-	if userID == task.CreatorID || userID == task.AssigneeID {
+	if IsCreator(userID, task) || IsAssignee(userID, task) {
 		return true
 	}
-	// A task with a channel surface is readable (its card is already public in
-	// the channel). Only a personal task with no channel and no card is private.
-	if task.ChannelID != "" {
-		return true
-	}
-	for _, cid := range cardChannelIDs {
-		if cid != "" {
-			return true
-		}
+	if task.ChannelID != "" && checker != nil {
+		return checker.IsChannelMember(userID, task.ChannelID)
 	}
 	return false
 }
@@ -91,12 +73,12 @@ func CanUserViewTask(userID string, task *model.Task, cardChannelIDs []string, _
 // CanUserListTask reports whether userID may list/read a task and its subtasks,
 // comments, and events. It follows the view rule: anyone who can view the task
 // may read its details.
-func CanUserListTask(userID string, task *model.Task, cardChannelIDs []string, channels ChannelMembershipChecker) bool {
-	return CanUserViewTask(userID, task, cardChannelIDs, channels)
+func CanUserListTask(userID string, task *model.Task, checker ChannelMembershipChecker) bool {
+	return CanUserViewTask(userID, task, checker)
 }
 
 // CanUserCommentTask reports whether userID may comment on the task. Commenting
 // follows the view rule: anyone who can view the task may comment on it.
-func CanUserCommentTask(userID string, task *model.Task, cardChannelIDs []string, channels ChannelMembershipChecker) bool {
-	return CanUserViewTask(userID, task, cardChannelIDs, channels)
+func CanUserCommentTask(userID string, task *model.Task, checker ChannelMembershipChecker) bool {
+	return CanUserViewTask(userID, task, checker)
 }

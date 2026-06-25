@@ -330,7 +330,7 @@ func (p *Plugin) getTask(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserViewTask(currentUserID(r), t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+	if !permission.CanUserViewTask(currentUserID(r), t, p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
 		return
 	}
@@ -747,7 +747,7 @@ func (p *Plugin) listSubtasks(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserListTask(currentUserID(r), parent, p.cardChannelIDs(parent.ID), p.channelMembership()) {
+	if !permission.CanUserListTask(currentUserID(r), parent, p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
 		return
 	}
@@ -782,7 +782,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserCommentTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to comment on this task")
 		return
 	}
@@ -934,7 +934,7 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserCommentTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task's comments")
 		return
 	}
@@ -1011,7 +1011,7 @@ func (p *Plugin) listTaskEvents(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !permission.CanUserCommentTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+	if !permission.CanUserCommentTask(actorID, t, p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task's events")
 		return
 	}
@@ -1076,7 +1076,7 @@ func (p *Plugin) shareTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Viewer check: only those who can view the task may share it.
-	if !permission.CanUserViewTask(actorID, t, p.cardChannelIDs(t.ID), p.channelMembership()) {
+	if !permission.CanUserViewTask(actorID, t, p.channelMembership()) {
 		p.writeError(w, http.StatusForbidden, "you do not have permission to view this task")
 		return
 	}

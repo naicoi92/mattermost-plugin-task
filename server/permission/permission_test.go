@@ -8,9 +8,9 @@ import (
 	"github.com/naicoi92/mattermost-plugin-task/server/model"
 )
 
-// fakeMembershipChecker is a ChannelMembershipChecker backed by a single
-// allowlist of channel members (view/comment/list rule). There is no separate
-// admin concept in the task permission model anymore.
+// fakeMembershipChecker is a ChannelMembershipChecker backed by an allowlist of
+// channel members. There is no separate admin concept in the task permission
+// model — channel admins are treated like ordinary channel members.
 type fakeMembershipChecker struct {
 	members map[string]bool // "userID:channelID" -> member
 }
@@ -27,13 +27,32 @@ func taskFixture(creator, assignee, channel string) *model.Task {
 	}
 }
 
-// Matrix-driven coverage of the three actors (creator, assignee, channel
-// member) against every action family. Channel admins are intentionally NOT a
-// distinct actor here — they are tested as ordinary channel members.
+// IsCreator / IsAssignee are the two ownership primitives composing the
+// co-owner concept. They are pure, defensive against nil task / empty user.
+func TestIsCreator(t *testing.T) {
+	task := taskFixture("creator1", "assignee1", "ch1")
+	assert.True(t, IsCreator("creator1", task))
+	assert.False(t, IsCreator("assignee1", task))
+	assert.False(t, IsCreator("", task), "empty user")
+	assert.False(t, IsCreator("creator1", nil), "nil task")
+}
+
+func TestIsAssignee(t *testing.T) {
+	task := taskFixture("creator1", "assignee1", "ch1")
+	assert.True(t, IsAssignee("assignee1", task))
+	assert.False(t, IsAssignee("creator1", task))
+	assert.False(t, IsAssignee("", task), "empty user")
+	assert.False(t, IsAssignee("assignee1", nil), "nil task")
+}
+
+// Matrix-driven coverage of the three primitives (IsCreator, IsAssignee,
+// IsChannelMember) against every action family for a channel-scoped task.
+// Channel admins are NOT a distinct actor — they are tested as ordinary
+// channel members.
 //
-// View: a channel-surfaced task is readable by ANYONE (its card is already
-// public in the channel); view does NOT gate on channel membership. Only a
-// personal task restricts view to creator + assignee.
+// View/list/comment: granted to creator, assignee, OR a channel member (via
+// the checker). Manage/delete: co-owner (creator+assignee) only, with delete
+// restricted to the creator.
 func TestPermissionMatrix_ChannelTask(t *testing.T) {
 	// Channel-scoped task; "member" is a plain member of the home channel.
 	ch := fakeMembershipChecker{members: map[string]bool{"member:ch1": true}}
@@ -44,21 +63,21 @@ func TestPermissionMatrix_ChannelTask(t *testing.T) {
 		allow bool
 		check func(userID string) bool
 	}{
-		{"creator view", true, func(u string) bool { return CanUserViewTask(u, task, nil, ch) }},
-		{"creator list", true, func(u string) bool { return CanUserListTask(u, task, nil, ch) }},
-		{"creator comment", true, func(u string) bool { return CanUserCommentTask(u, task, nil, ch) }},
+		{"creator view", true, func(u string) bool { return CanUserViewTask(u, task, ch) }},
+		{"creator list", true, func(u string) bool { return CanUserListTask(u, task, ch) }},
+		{"creator comment", true, func(u string) bool { return CanUserCommentTask(u, task, ch) }},
 		{"creator manage", true, func(u string) bool { return CanUserManageTask(u, task) }},
 		{"creator delete", true, func(u string) bool { return CanUserDeleteTask(u, task) }},
 
-		{"assignee view", true, func(u string) bool { return CanUserViewTask(u, task, nil, ch) }},
-		{"assignee list", true, func(u string) bool { return CanUserListTask(u, task, nil, ch) }},
-		{"assignee comment", true, func(u string) bool { return CanUserCommentTask(u, task, nil, ch) }},
+		{"assignee view", true, func(u string) bool { return CanUserViewTask(u, task, ch) }},
+		{"assignee list", true, func(u string) bool { return CanUserListTask(u, task, ch) }},
+		{"assignee comment", true, func(u string) bool { return CanUserCommentTask(u, task, ch) }},
 		{"assignee manage", true, func(u string) bool { return CanUserManageTask(u, task) }},
 		{"assignee delete", false, func(u string) bool { return CanUserDeleteTask(u, task) }},
 
-		{"channel member view", true, func(u string) bool { return CanUserViewTask(u, task, nil, ch) }},
-		{"channel member list", true, func(u string) bool { return CanUserListTask(u, task, nil, ch) }},
-		{"channel member comment", true, func(u string) bool { return CanUserCommentTask(u, task, nil, ch) }},
+		{"channel member view", true, func(u string) bool { return CanUserViewTask(u, task, ch) }},
+		{"channel member list", true, func(u string) bool { return CanUserListTask(u, task, ch) }},
+		{"channel member comment", true, func(u string) bool { return CanUserCommentTask(u, task, ch) }},
 		{"channel member manage", false, func(u string) bool { return CanUserManageTask(u, task) }},
 		{"channel member delete", false, func(u string) bool { return CanUserDeleteTask(u, task) }},
 	}
@@ -68,7 +87,6 @@ func TestPermissionMatrix_ChannelTask(t *testing.T) {
 		"channel member": "member",
 	}
 	for _, c := range matrix {
-		// Resolve the actor id by matching the matrix row name prefix.
 		userID := actorIDFor(c.name, actors)
 		t.Run(c.name, func(t *testing.T) {
 			assert.Equal(t, c.allow, c.check(userID))
@@ -94,34 +112,24 @@ func TestPermissionMatrix_ChannelAdminTreatedAsMember(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{"admin:ch1": true}}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
-	assert.True(t, CanUserViewTask("admin", task, nil, ch), "admin views like a member")
-	assert.True(t, CanUserCommentTask("admin", task, nil, ch), "admin comments like a member")
+	assert.True(t, CanUserViewTask("admin", task, ch), "admin views like a member")
+	assert.True(t, CanUserCommentTask("admin", task, ch), "admin comments like a member")
 	assert.False(t, CanUserManageTask("admin", task), "admin cannot manage (no admin power)")
 	assert.False(t, CanUserDeleteTask("admin", task), "admin cannot delete (creator-only)")
 }
 
-func TestPermissionMatrix_OutsiderCanReadChannelTask(t *testing.T) {
-	// Channel tasks are readable by anyone (card is public); an outsider is
-	// only denied on a PERSONAL task. Manage/delete stay denied for everyone
-	// but the co-owners.
+// Outsider (not a member of task.ChannelID per the checker) is denied view on
+// a channel-scoped task. The checker is the single source of truth for
+// channel-level access.
+func TestPermissionMatrix_OutsiderDeniedChannelTask(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{}}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
-	assert.True(t, CanUserViewTask("outsider", task, nil, ch), "channel task readable by anyone")
-	assert.True(t, CanUserListTask("outsider", task, nil, ch))
-	assert.True(t, CanUserCommentTask("outsider", task, nil, ch))
+	assert.False(t, CanUserViewTask("outsider", task, ch), "outsider denied view")
+	assert.False(t, CanUserListTask("outsider", task, ch))
+	assert.False(t, CanUserCommentTask("outsider", task, ch))
 	assert.False(t, CanUserManageTask("outsider", task))
 	assert.False(t, CanUserDeleteTask("outsider", task))
-}
-
-func TestPermissionMatrix_OutsiderDeniedPersonalTask(t *testing.T) {
-	// Personal task (no channel surface) is private to creator + assignee.
-	ch := fakeMembershipChecker{members: map[string]bool{}}
-	personal := taskFixture("creator1", "assignee1", "")
-
-	assert.False(t, CanUserViewTask("outsider", personal, nil, ch), "personal task hidden from outsiders")
-	assert.False(t, CanUserListTask("outsider", personal, nil, ch))
-	assert.False(t, CanUserCommentTask("outsider", personal, nil, ch))
 }
 
 func TestCanUserManageTask_Unassigned(t *testing.T) {
@@ -150,95 +158,47 @@ func TestCanUserDeleteTask_Guards(t *testing.T) {
 	assert.False(t, CanUserDeleteTask("creator1", nil), "nil task is not deletable")
 }
 
-func TestCanUserViewTask(t *testing.T) {
+func TestCanUserViewTask_ChannelMemberAllowed(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{"member1:ch1": true}}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
-	assert.True(t, CanUserViewTask("creator1", task, nil, ch), "creator can view")
-	assert.True(t, CanUserViewTask("assignee1", task, nil, ch), "assignee can view")
-	// Channel task is readable by anyone (its card is already public in the
-	// channel) — view does not gate on channel membership.
-	assert.True(t, CanUserViewTask("member1", task, nil, ch), "channel task readable without membership gate")
-	assert.True(t, CanUserViewTask("outsider", task, nil, ch), "channel task readable by anyone")
+	assert.True(t, CanUserViewTask("creator1", task, ch), "creator can view")
+	assert.True(t, CanUserViewTask("assignee1", task, ch), "assignee can view")
+	assert.True(t, CanUserViewTask("member1", task, ch), "channel member can view")
+	assert.False(t, CanUserViewTask("outsider", task, ch), "outsider denied")
 }
 
-func TestCanUserViewTask_PersonalTask(t *testing.T) {
-	ch := fakeMembershipChecker{members: map[string]bool{"member1:": true}}
+// Task with no ChannelID (personal, only transiently after migration) and no
+// checker-based channel access: only creator + assignee may view. This is the
+// defense for any lingering personal task.
+func TestCanUserViewTask_NoChannelRestricted(t *testing.T) {
+	ch := fakeMembershipChecker{members: map[string]bool{}}
 	personal := taskFixture("creator1", "assignee1", "")
 
-	assert.True(t, CanUserViewTask("creator1", personal, nil, ch), "creator can view personal")
-	assert.True(t, CanUserViewTask("assignee1", personal, nil, ch), "assignee can view personal")
-	assert.False(t, CanUserViewTask("member1", personal, nil, ch), "personal task hidden from others")
+	assert.True(t, CanUserViewTask("creator1", personal, ch), "creator can view")
+	assert.True(t, CanUserViewTask("assignee1", personal, ch), "assignee can view")
+	assert.False(t, CanUserViewTask("outsider", personal, ch), "no channel => outsider denied")
 }
 
 func TestCanUserCommentTask_FollowsView(t *testing.T) {
 	ch := fakeMembershipChecker{members: map[string]bool{"member1:ch1": true}}
 	task := taskFixture("creator1", "assignee1", "ch1")
 
-	// Channel task: anyone (member or outsider) may comment — the card is
-	// public, so comment access follows view.
-	assert.True(t, CanUserCommentTask("member1", task, nil, ch), "channel task commentable by anyone")
-	assert.True(t, CanUserCommentTask("outsider", task, nil, ch), "channel task commentable by anyone")
+	assert.True(t, CanUserCommentTask("member1", task, ch), "channel member can comment")
+	assert.False(t, CanUserCommentTask("outsider", task, ch), "outsider denied comment")
 
-	// Personal task: only creator/assignee may comment.
+	// No-channel task: only creator/assignee may comment.
 	personal := taskFixture("creator1", "assignee1", "")
-	assert.False(t, CanUserCommentTask("outsider", personal, nil, ch), "personal task hidden from outsiders")
-}
-
-// A shared task's card lives in a channel OTHER than task.ChannelID. A member
-// of that shared channel (who is NOT a member of task.ChannelID) must still be
-// able to view AND comment — consistent with "they can read the card thread,
-// they can reply". The rule checks IsChannelMember against the union of
-// task.ChannelID + the card-channel ids passed by the caller (resolved from
-// task_posts).
-func TestCanUserViewTask_SharedChannelMemberAllowed(t *testing.T) {
-	ch := fakeMembershipChecker{members: map[string]bool{
-		"sharer:ch-shared":    true,
-		"member-home:ch-home": true,
-	}}
-	task := taskFixture("creator1", "assignee1", "ch-home")
-	cardChannels := []string{"ch-shared"}
-
-	assert.True(t, CanUserViewTask("sharer", task, cardChannels, ch),
-		"member of a shared card channel may view")
-	assert.True(t, CanUserViewTask("member-home", task, nil, ch),
-		"member of home channel still views via task.ChannelID")
-}
-
-func TestCanUserCommentTask_SharedChannelMemberAllowed(t *testing.T) {
-	ch := fakeMembershipChecker{members: map[string]bool{"sharer:ch-shared": true}}
-	task := taskFixture("creator1", "assignee1", "ch-home")
-	cardChannels := []string{"ch-shared"}
-
-	assert.True(t, CanUserCommentTask("sharer", task, cardChannels, ch),
-		"member of a shared card channel may comment")
-}
-
-// Non-member outsider (member of neither home nor any card channel) is still
-// denied — the card-channel expansion does not open the task to everyone.
-// A task whose card lives in a channel OTHER than task.ChannelID is also
-// readable (the card is public there too). The card-channel expansion means a
-// shared task is viewable by anyone who can see the shared card.
-func TestCanUserViewTask_CardChannelReadable(t *testing.T) {
-	ch := fakeMembershipChecker{members: map[string]bool{
-		"sharer:ch-shared": true,
-	}}
-	// Home channel set but no membership recorded for "outsider"; card in shared.
-	task := taskFixture("creator1", "assignee1", "ch-home")
-	cardChannels := []string{"ch-shared"}
-
-	assert.True(t, CanUserViewTask("outsider", task, cardChannels, ch),
-		"task with a card post is readable by anyone")
+	assert.False(t, CanUserCommentTask("outsider", personal, ch), "no channel => outsider denied")
 }
 
 func TestCanUserViewTask_NilChecker(t *testing.T) {
-	// A nil checker does not block channel tasks: view no longer depends on
-	// channel membership (GetChannelMember can flap). Only personal tasks need
-	// protection, and that is independent of the checker.
+	// A nil checker means channel membership cannot be evaluated, so a channel
+	// task is only visible to creator/assignee. Personal task is still private.
 	task := taskFixture("creator1", "assignee1", "ch1")
-	assert.True(t, CanUserViewTask("creator1", task, nil, nil), "creator unaffected by nil checker")
-	assert.True(t, CanUserViewTask("outsider", task, nil, nil), "channel task readable even with nil checker")
+	assert.True(t, CanUserViewTask("creator1", task, nil), "creator unaffected by nil checker")
+	assert.False(t, CanUserViewTask("outsider", task, nil), "channel task private when checker nil")
 
 	personal := taskFixture("creator1", "assignee1", "")
-	assert.False(t, CanUserViewTask("outsider", personal, nil, nil), "personal task protected regardless of checker")
+	assert.False(t, CanUserViewTask("outsider", personal, nil), "personal task protected regardless of checker")
 }
