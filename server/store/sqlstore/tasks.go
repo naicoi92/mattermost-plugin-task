@@ -476,35 +476,6 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 			return b, errors.New("list tasks: scope=channel requires ChannelID")
 		}
 		b = b.Where(sq.Eq{"t.channel_id": q.ChannelID})
-	case store.ScopeDirect:
-		// "DM" = tasks shared between exactly two users: every task on which
-		// BOTH UserID AND PartnerID hold the assignee or creator role. The
-		// mutual-membership requirement is what makes this a DM scope: a caller
-		// can't enumerate a third user's tasks by guessing partner_id — only
-		// tasks the caller is themselves a member of are returned.
-		//
-		// Implemented as two EXISTS subqueries (one per user) rather than a
-		// single `user_id IN (me, partner)` union predicate, because the union
-		// form would match tasks where only ONE of the two users is a member
-		// (leaking the partner's tasks to an unrelated caller). Both EXISTS
-		// subqueries use the members_user_idx (user_id, role) index.
-		if q.UserID == "" || q.PartnerID == "" {
-			return b, errors.New("list tasks: scope=direct requires UserID and PartnerID")
-		}
-		membersTable := s.tableName(membersTableShort)
-		roles := "('assignee','creator')"
-		b = b.Where(sq.And{
-			sq.Expr(
-				"EXISTS (SELECT 1 FROM "+membersTable+
-					" AS mm WHERE mm.task_id = t.id AND mm.user_id = ? AND mm.role IN "+roles+")",
-				q.UserID,
-			),
-			sq.Expr(
-				"EXISTS (SELECT 1 FROM "+membersTable+
-					" AS mp WHERE mp.task_id = t.id AND mp.user_id = ? AND mp.role IN "+roles+")",
-				q.PartnerID,
-			),
-		})
 	default:
 		return b, fmt.Errorf("list tasks: unknown scope %q", q.Scope)
 	}

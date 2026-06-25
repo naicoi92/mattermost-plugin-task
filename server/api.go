@@ -230,7 +230,6 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 
 	scope := task.Scope(q.Get("scope"))
 	channelID := q.Get("channel_id")
-	userID := currentUserID(r)
 
 	if scope != task.ScopeChannel {
 		p.writeError(w, http.StatusBadRequest, "scope must be 'channel'")
@@ -239,7 +238,6 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 
 	query := task.ListQuery{
 		Scope:         scope,
-		UserID:        userID,
 		ChannelID:     channelID,
 		Status:        q.Get("status"),
 		DueAt:         q.Get("due"),

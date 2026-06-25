@@ -1127,24 +1127,20 @@ func snapshotTaskJSON(row *model.TaskRow) string {
 	return string(b)
 }
 
-// Scope enumerates the list result scopes. These mirror store.Scope so the
-// service layer keeps its own read-friendly names while delegating to the
-// store's enum. Two scopes are supported: channel (tasks of a channel) and
-// direct (tasks shared between two DM participants).
+// Scope enumerates the list result scopes. Under the all-channel model
+// only channel is supported: tasks are always listed by their home
+// channel id (team channel, DM, or self-DM).
 type Scope string
 
 const (
 	ScopeChannel Scope = Scope(store.ScopeChannel)
-	ScopeDirect  Scope = Scope(store.ScopeDirect)
 )
 
 // ListQuery is the filtered/paginated list request. It mirrors store.ListQuery;
 // the service maps its loose Due string to a store.DueFilter.
 type ListQuery struct {
 	Scope         Scope
-	UserID        string // required for ScopeDirect (one of the two DM users)
 	ChannelID     string // required for ScopeChannel
-	PartnerID     string // required for ScopeDirect (the other DM user)
 	Status        string // optional: "", todo, in_progress, done, cancelled
 	Priority      string // optional: "", standard, important, urgent
 	DueAt         string // optional: "", overdue, today, week
@@ -1168,9 +1164,7 @@ func (s *Service) List(q ListQuery) ([]*model.Task, error) {
 
 	page, err := s.store.ListTasks(ctx, store.ListQuery{
 		Scope:         store.Scope(q.Scope),
-		UserID:        q.UserID,
 		ChannelID:     q.ChannelID,
-		PartnerID:     q.PartnerID,
 		Status:        q.Status,
 		Priority:      q.Priority,
 		Due:           mapDueFilter(q.DueAt),
