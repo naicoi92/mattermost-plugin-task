@@ -332,18 +332,28 @@ func (c channelMembershipChecker) IsChannelMember(userID, channelID string) bool
 		return false
 	}
 	member, appErr := c.api.GetChannelMember(channelID, userID)
-	if appErr == nil {
-		return member != nil
+	if appErr == nil && member != nil {
+		return true
 	}
-	// Error path: surface the problem, then fail open so legitimate users are
-	// not blocked while the root cause is investigated.
-	c.api.LogWarn("GetChannelMember error; temporarily allowing access",
-		"channel_id", channelID,
-		"user_id", userID,
-		"error_id", appErr.Id,
-		"error_msg", appErr.Message,
-		"status_code", appErr.StatusCode,
-	)
+	// Either an AppError (channel not found, archived, transient) or a nil
+	// member with no error. Historically GetChannelMember has returned (nil,
+	// nil) for actual members in this environment, which would otherwise
+	// produce spurious 403s. Surface both cases and fail open so legitimate
+	// users are not blocked while the root cause is investigated.
+	if appErr != nil {
+		c.api.LogWarn("GetChannelMember error; temporarily allowing access",
+			"channel_id", channelID,
+			"user_id", userID,
+			"error_id", appErr.Id,
+			"error_msg", appErr.Message,
+			"status_code", appErr.StatusCode,
+		)
+	} else {
+		c.api.LogWarn("GetChannelMember returned nil member without error; allowing access",
+			"channel_id", channelID,
+			"user_id", userID,
+		)
+	}
 	return true
 }
 

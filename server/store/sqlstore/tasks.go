@@ -449,6 +449,7 @@ func (s *SQLStore) ListTasksWithCardPost(ctx context.Context, limit int) ([]mode
 	defer func() { _ = rows.Close() }()
 	return scanTaskRows(rows)
 }
+
 // project; both ListTasks and CountTasksByStatus use it so the WHERE stays
 // identical.
 //
