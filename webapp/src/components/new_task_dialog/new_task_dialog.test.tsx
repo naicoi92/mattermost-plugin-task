@@ -5,169 +5,169 @@
 // parseDueLocal and the validation/submission contract via the exported
 // component's behavior, without a full host Redux/intl provider harness.
 
-import { ClientError } from "client";
+import { ClientError } from 'client';
 
 import {
-	assigneeLookupError,
-	buildCreateInput,
-	deriveNewTaskContext,
-	messageFor,
-	normalizeAssigneeUsername,
-	parseDueLocal,
-} from "components/new_task_dialog/new_task_dialog";
+    assigneeLookupError,
+    buildCreateInput,
+    deriveNewTaskContext,
+    messageFor,
+    normalizeAssigneeUsername,
+    parseDueLocal,
+} from 'components/new_task_dialog/new_task_dialog';
 
-describe("deriveNewTaskContext", () => {
-	test("a public/group channel yields a channel task with no assignee hint", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "ch1", type: "O", name: "town-square" },
-			"me",
-		);
-		expect(ctx.channelId).toBe("ch1");
-		expect(ctx.suggestedAssigneeID).toBe("");
-	});
+describe('deriveNewTaskContext', () => {
+    test('a public/group channel yields a channel task with no assignee hint', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'ch1', type: 'O', name: 'town-square' },
+            'me',
+        );
+        expect(ctx.channelId).toBe('ch1');
+        expect(ctx.suggestedAssigneeID).toBe('');
+    });
 
-	test("a private channel also yields a channel task", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "ch2", type: "P", name: "secret" },
-			"me",
-		);
-		expect(ctx.channelId).toBe("ch2");
-		expect(ctx.suggestedAssigneeID).toBe("");
-	});
+    test('a private channel also yields a channel task', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'ch2', type: 'P', name: 'secret' },
+            'me',
+        );
+        expect(ctx.channelId).toBe('ch2');
+        expect(ctx.suggestedAssigneeID).toBe('');
+    });
 
-	test("a DM with a partner yields a channel task bound to the DM with the partner as assignee", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "dm1", type: "D", name: "me__partner" },
-			"me",
-		);
-		expect(ctx.channelId).toBe("dm1");
-		expect(ctx.suggestedAssigneeID).toBe("partner");
-		expect(ctx.canPickAssignee).toBe(false);
-	});
+    test('a DM with a partner yields a channel task bound to the DM with the partner as assignee', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'dm1', type: 'D', name: 'me__partner' },
+            'me',
+        );
+        expect(ctx.channelId).toBe('dm1');
+        expect(ctx.suggestedAssigneeID).toBe('partner');
+        expect(ctx.canPickAssignee).toBe(false);
+    });
 
-	test("a DM with the partner id order reversed still picks the non-me user", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "dm1", type: "D", name: "partner__me" },
-			"me",
-		);
-		expect(ctx.channelId).toBe("dm1");
-		expect(ctx.suggestedAssigneeID).toBe("partner");
-		expect(ctx.canPickAssignee).toBe(false);
-	});
+    test('a DM with the partner id order reversed still picks the non-me user', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'dm1', type: 'D', name: 'partner__me' },
+            'me',
+        );
+        expect(ctx.channelId).toBe('dm1');
+        expect(ctx.suggestedAssigneeID).toBe('partner');
+        expect(ctx.canPickAssignee).toBe(false);
+    });
 
-	test("a DM with myself (nota) yields a channel task bound to the self-DM, assigned to me", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "dm-self", type: "D", name: "me__me" },
-			"me",
-		);
-		expect(ctx.channelId).toBe("dm-self");
-		expect(ctx.suggestedAssigneeID).toBe("me");
-		expect(ctx.canPickAssignee).toBe(false);
-	});
+    test('a DM with myself (nota) yields a channel task bound to the self-DM, assigned to me', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'dm-self', type: 'D', name: 'me__me' },
+            'me',
+        );
+        expect(ctx.channelId).toBe('dm-self');
+        expect(ctx.suggestedAssigneeID).toBe('me');
+        expect(ctx.canPickAssignee).toBe(false);
+    });
 
-	test("no channel context yields an empty channelId and assignee = me", () => {
-		expect(deriveNewTaskContext(null, "me")).toEqual({
-			channelId: "",
-			suggestedAssigneeID: "me",
-			canPickAssignee: true,
-		});
-		expect(deriveNewTaskContext(undefined, "me")).toEqual({
-			channelId: "",
-			suggestedAssigneeID: "me",
-			canPickAssignee: true,
-		});
-		expect(deriveNewTaskContext({ id: "", type: "O" }, "me")).toEqual({
-			channelId: "",
-			suggestedAssigneeID: "me",
-			canPickAssignee: true,
-		});
-	});
+    test('no channel context yields an empty channelId and assignee = me', () => {
+        expect(deriveNewTaskContext(null, 'me')).toEqual({
+            channelId: '',
+            suggestedAssigneeID: 'me',
+            canPickAssignee: true,
+        });
+        expect(deriveNewTaskContext(undefined, 'me')).toEqual({
+            channelId: '',
+            suggestedAssigneeID: 'me',
+            canPickAssignee: true,
+        });
+        expect(deriveNewTaskContext({ id: '', type: 'O' }, 'me')).toEqual({
+            channelId: '',
+            suggestedAssigneeID: 'me',
+            canPickAssignee: true,
+        });
+    });
 
-	test("a group channel (type G) is treated as a channel task", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "g1", type: "G", name: "group" },
-			"me",
-		);
-		expect(ctx.channelId).toBe("g1");
-	});
+    test('a group channel (type G) is treated as a channel task', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'g1', type: 'G', name: 'group' },
+            'me',
+        );
+        expect(ctx.channelId).toBe('g1');
+    });
 
-	test("a DM whose name fails to parse still binds to the DM channel with assignee = me", () => {
-		const ctx = deriveNewTaskContext({ id: "dm2", type: "D", name: "" }, "me");
-		expect(ctx.channelId).toBe("dm2");
-		expect(ctx.suggestedAssigneeID).toBe("me");
-		expect(ctx.canPickAssignee).toBe(false);
-	});
+    test('a DM whose name fails to parse still binds to the DM channel with assignee = me', () => {
+        const ctx = deriveNewTaskContext({ id: 'dm2', type: 'D', name: '' }, 'me');
+        expect(ctx.channelId).toBe('dm2');
+        expect(ctx.suggestedAssigneeID).toBe('me');
+        expect(ctx.canPickAssignee).toBe(false);
+    });
 });
 
-describe("parseDueLocal", () => {
-	test("returns null for an empty string", () => {
-		expect(parseDueLocal("")).toBeNull();
-		expect(parseDueLocal("   ")).toBeNull();
-	});
+describe('parseDueLocal', () => {
+    test('returns null for an empty string', () => {
+        expect(parseDueLocal('')).toBeNull();
+        expect(parseDueLocal('   ')).toBeNull();
+    });
 
-	test("returns epoch ms for a valid datetime-local string", () => {
-		const ms = parseDueLocal("2026-06-19T12:00");
-		expect(ms).not.toBeNull();
-		expect(typeof ms).toBe("number");
+    test('returns epoch ms for a valid datetime-local string', () => {
+        const ms = parseDueLocal('2026-06-19T12:00');
+        expect(ms).not.toBeNull();
+        expect(typeof ms).toBe('number');
 
-		// The local interpretation means the exact ms varies by timezone, but
-		// it must resolve to the right calendar day somewhere on 2026-06-19.
-		const d = new Date(ms as number);
-		expect(d.getUTCFullYear()).toBeGreaterThanOrEqual(2026);
-	});
+        // The local interpretation means the exact ms varies by timezone, but
+        // it must resolve to the right calendar day somewhere on 2026-06-19.
+        const d = new Date(ms as number);
+        expect(d.getUTCFullYear()).toBeGreaterThanOrEqual(2026);
+    });
 
-	test("returns null for a malformed value", () => {
-		expect(parseDueLocal("not-a-date")).toBeNull();
-	});
+    test('returns null for a malformed value', () => {
+        expect(parseDueLocal('not-a-date')).toBeNull();
+    });
 
-	test("is monotonic: a later input yields a larger ms", () => {
-		const earlier = parseDueLocal("2026-06-19T09:00") as number;
-		const later = parseDueLocal("2026-06-19T17:00") as number;
-		expect(later).toBeGreaterThan(earlier);
-	});
+    test('is monotonic: a later input yields a larger ms', () => {
+        const earlier = parseDueLocal('2026-06-19T09:00') as number;
+        const later = parseDueLocal('2026-06-19T17:00') as number;
+        expect(later).toBeGreaterThan(earlier);
+    });
 });
 
-describe("ClientError handling in the dialog path", () => {
-	// Tests the production messageFor directly (exported) rather than a copy.
-	test("a ClientError surfaces its server message", () => {
-		expect(messageFor(new ClientError(400, "summary required"))).toBe(
-			"summary required",
-		);
-	});
+describe('ClientError handling in the dialog path', () => {
+    // Tests the production messageFor directly (exported) rather than a copy.
+    test('a ClientError surfaces its server message', () => {
+        expect(messageFor(new ClientError(400, 'summary required'))).toBe(
+            'summary required',
+        );
+    });
 
-	test("a ClientError with empty message falls back", () => {
-		expect(messageFor(new ClientError(500, ""))).toBe("request failed");
-	});
+    test('a ClientError with empty message falls back', () => {
+        expect(messageFor(new ClientError(500, ''))).toBe('request failed');
+    });
 
-	test("a generic Error surfaces its message", () => {
-		expect(messageFor(new Error("offline"))).toBe("offline");
-	});
+    test('a generic Error surfaces its message', () => {
+        expect(messageFor(new Error('offline'))).toBe('offline');
+    });
 
-	test("a non-Error value falls back", () => {
-		expect(messageFor(null)).toBe("request failed");
-	});
+    test('a non-Error value falls back', () => {
+        expect(messageFor(null)).toBe('request failed');
+    });
 });
 
-describe("normalizeAssigneeUsername (#96)", () => {
-	test("strips a single leading @", () => {
-		expect(normalizeAssigneeUsername("@bob")).toBe("bob");
-	});
+describe('normalizeAssigneeUsername (#96)', () => {
+    test('strips a single leading @', () => {
+        expect(normalizeAssigneeUsername('@bob')).toBe('bob');
+    });
 
-	test("leaves a bare username untouched", () => {
-		expect(normalizeAssigneeUsername("bob")).toBe("bob");
-	});
+    test('leaves a bare username untouched', () => {
+        expect(normalizeAssigneeUsername('bob')).toBe('bob');
+    });
 
-	test("only strips the first @ so emails stay intact", () => {
-		expect(normalizeAssigneeUsername("bob@company")).toBe("bob@company");
-	});
+    test('only strips the first @ so emails stay intact', () => {
+        expect(normalizeAssigneeUsername('bob@company')).toBe('bob@company');
+    });
 
-	test("trims surrounding whitespace", () => {
-		expect(normalizeAssigneeUsername("  @bob  ")).toBe("bob");
-	});
+    test('trims surrounding whitespace', () => {
+        expect(normalizeAssigneeUsername('  @bob  ')).toBe('bob');
+    });
 
-	test("returns empty for a whitespace-only value", () => {
-		expect(normalizeAssigneeUsername("   ")).toBe("");
-	});
+    test('returns empty for a whitespace-only value', () => {
+        expect(normalizeAssigneeUsername('   ')).toBe('');
+    });
 });
 
 // Locks in the submit-path UX contract for an unknown assignee username
@@ -175,104 +175,104 @@ describe("normalizeAssigneeUsername (#96)", () => {
 // message (not the raw server text), while any other error surfaces its raw
 // message. Extracted into assigneeLookupError so it's testable without a
 // Redux/Intl provider harness.
-describe("assigneeLookupError (#96)", () => {
-	const localized = "User not found. Enter a valid @username.";
+describe('assigneeLookupError (#96)', () => {
+    const localized = 'User not found. Enter a valid @username.';
 
-	test("a 404 (unknown username) returns the localized not-found message", () => {
-		const err = new ClientError(404, "user not found");
-		expect(assigneeLookupError(err, () => localized)).toBe(localized);
-	});
+    test('a 404 (unknown username) returns the localized not-found message', () => {
+        const err = new ClientError(404, 'user not found');
+        expect(assigneeLookupError(err, () => localized)).toBe(localized);
+    });
 
-	test("a 404 does NOT surface the raw server text", () => {
-		const err = new ClientError(404, "resource not found");
-		expect(assigneeLookupError(err, () => localized)).not.toContain("resource");
-	});
+    test('a 404 does NOT surface the raw server text', () => {
+        const err = new ClientError(404, 'resource not found');
+        expect(assigneeLookupError(err, () => localized)).not.toContain('resource');
+    });
 
-	test("a non-404 ClientError surfaces its raw message", () => {
-		const err = new ClientError(500, "server exploded");
-		expect(assigneeLookupError(err, () => localized)).toBe("server exploded");
-	});
+    test('a non-404 ClientError surfaces its raw message', () => {
+        const err = new ClientError(500, 'server exploded');
+        expect(assigneeLookupError(err, () => localized)).toBe('server exploded');
+    });
 
-	test("a generic Error surfaces its message", () => {
-		const err = new Error("network down");
-		expect(assigneeLookupError(err, () => localized)).toBe("network down");
-	});
+    test('a generic Error surfaces its message', () => {
+        const err = new Error('network down');
+        expect(assigneeLookupError(err, () => localized)).toBe('network down');
+    });
 
-	test("a non-Error value falls back to the generic message", () => {
-		expect(assigneeLookupError(null, () => localized)).toBe("request failed");
-	});
+    test('a non-Error value falls back to the generic message', () => {
+        expect(assigneeLookupError(null, () => localized)).toBe('request failed');
+    });
 
-	test("notFoundText is only evaluated on the 404 path", () => {
-		// A non-404 error must not trigger the i18n lookup at all.
-		let called = false;
-		const err = new ClientError(500, "oops");
-		const result = assigneeLookupError(err, () => {
-			called = true;
-			return localized;
-		});
-		expect(called).toBe(false);
-		expect(result).toBe("oops");
-	});
+    test('notFoundText is only evaluated on the 404 path', () => {
+        // A non-404 error must not trigger the i18n lookup at all.
+        let called = false;
+        const err = new ClientError(500, 'oops');
+        const result = assigneeLookupError(err, () => {
+            called = true;
+            return localized;
+        });
+        expect(called).toBe(false);
+        expect(result).toBe('oops');
+    });
 });
 
 // buildCreateInput assembles the POST /tasks body. The post_channel_id contract
-// is the fix for "New Task sometimes posts a card, sometimes not": a DM task
+// is the fix for 'New Task sometimes posts a card, sometimes not': a DM task
 // (personal scope, empty channel_id) must still announce its card into the
 // originating DM via post_channel_id, without changing scope.
-describe("buildCreateInput (all-channel contract)", () => {
-	const baseForm = {
-		summary: "Buy milk",
-		description: "2L",
-		priority: "standard" as const,
-		assigneeID: "",
-		dueLocal: "",
-	};
+describe('buildCreateInput (all-channel contract)', () => {
+    const baseForm = {
+        summary: 'Buy milk',
+        description: '2L',
+        priority: 'standard' as const,
+        assigneeID: '',
+        dueLocal: '',
+    };
 
-	test("a DM task sends the DM channel id as channel_id (no post_channel_id)", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "dm1", type: "D", name: "me__partner" },
-			"me",
-		);
-		const input = buildCreateInput(baseForm, ctx);
-		expect(input.channel_id).toBe("dm1");
-		expect(input.post_channel_id).toBeUndefined();
-		expect(input.assignee_id).toBe("partner");
-	});
+    test('a DM task sends the DM channel id as channel_id (no post_channel_id)', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'dm1', type: 'D', name: 'me__partner' },
+            'me',
+        );
+        const input = buildCreateInput(baseForm, ctx);
+        expect(input.channel_id).toBe('dm1');
+        expect(input.post_channel_id).toBeUndefined();
+        expect(input.assignee_id).toBe('partner');
+    });
 
-	test("a channel task sends channel_id only (no post_channel_id)", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "ch1", type: "O", name: "town-square" },
-			"me",
-		);
-		const input = buildCreateInput(baseForm, ctx);
-		expect(input.channel_id).toBe("ch1");
-		expect(input.post_channel_id).toBeUndefined();
-	});
+    test('a channel task sends channel_id only (no post_channel_id)', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'ch1', type: 'O', name: 'town-square' },
+            'me',
+        );
+        const input = buildCreateInput(baseForm, ctx);
+        expect(input.channel_id).toBe('ch1');
+        expect(input.post_channel_id).toBeUndefined();
+    });
 
-	test("no originating channel sends neither channel_id nor post_channel_id", () => {
-		const ctx = deriveNewTaskContext(null, "me");
-		const input = buildCreateInput(baseForm, ctx);
-		expect(input.channel_id).toBeUndefined();
-		expect(input.post_channel_id).toBeUndefined();
-	});
+    test('no originating channel sends neither channel_id nor post_channel_id', () => {
+        const ctx = deriveNewTaskContext(null, 'me');
+        const input = buildCreateInput(baseForm, ctx);
+        expect(input.channel_id).toBeUndefined();
+        expect(input.post_channel_id).toBeUndefined();
+    });
 
-	test("summary is trimmed", () => {
-		const ctx = deriveNewTaskContext({ id: "ch1", type: "O" }, "me");
-		const input = buildCreateInput({ ...baseForm, summary: "  spaced  " }, ctx);
-		expect(input.summary).toBe("spaced");
-	});
+    test('summary is trimmed', () => {
+        const ctx = deriveNewTaskContext({ id: 'ch1', type: 'O' }, 'me');
+        const input = buildCreateInput({ ...baseForm, summary: '  spaced  ' }, ctx);
+        expect(input.summary).toBe('spaced');
+    });
 
-	test("assignee and due are propagated", () => {
-		const ctx = deriveNewTaskContext(
-			{ id: "dm1", type: "D", name: "me__partner" },
-			"me",
-		);
-		const input = buildCreateInput(
-			{ ...baseForm, assigneeID: "bob", dueLocal: "2026-06-19T12:00" },
-			ctx,
-		);
-		expect(input.assignee_id).toBe("bob");
-		expect(input.due).not.toBeUndefined();
-		expect(typeof input.due).toBe("number");
-	});
+    test('assignee and due are propagated', () => {
+        const ctx = deriveNewTaskContext(
+            { id: 'dm1', type: 'D', name: 'me__partner' },
+            'me',
+        );
+        const input = buildCreateInput(
+            { ...baseForm, assigneeID: 'bob', dueLocal: '2026-06-19T12:00' },
+            ctx,
+        );
+        expect(input.assignee_id).toBe('bob');
+        expect(input.due).not.toBeUndefined();
+        expect(typeof input.due).toBe('number');
+    });
 });

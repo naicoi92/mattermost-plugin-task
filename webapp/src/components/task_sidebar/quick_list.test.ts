@@ -145,14 +145,14 @@ describe('countByTab', () => {
         expect(counts.in_progress.label).toBe('0');
     });
 
-    test('appends "+" when hasMore is true', () => {
+    test('appends '+' when hasMore is true', () => {
         const tasks: Task[] = [makeTask({id: '1', status: 'todo'})];
         const counts = countByTab(tasks, true);
         expect(counts.all.label).toBe('1+');
         expect(counts.all.plus).toBe(true);
     });
 
-    test('does not append "+" for zero-count tabs', () => {
+    test('does not append '+' for zero-count tabs', () => {
         const tasks: Task[] = [];
         const counts = countByTab(tasks, true);
         expect(counts.all.label).toBe('0');
