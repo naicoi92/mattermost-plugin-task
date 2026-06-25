@@ -72,8 +72,15 @@ export function applyMention(
     }
     const atIdx = detection.start;
     const tokenEnd = detection.tokenEnd;
-    const mention = `@${username} `;
-    const next = text.slice(0, atIdx) + mention + text.slice(tokenEnd);
+
+    // Only append a separating space when the text after the token does not
+    // already start with whitespace — otherwise "@bob <space>..." would become
+    // "@bob  <space>..." (double space). (CR re-review)
+    const suffix = text.slice(tokenEnd);
+    const startsWhitespace = (/\s/).test(suffix[0]);
+    const separator = suffix.length > 0 && startsWhitespace ? '' : ' ';
+    const mention = `@${username}${separator}`;
+    const next = text.slice(0, atIdx) + mention + suffix;
     const nextCaret = atIdx + mention.length;
     return {text: next, caret: nextCaret};
 }

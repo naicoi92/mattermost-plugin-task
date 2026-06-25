@@ -163,6 +163,20 @@ export default function TaskDetailPanel({
         setComments([]);
         setEvents([]);
         setError('');
+
+        // Reset draft composer/subtask state so a previous task's draft can't
+        // be submitted to the next one (CR re-review). Also cancel any pending
+        // mention debounce so a stale searchUsers result can't repopulate the
+        // dropdown for the new task.
+        setNewComment('');
+        setNewSubtask('');
+        setSubtaskAdding(false);
+        setMention({open: false, query: '', candidates: [], highlight: 0});
+        if (mentionTimer.current !== null) {
+            clearTimeout(mentionTimer.current);
+            mentionTimer.current = null;
+        }
+        mentionReqId.current++;
     }, [taskID]);
 
     useEffect(() => {
@@ -585,6 +599,17 @@ export default function TaskDetailPanel({
     // query@channel for the life of the panel.
     const fetchMentionCandidates = (query: string) => {
         const cacheKey = `${query}@${mentionChannelID}`;
+
+        // Invalidate any prior scheduled/in-flight lookup FIRST, before the cache
+        // fast-path. Otherwise a cached-query sequence like cached "@a" -> type
+        // "@ab" -> backspace to cached "@a" would leave the in-flight "ab"
+        // request alive to overwrite the restored "a" candidates (CR re-review).
+        if (mentionTimer.current !== null) {
+            clearTimeout(mentionTimer.current);
+            mentionTimer.current = null;
+        }
+        const myReq = ++mentionReqId.current;
+
         const mergeParticipants = (
             list: UserSearchResult[],
             query: string,
@@ -597,7 +622,8 @@ export default function TaskDetailPanel({
             const seed: UserSearchResult[] = [];
             if (assigneeUser?.username && assigneeUser.id) {
                 const q = query.trim().toLowerCase();
-                const matches = q === '' || assigneeUser.username.toLowerCase().includes(q);
+                const matches =
+					q === '' || assigneeUser.username.toLowerCase().includes(q);
                 if (matches) {
                     seed.push({
                         id: assigneeUser.id,
@@ -645,10 +671,6 @@ export default function TaskDetailPanel({
         // Show the seed (participants) immediately while the fetch runs.
         apply([]);
 
-        if (mentionTimer.current !== null) {
-            clearTimeout(mentionTimer.current);
-        }
-        const myReq = ++mentionReqId.current;
         mentionTimer.current = setTimeout(async () => {
             try {
                 const list = await client.searchUsers(
@@ -1223,11 +1245,10 @@ export default function TaskDetailPanel({
                                 }
                                 if (e.key === 'ArrowUp') {
                                     e.preventDefault();
-                                    setMention((s) => ({
-                                        ...s,
-                                        // eslint-disable-next-line no-mixed-operators
-                                        highlight: (s.highlight - 1 + s.candidates.length) % s.candidates.length,
-                                    }));
+                                    setMention((s) => {
+                                        const len = s.candidates.length;
+                                        return {...s, highlight: (((s.highlight - 1) + len) % len)};
+                                    });
                                     return;
                                 }
                                 if (e.key === 'Enter') {

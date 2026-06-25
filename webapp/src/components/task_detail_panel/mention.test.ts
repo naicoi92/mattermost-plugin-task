@@ -59,8 +59,8 @@ describe('applyMention — insert @username and reposition caret (FEAT-C)', () =
         const caret = 6; // after "@al"
         const d = detectMention(text, caret);
         const ins = applyMention(text, caret, d, 'alice');
-        expect(ins.text).toBe('hi @alice  there');
-        expect(ins.caret).toBe(3 + '@alice '.length); // after the trailing space
+        expect(ins.text).toBe('hi @alice there');
+        expect(ins.caret).toBe(3 + '@alice'.length); // suffix already had a space
     });
 
     test('preserves the leading whitespace before @', () => {
@@ -101,7 +101,24 @@ describe('applyMention — insert @username and reposition caret (FEAT-C)', () =
         const text = 'hi @alice bye';
         const d = detectMention(text, 6); // caret inside @ali|ce
         const ins = applyMention(text, 6, d, 'bob');
-        expect(ins.text).toBe('hi @bob  bye');
-        expect(ins.caret).toBe(3 + '@bob '.length);
+        expect(ins.text).toBe('hi @bob bye');
+        expect(ins.caret).toBe(3 + '@bob'.length);
+    });
+
+    // CR re-review: when the text after the mention token already starts with
+    // whitespace, applyMention must NOT add another space (no double-space).
+    test('does not add a trailing space when the suffix already starts with whitespace', () => {
+        // "hi @al there" — suffix after "@al" is " there" (starts with space).
+        const text = 'hi @al there';
+        const d = detectMention(text, 5);
+        const ins = applyMention(text, 5, d, 'alice');
+        expect(ins.text).toBe('hi @alice there'); // single space, not double
+    });
+
+    test('adds a trailing space when the suffix is empty', () => {
+        const text = '@al';
+        const d = detectMention(text, 3);
+        const ins = applyMention(text, 3, d, 'alice');
+        expect(ins.text).toBe('@alice ');
     });
 });
