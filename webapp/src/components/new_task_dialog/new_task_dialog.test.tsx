@@ -5,7 +5,7 @@
 // parseDueLocal and the validation/submission contract via the exported
 // component's behavior, without a full host Redux/intl provider harness.
 
-import { ClientError } from 'client';
+import {ClientError} from 'client';
 
 import {
     assigneeLookupError,
@@ -19,7 +19,7 @@ import {
 describe('deriveNewTaskContext', () => {
     test('a public/group channel yields a channel task with no assignee hint', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'ch1', type: 'O', name: 'town-square' },
+            {id: 'ch1', type: 'O', name: 'town-square'},
             'me',
         );
         expect(ctx.channelId).toBe('ch1');
@@ -28,7 +28,7 @@ describe('deriveNewTaskContext', () => {
 
     test('a private channel also yields a channel task', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'ch2', type: 'P', name: 'secret' },
+            {id: 'ch2', type: 'P', name: 'secret'},
             'me',
         );
         expect(ctx.channelId).toBe('ch2');
@@ -37,7 +37,7 @@ describe('deriveNewTaskContext', () => {
 
     test('a DM with a partner yields a channel task bound to the DM with the partner as assignee', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'dm1', type: 'D', name: 'me__partner' },
+            {id: 'dm1', type: 'D', name: 'me__partner'},
             'me',
         );
         expect(ctx.channelId).toBe('dm1');
@@ -47,7 +47,7 @@ describe('deriveNewTaskContext', () => {
 
     test('a DM with the partner id order reversed still picks the non-me user', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'dm1', type: 'D', name: 'partner__me' },
+            {id: 'dm1', type: 'D', name: 'partner__me'},
             'me',
         );
         expect(ctx.channelId).toBe('dm1');
@@ -57,7 +57,7 @@ describe('deriveNewTaskContext', () => {
 
     test('a DM with myself (nota) yields a channel task bound to the self-DM, assigned to me', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'dm-self', type: 'D', name: 'me__me' },
+            {id: 'dm-self', type: 'D', name: 'me__me'},
             'me',
         );
         expect(ctx.channelId).toBe('dm-self');
@@ -76,7 +76,7 @@ describe('deriveNewTaskContext', () => {
             suggestedAssigneeID: 'me',
             canPickAssignee: true,
         });
-        expect(deriveNewTaskContext({ id: '', type: 'O' }, 'me')).toEqual({
+        expect(deriveNewTaskContext({id: '', type: 'O'}, 'me')).toEqual({
             channelId: '',
             suggestedAssigneeID: 'me',
             canPickAssignee: true,
@@ -85,14 +85,14 @@ describe('deriveNewTaskContext', () => {
 
     test('a group channel (type G) is treated as a channel task', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'g1', type: 'G', name: 'group' },
+            {id: 'g1', type: 'G', name: 'group'},
             'me',
         );
         expect(ctx.channelId).toBe('g1');
     });
 
     test('a DM whose name fails to parse still binds to the DM channel with assignee = me', () => {
-        const ctx = deriveNewTaskContext({ id: 'dm2', type: 'D', name: '' }, 'me');
+        const ctx = deriveNewTaskContext({id: 'dm2', type: 'D', name: ''}, 'me');
         expect(ctx.channelId).toBe('dm2');
         expect(ctx.suggestedAssigneeID).toBe('me');
         expect(ctx.canPickAssignee).toBe(false);
@@ -230,7 +230,7 @@ describe('buildCreateInput (all-channel contract)', () => {
 
     test('a DM task sends the DM channel id as channel_id (no post_channel_id)', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'dm1', type: 'D', name: 'me__partner' },
+            {id: 'dm1', type: 'D', name: 'me__partner'},
             'me',
         );
         const input = buildCreateInput(baseForm, ctx);
@@ -241,7 +241,7 @@ describe('buildCreateInput (all-channel contract)', () => {
 
     test('a channel task sends channel_id only (no post_channel_id)', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'ch1', type: 'O', name: 'town-square' },
+            {id: 'ch1', type: 'O', name: 'town-square'},
             'me',
         );
         const input = buildCreateInput(baseForm, ctx);
@@ -257,18 +257,18 @@ describe('buildCreateInput (all-channel contract)', () => {
     });
 
     test('summary is trimmed', () => {
-        const ctx = deriveNewTaskContext({ id: 'ch1', type: 'O' }, 'me');
-        const input = buildCreateInput({ ...baseForm, summary: '  spaced  ' }, ctx);
+        const ctx = deriveNewTaskContext({id: 'ch1', type: 'O'}, 'me');
+        const input = buildCreateInput({...baseForm, summary: '  spaced  '}, ctx);
         expect(input.summary).toBe('spaced');
     });
 
     test('assignee and due are propagated', () => {
         const ctx = deriveNewTaskContext(
-            { id: 'dm1', type: 'D', name: 'me__partner' },
+            {id: 'dm1', type: 'D', name: 'me__partner'},
             'me',
         );
         const input = buildCreateInput(
-            { ...baseForm, assigneeID: 'bob', dueLocal: '2026-06-19T12:00' },
+            {...baseForm, assigneeID: 'bob', dueLocal: '2026-06-19T12:00'},
             ctx,
         );
         expect(input.assignee_id).toBe('bob');
