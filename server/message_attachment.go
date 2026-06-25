@@ -448,10 +448,17 @@ func (p *Plugin) postCard(channelID string, t *taskmodel.Task) string {
 		p.API.LogError("Failed to post task card", "channel_id", channelID, "task_id", t.ID, "error", err)
 		return ""
 	}
-	if created != nil {
-		return created.Id
+	if created == nil {
+		p.API.LogWarn("postCard: CreatePost returned nil post without error",
+			"channel_id", channelID, "task_id", t.ID, "bot_user_id", p.botUserID)
+		return ""
 	}
-	return ""
+	if created.Id == "" {
+		p.API.LogWarn("postCard: CreatePost returned empty post id",
+			"channel_id", channelID, "task_id", t.ID)
+		return ""
+	}
+	return created.Id
 }
 
 // postCardReply posts the task card as a thread reply rooted at rootPostID in
