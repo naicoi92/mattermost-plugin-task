@@ -397,7 +397,7 @@ func (s *Service) LinkComment(taskID, postID, userID string) (model.TaskComment,
 			ActorID:   userID,
 			EventType: model.EventCommented,
 			CreatedAt: now,
-			ToValue:   new(commentID),
+			ToValue:   &commentID,
 		})
 	}); err != nil {
 		return model.TaskComment{}, CommentEvent{}, err
@@ -474,7 +474,7 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 			ActorID:   creatorID,
 			EventType: model.EventSubtaskAdded,
 			CreatedAt: now,
-			ToValue:   new(created.ID),
+			ToValue:   &created.ID,
 		})
 	}); err != nil {
 		s.logUnexpected("failed to record subtask_added event / touch parent", err)
@@ -554,9 +554,8 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 	if row.Status == newStatus {
 		return s.assembleTask(ctx, row)
 	}
-	oldStatus := row.Status
-
 	now := nowFunc()
+	oldStatus := row.Status
 	taskutil.ApplyStatus(row, newStatus, now)
 	row.Priority = ensurePriority(row.Priority)
 
@@ -609,8 +608,8 @@ func (s *Service) SetStatus(actorID, id, newStatus string) (*model.Task, error) 
 			ActorID:   actorID,
 			EventType: model.EventStatusChanged,
 			CreatedAt: now,
-			FromValue: new(oldStatus),
-			ToValue:   new(newStatus),
+			FromValue: &oldStatus,
+			ToValue:   &newStatus,
 		})
 	}); err != nil {
 		return nil, err
@@ -1051,8 +1050,8 @@ func (s *Service) Assign(actorID, id, newAssigneeID string) (*model.Task, Assign
 			ActorID:   actorID,
 			EventType: eventType,
 			CreatedAt: now,
-			FromValue: new(oldAssigneeID),
-			ToValue:   new(newAssigneeID),
+			FromValue: &oldAssigneeID,
+			ToValue:   &newAssigneeID,
 		})
 	}); err != nil {
 		return nil, AssignEvent{}, err
