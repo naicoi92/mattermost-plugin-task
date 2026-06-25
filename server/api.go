@@ -200,6 +200,15 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	p.writeJSON(w, created)
 
+	// Notify the assignee (event-driven; covers create-with-assignee and
+	// includes self-assign as an acknowledgment under the all-channel model).
+	if created.AssigneeID != "" && p.notifier != nil {
+		p.notifier.NotifyAssigned(created.AssigneeID, created.CreatorID, notification.TaskSummary{
+			ID:      created.ID,
+			Summary: created.Summary,
+		})
+	}
+
 	// Real-time: a new task is visible to Quick List / Kanban clients (#32).
 	p.broadcastTaskUpdated(created, []string{"created"})
 }
@@ -559,8 +568,8 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// DM the newly assigned user (skipped when assignee == creator). No DM on
-	// unassign, and no DM to the previous assignee (PLAN §7).
+	// Notify the newly assigned user. Under the all-channel model this
+	// fires for every non-empty new assignee (self-assign included).
 	if p.notifier != nil {
 		p.notifier.NotifyAssigned(ev.NewAssigneeID, ev.CreatorID, notification.TaskSummary{
 			ID: updated.ID, Summary: updated.Summary,

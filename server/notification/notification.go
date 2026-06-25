@@ -102,13 +102,15 @@ type TaskSummary struct {
 	Summary string
 }
 
-// NotifyAssigned DMs the newly assigned user. It is a no-op when the assignee
-// is the task creator (no self-DM) or when the assignee is empty.
-func (n *Notifier) NotifyAssigned(assigneeID, creatorID string, task TaskSummary) {
-	if assigneeID == "" || assigneeID == creatorID {
+// NotifyAssigned DMs the newly assigned user. Under the all-channel model
+// the assign event fires for every non-empty assignee, INCLUDING self-assign
+// (creator assigning to themselves) — the DM serves as an acknowledgment.
+// Only an empty assignee is a no-op.
+func (n *Notifier) NotifyAssigned(assigneeID, actorID string, task TaskSummary) {
+	if assigneeID == "" {
 		return
 	}
-	actor := n.displayName(creatorID)
+	actor := n.displayName(actorID)
 	n.dm(assigneeID, "notification.assigned", task.Summary, actor)
 }
 

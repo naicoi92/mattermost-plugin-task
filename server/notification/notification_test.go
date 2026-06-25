@@ -106,13 +106,14 @@ func TestNotifyAssigned_DMsAssigneeNotCreator(t *testing.T) {
 	assert.Equal(t, "vi:notification.assigned:Fix bug:@user_creator", api.posts[0].message)
 }
 
-func TestNotifyAssigned_SkipsSelfAssign(t *testing.T) {
+func TestNotifyAssigned_IncludesSelfAssign(t *testing.T) {
 	api := &fakeAPI{users: map[string]*model.User{"u1": userWithLocale("u1", "en")}}
 	n := newTestNotifier(api)
 
-	// assignee == creator -> no DM.
+	// Under the all-channel model self-assign is still notified (ack).
 	n.NotifyAssigned("u1", "u1", TaskSummary{Summary: "x"})
-	assert.Empty(t, api.posts)
+	require.Len(t, api.posts, 1)
+	assert.Equal(t, "en:notification.assigned:x:@user_u1", api.posts[0].message)
 }
 
 func TestNotifyAssigned_EmptyAssigneeNoop(t *testing.T) {
