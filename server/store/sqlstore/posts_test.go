@@ -56,7 +56,7 @@ func TestAddPost_PostIDUnique(t *testing.T) {
 
 	require.NoError(t, s.AddPost(ctx, "P1", "T1", "shared", model.PostKindChannel))
 	// Same post_id on another task must fail (UNIQUE).
-	err := s.AddPost(ctx, "P2", "T2", "shared", model.PostKindDM)
+	err := s.AddPost(ctx, "P2", "T2", "shared", model.PostKindShare)
 	require.Error(t, err)
 }
 
@@ -72,7 +72,7 @@ func TestAddPost_OneCardPerTaskKind(t *testing.T) {
 	require.Error(t, err)
 
 	// A different kind on the same task is allowed.
-	require.NoError(t, s.AddPost(ctx, "P3", "T1", "dm1", model.PostKindDM))
+	require.NoError(t, s.AddPost(ctx, "P3", "T1", "sh1", model.PostKindShare))
 }
 
 func TestListPosts_ReturnsAllKindsForTask(t *testing.T) {
@@ -80,13 +80,13 @@ func TestListPosts_ReturnsAllKindsForTask(t *testing.T) {
 	ctx := context.Background()
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	require.NoError(t, s.AddPost(ctx, "P1", "T1", "ch-post", model.PostKindChannel))
-	require.NoError(t, s.AddPost(ctx, "P2", "T1", "dm-post", model.PostKindDM))
+	require.NoError(t, s.AddPost(ctx, "P2", "T1", "share-post", model.PostKindShare))
 
 	posts, err := s.ListPosts(ctx, "T1")
 	require.NoError(t, err)
 	assert.Len(t, posts, 2)
 	kinds := []string{posts[0].Kind, posts[1].Kind}
-	assert.ElementsMatch(t, []string{model.PostKindChannel, model.PostKindDM}, kinds)
+	assert.ElementsMatch(t, []string{model.PostKindChannel, model.PostKindShare}, kinds)
 }
 
 func TestListPosts_TaskIsolated(t *testing.T) {
@@ -108,17 +108,17 @@ func TestGetPostByKind(t *testing.T) {
 	ctx := context.Background()
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	require.NoError(t, s.AddPost(ctx, "P1", "T1", "ch-post", model.PostKindChannel))
-	require.NoError(t, s.AddPost(ctx, "P2", "T1", "dm-post", model.PostKindDM))
+	require.NoError(t, s.AddPost(ctx, "P2", "T1", "share-post", model.PostKindShare))
 
 	t.Run("returns channel post", func(t *testing.T) {
 		id, err := s.GetPostByKind(ctx, "T1", model.PostKindChannel)
 		require.NoError(t, err)
 		assert.Equal(t, "ch-post", id)
 	})
-	t.Run("returns dm post", func(t *testing.T) {
-		id, err := s.GetPostByKind(ctx, "T1", model.PostKindDM)
+	t.Run("returns share post", func(t *testing.T) {
+		id, err := s.GetPostByKind(ctx, "T1", model.PostKindShare)
 		require.NoError(t, err)
-		assert.Equal(t, "dm-post", id)
+		assert.Equal(t, "share-post", id)
 	})
 	t.Run("missing kind yields store.ErrPostNotFound", func(t *testing.T) {
 		_, err := s.GetPostByKind(ctx, "T1", "follower")
@@ -158,7 +158,7 @@ func TestPosts_FKCascadeOnTaskDelete(t *testing.T) {
 	ctx := context.Background()
 	mustCreate(t, s, ctx, fixture("T1", "k1"))
 	require.NoError(t, s.AddPost(ctx, "P1", "T1", "p1", model.PostKindChannel))
-	require.NoError(t, s.AddPost(ctx, "P2", "T1", "p2", model.PostKindDM))
+	require.NoError(t, s.AddPost(ctx, "P2", "T1", "p2", model.PostKindShare))
 
 	require.NoError(t, s.DeleteTask(ctx, "T1"))
 	posts, err := s.ListPosts(ctx, "T1")
@@ -168,7 +168,7 @@ func TestPosts_FKCascadeOnTaskDelete(t *testing.T) {
 
 func TestIsValidPostKind(t *testing.T) {
 	assert.True(t, model.IsValidPostKind(model.PostKindChannel))
-	assert.True(t, model.IsValidPostKind(model.PostKindDM))
+	assert.True(t, model.IsValidPostKind(model.PostKindShare))
 	assert.False(t, model.IsValidPostKind("broadcast"))
 	assert.False(t, model.IsValidPostKind(""))
 }

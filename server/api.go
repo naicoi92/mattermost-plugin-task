@@ -122,12 +122,11 @@ func (p *Plugin) writeError(w http.ResponseWriter, status int, msg string) {
 type createTaskRequest struct {
 	Summary     string `json:"summary"`
 	Description string `json:"description"`
-	ChannelID   string `json:"channel_id"`
-	// PostChannelID is the originating channel (the channel the user is in when
-	// creating) that should receive the announce card when the task itself is
-	// personal (empty ChannelID), e.g. a task created in a DM. It does not
-	// change the task's own channel_id (scope) — only where the card is posted.
-	PostChannelID  string `json:"post_channel_id"`
+	// ChannelID is required: the home channel of the task. The client always
+	// has a channel context (team channel, DM, or self-DM), so it sends the
+	// real channel id here. There is no longer a separate post_channel_id —
+	// the card is posted into ChannelID.
+	ChannelID      string `json:"channel_id"`
 	AssigneeID     string `json:"assignee_id"`
 	Due            *int64 `json:"due"`
 	IsAllDay       bool   `json:"is_all_day"`
@@ -173,61 +172,28 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Post the interactive task card: in the originating channel (if any) and
-	// as a DM to the assignee (if any, and not the creator). Record the post
-	// ids so the card can be updated on later status changes (issue #15).
+	// Post the interactive task card into the task's home channel (always set
+	// now). The card is the single interactive surface; assignee notification is
+	// event-driven (Notifier.NotifyAssigned), not a second card here.
 	//
-	// Atomicity strategy (M4-2): the task is committed FIRST (service.Create
-	// is itself atomic — task + members + reminder + event in one tx). Card
-	// posts and their task_posts linkage happen AFTER. A crash between Create
-	// and the card posts leaves the task intact with no card (acceptable — the
-	// task is the source of truth; cards are rebuildable). A crash after a
-	// post but before AddPost leaves an orphan card pointing nowhere (also
-	// acceptable — it can't @mention or act). This is preferred over wrapping
-	// Create in an outer tx because CreatePost is a server RPC that can't
-	// participate in a DB transaction.
-	var channelPostID, dmPostID string
-	// Card-preview model: post the task card where the viewer will see it.
-	//  - A channel task posts into its own channel (created.ChannelID) — this
-	//    id is server-side truth, trusted.
-	//  - A personal task created inside a DM (no ChannelID) posts into the
-	//    originating channel the client sent as post_channel_id. This is
-	//    client-controlled, so it is gated by an IsChannelMember check to keep
-	//    the bot from being directed into a channel the caller cannot access.
-	//  - A task with an assignee != creator sends a bot DM card as a notification
-	//    surface. The task's channel_id (scope) is never changed here.
-	announceChannel := created.ChannelID
-	if announceChannel == "" {
-		announceChannel = req.PostChannelID
-	}
-	// Defense-in-depth: a client-controlled announce channel must be verified —
-	// the bot must not post into a channel the caller is not a member of.
-	if announceChannel != "" && announceChannel != created.ChannelID {
-		if !p.channelMembership().IsChannelMember(currentUserID(r), announceChannel) {
-			p.API.LogWarn("createTask: caller is not a member of post_channel_id; skipping card",
-				"task_id", created.ID, "caller", currentUserID(r), "post_channel_id", announceChannel)
-			announceChannel = ""
-		}
-	}
-	if announceChannel != "" {
-		channelPostID = p.postCard(announceChannel, created)
+	// Atomicity strategy (M4-2): the task is committed FIRST (service.Create is
+	// itself atomic). Card posts and their task_posts linkage happen AFTER. A
+	// crash between Create and the card post leaves the task intact with no
+	// card (acceptable — the task is the source of truth; cards are rebuildable).
+	var channelPostID string
+	if created.ChannelID != "" {
+		channelPostID = p.postCard(created.ChannelID, created)
 		if channelPostID == "" {
 			p.API.LogError("createTask: postCard failed; no card preview",
-				"task_id", created.ID, "announce_channel", announceChannel)
+				"task_id", created.ID, "channel_id", created.ChannelID)
 		}
 	}
-	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
-		dmPostID = p.postCardDM(created.AssigneeID, created)
-	}
-	if channelPostID != "" || dmPostID != "" {
-		updated, err := p.taskService.SetPostIDs(created.ID, channelPostID, dmPostID)
+	if channelPostID != "" {
+		updated, err := p.taskService.SetPostIDs(created.ID, channelPostID)
 		if err != nil {
-			// Card posts exist but the task linkage didn't persist; log so later
-			// status transitions can't refresh the cards (investigatable).
-			p.API.LogError("Failed to persist task card post IDs",
+			p.API.LogError("Failed to persist task card post ID",
 				"task_id", created.ID,
 				"channel_post_id", channelPostID,
-				"dm_post_id", dmPostID,
 				"error", err)
 		} else if updated != nil {
 			created = updated
@@ -695,25 +661,20 @@ func (p *Plugin) createSubtask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Post the subtask's card as a thread reply inside the parent's card
-	// thread. The parent is posted in either a channel (ChannelPostID set) or a
-	// DM (DMPostID set); the subtask follows the same surface so the family of
-	// subtasks groups together under the parent's conversation. A task whose
-	// parent has no tracked card yet falls back to a top-level card in the
-	// inherited channel.
+	// thread. Under the all-channel model the parent's single card lives in
+	// parent.ChannelPostID (the home channel). A parent with no tracked card
+	// yet falls back to a top-level card in the inherited channel.
 	var subtaskPostID string
 	switch {
 	case parent.ChannelPostID != "":
 		subtaskPostID = p.postCardReply(parent.ChannelPostID, parent.ChannelID, created)
-	case parent.DMPostID != "":
-		// DM-only parent: post the reply in the bot↔assignee DM channel.
-		subtaskPostID = p.postCardReply(parent.DMPostID, created.ChannelID, created)
 	default:
 		if created.ChannelID != "" {
 			subtaskPostID = p.postCard(created.ChannelID, created)
 		}
 	}
 	if subtaskPostID != "" {
-		updated, uerr := p.taskService.SetPostIDs(created.ID, subtaskPostID, "")
+		updated, uerr := p.taskService.SetPostIDs(created.ID, subtaskPostID)
 		if uerr != nil {
 			p.API.LogError("Failed to persist subtask card post ID",
 				"task_id", created.ID, "error", uerr)
@@ -800,7 +761,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	// Comment-as-thread: the comment is a reply in the task's card thread.
 	// Resolve the card post that backs this task (its root + channel) and reply
 	// under it. The card post id is already tracked in task_posts / on the task
-	// (ChannelPostID/DMPostID); we just need ONE card the commenter can post
+	// (ChannelPostID); we just need ONE card the commenter can post
 	// into. Prefer a card whose channel the commenter is a member of; otherwise
 	// fall back to the first tracked card. The comment goes into THAT card's
 	// channel, so channel + root stay consistent and the reply is always in the
@@ -820,7 +781,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	commentPost := &mmmodel.Post{
 		// Change A: the comment post is authored by the HUMAN commenter, not the
 		// bot. This fixes channel attribution (the real person appears as the
-		// sender, not task_bot). Card posts (postCard/postCardDM) STAY bot-owned;
+		// sender, not task_bot). Card posts (postCard) STAY bot-owned;
 		// only comment posts become human-authored. AuthorID is still snapshotted
 		// on task_comments (equals post.UserId now).
 		UserId:    actorID,

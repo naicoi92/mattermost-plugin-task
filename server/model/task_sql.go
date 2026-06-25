@@ -62,12 +62,10 @@ type Task struct {
 	// AssigneeID is the user assigned to the task (task_members role=assignee).
 	// "" means unassigned.
 	AssigneeID string `json:"assignee_id"`
-	// ChannelPostID is the card root-post id in the channel, if any. Tracked
-	// via task_posts kind=channel.
+	// ChannelPostID is the card root-post id in the task's home channel, if
+	// any. Tracked via task_posts kind=channel. This is the single interactive
+	// card surface under the all-channel model.
 	ChannelPostID string `json:"channel_post_id,omitempty"`
-	// DMPostID is the card post id in the assignee's DM, if any. Tracked via
-	// task_posts kind=dm.
-	DMPostID string `json:"dm_post_id,omitempty"`
 	// ReminderOffset is how many ms before due the reminder fires; nil means
 	// no reminder. Assembled from task_reminders.
 	ReminderOffset *int64 `json:"reminder_offset,omitempty"`

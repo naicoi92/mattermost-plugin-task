@@ -69,6 +69,12 @@ func createTaskRow(t *testing.T, s store.Store, id, orderKey string, overrides .
 
 func mustCreateTask(t *testing.T, svc *Service, in CreateInput) *model.Task {
 	t.Helper()
+	// All-channel model: every task needs a ChannelID. Default to "ch1" for
+	// tests that don't care about the channel (and aren't creating a subtask,
+	// which inherits its parent's channel).
+	if in.ChannelID == "" && in.ParentTaskID == "" {
+		in.ChannelID = "ch1"
+	}
 	task, err := svc.Create(in)
 	require.NoError(t, err)
 	require.NotNil(t, task)
@@ -97,10 +103,13 @@ func TestCreate_PersistsTaskAndCreatorMember(t *testing.T) {
 	assert.Equal(t, "u1", creator)
 }
 
-func TestCreate_PersonalTaskHasEmptyChannel(t *testing.T) {
+// TestCreate_RejectsEmptyChannel asserts the all-channel contract: a
+// top-level task without a ChannelID is rejected.
+func TestCreate_RejectsEmptyChannel(t *testing.T) {
 	svc, _ := newTestService(t)
-	task := mustCreateTask(t, svc, CreateInput{Summary: "personal", CreatorID: "u1"})
-	assert.Equal(t, "", task.ChannelID)
+	_, err := svc.Create(CreateInput{Summary: "no channel", CreatorID: "u1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "channel_id required")
 }
 
 func TestCreate_SubtaskInheritsChannelAndAssignee(t *testing.T) {

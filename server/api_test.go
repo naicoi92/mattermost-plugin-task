@@ -155,64 +155,43 @@ func TestCreateTask_Endpoint(t *testing.T) {
 // preview into post_channel_id (the DM the viewer is in). The task's own
 // channel_id stays empty (personal scope), but the card is visible in the
 // originating channel. No IsChannelMember probe — the server trusts the client.
-func TestCreateTask_PersonalTaskPostsCardIntoPostChannelID(t *testing.T) {
+// TestCreateTask_RejectsEmptyChannelID asserts the all-channel contract:
+// POST /tasks with an empty channel_id is rejected with HTTP 400. Every
+// task must bind to a real channel (team, DM, or self-DM).
+func TestCreateTask_RejectsEmptyChannelID(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	body := `{"summary":"DM task","post_channel_id":"dm1"}`
+	body := `{"summary":"no channel","channel_id":""}`
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestCreateTask_DMChannelIDPostsSingleCard asserts that a task created in a
+// DM context (channel_id = the DM channel id) posts exactly ONE card into that
+// DM and stores it as ChannelPostID. There is no separate DMPostID surface.
+func TestCreateTask_DMChannelIDPostsSingleCard(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	body := `{"summary":"DM task","channel_id":"dm1","assignee_id":"partner"}`
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	var got model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, "", got.ChannelID, "personal scope preserved")
-	assert.Equal(t, "post-1", got.ChannelPostID, "card posted into post_channel_id")
+	assert.Equal(t, "dm1", got.ChannelID, "DM channel id is the task scope")
+	assert.Equal(t, "post-1", got.ChannelPostID, "single card posted into the DM")
+	p.API.(*plugintest.API).AssertNumberOfCalls(t, "CreatePost", 1)
 }
 
-// TestCreateTask_PersonalTaskWithAssigneePostsChannelCardAndDMCard asserts
-// that a personal task (no home channel) created in a DM with an assignee posts
-// BOTH the announce card into post_channel_id (the DM the viewer is in) AND the
-// assignee-bot DM card (DM(bot, assignee)). Two distinct surfaces.
-func TestCreateTask_PersonalTaskWithAssigneePostsChannelCardAndDMCard(t *testing.T) {
+// TestCreateTask_ChannelIDRequired_NotPostChannelID asserts that the legacy
+// post_channel_id field is no longer accepted as a substitute for channel_id:
+// a request with only post_channel_id (and empty channel_id) is rejected.
+func TestCreateTask_ChannelIDRequired_NotPostChannelID(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	body := `{"summary":"DM assigned","post_channel_id":"dm1","assignee_id":"partner"}`
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var got model.Task
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, "", got.ChannelID, "personal scope preserved")
-	assert.Equal(t, "post-1", got.ChannelPostID, "announce card into post_channel_id")
-	assert.Equal(t, "post-2", got.DMPostID, "assignee-bot DM card")
-	p.API.(*plugintest.API).AssertNumberOfCalls(t, "CreatePost", 2)
-}
-
-// TestCreateTask_PostChannelID_IgnoredWhenNotMember is the defense-in-depth
-// guard for client-controlled post_channel_id: if the requesting user is NOT a
-// member of post_channel_id, the announce card is NOT posted there. The task is
-// still created (personal scope preserved). Restored after the IsChannelMember
-// gate was re-added to createTask (review R1 + CodeRabbit nitpick).
-func TestCreateTask_PostChannelID_IgnoredWhenNotMember(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	api := p.API.(*plugintest.API)
-	// Drop the default member-true mock; caller is not a member of "secret".
-	reseedGetChannelMember(t, api)
-	api.On("GetChannelMember", "secret", "u1").Return(nil, nil).Maybe()
 	body := `{"summary":"sneak","post_channel_id":"secret"}`
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var got model.Task
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	// The task is still created (personal scope, no assignee).
-	assert.Equal(t, "", got.ChannelID)
-	assert.Equal(t, "sneak", got.Summary)
-	// But NO announce card was posted: the caller couldn't direct the bot into
-	// a channel they don't belong to.
-	assert.Equal(t, "", got.ChannelPostID)
-	assert.Equal(t, "", got.DMPostID)
-	api.AssertNumberOfCalls(t, "CreatePost", 0)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "channel_id required; post_channel_id is not a fallback")
 }
 
 // TestShareTask_PostsCardAndLinks verifies the happy path: sharing an existing
@@ -220,7 +199,7 @@ func TestCreateTask_PostChannelID_IgnoredWhenNotMember(t *testing.T) {
 // kind="share", and returns 200 {post_id}.
 func TestShareTask_PostsCardAndLinks(t *testing.T) {
 	p, st := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "Share me", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "Share me", CreatorID: "u1"})
 
 	api := p.API.(*plugintest.API)
 	api.On("GetChannelMember", "ch1", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
@@ -263,18 +242,22 @@ func TestShareTask_404_UnknownTask(t *testing.T) {
 
 func TestShareTask_400_MissingChannelID(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
 		`{}`, "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestShareTask_403_NotViewer: a personal task (empty channel_id) created by
-// u1 — a third user u3 cannot view it (not creator/assignee/member) → 403.
+// TestShareTask_403_NotViewer: a task in ch1 created by u1 — a third user
+// u3 (not creator/assignee AND not a member of ch1) cannot view/share it → 403.
 func TestShareTask_403_NotViewer(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "private", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "private", CreatorID: "u1"})
+
+	api := p.API.(*plugintest.API)
+	reseedGetChannelMember(t, api)
+	api.On("GetChannelMember", "ch1", "u3").Return(nil, nil).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
@@ -286,7 +269,7 @@ func TestShareTask_403_NotViewer(t *testing.T) {
 // but is NOT a member of the target channel → 403.
 func TestShareTask_403_NotChannelMember(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "share me", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "share me", CreatorID: "u1"})
 
 	api := p.API.(*plugintest.API)
 	// u1 is NOT a member of ch-secret: drop the default member-true mock first.
@@ -305,7 +288,7 @@ func TestShareTask_403_NotChannelMember(t *testing.T) {
 // circuits when it finds a card already in ch1.
 func TestShareTask_Idempotent_ExistingCardInChannel(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "share me", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "share me", CreatorID: "u1"})
 
 	api := p.API.(*plugintest.API)
 	api.On("GetChannelMember", "ch1", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
@@ -356,7 +339,7 @@ func TestShareTask_Idempotent_ExistingCardInChannel(t *testing.T) {
 // 409 (no orphan card, no constraint violation) rather than 500.
 func TestShareTask_409_AlreadySharedElsewhere(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "share me", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "share me", CreatorID: "u1"})
 
 	api := p.API.(*plugintest.API)
 	api.On("GetChannelMember", "chA", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
@@ -399,7 +382,7 @@ func TestShareTask_409_AlreadySharedElsewhere(t *testing.T) {
 // channel that has no existing card. (Spec: idempotent per channel.)
 func TestShareTask_Idempotent_EvenWhenSharedElsewhere(t *testing.T) {
 	p, st := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{Summary: "dual card", CreatorID: "u1"})
+	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "dual card", CreatorID: "u1"})
 	ctx := context.Background()
 	// Seed a channel-kind card in X and a share-kind card in Y.
 	require.NoError(t, st.AddPost(ctx, "row1", taskObj.ID, "post-x", model.PostKindChannel))
@@ -464,7 +447,7 @@ func TestCreateSubtask_InheritsAndPersists(t *testing.T) {
 
 func TestCreateSubtask_ForbiddenForNonModifier(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u-owner", AssigneeID: "u-owner"})
+	parent := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "p", CreatorID: "u-owner", AssigneeID: "u-owner"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+parent.ID+"/subtasks", `{"summary":"sub"}`, "u-stranger"))
@@ -482,7 +465,7 @@ func TestCreateSubtask_ParentNotFound(t *testing.T) {
 
 func TestCreateSubtask_ExplicitAssigneeOverridesInherited(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1", AssigneeID: "u-inherited"})
+	parent := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "p", CreatorID: "u1", AssigneeID: "u-inherited"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+parent.ID+"/subtasks",
@@ -496,7 +479,7 @@ func TestCreateSubtask_ExplicitAssigneeOverridesInherited(t *testing.T) {
 
 func TestListSubtasks_ReturnsDirectSubtasksInOrder(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
+	parent := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "p", CreatorID: "u1"})
 	createTaskViaService(t, p, task.CreateInput{Summary: "s1", CreatorID: "u1", ParentTaskID: parent.ID})
 	createTaskViaService(t, p, task.CreateInput{Summary: "s2", CreatorID: "u1", ParentTaskID: parent.ID})
 
@@ -672,7 +655,7 @@ func TestCreateComment_ThreadsUnderCardInRequestedChannel(t *testing.T) {
 
 func TestCreateComment_EmptyContentRejected(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments", `{"content":"  "}`, "u1"))
@@ -680,7 +663,7 @@ func TestCreateComment_EmptyContentRejected(t *testing.T) {
 }
 
 // TestCreateComment_NoCardRootRejected (FIX-2) pins the rootID guard: when a
-// task has no card root resolvable (ChannelPostID=="", DMPostID=="", and no
+// task has no card root resolvable (ChannelPostID=="", and no
 // tracked task_post), createComment MUST reject with 400 instead of creating
 // a rootless/unthreaded post (RootId==""). A rootless comment post is NOT in
 // any card thread, so listComments (which fetches only the card threads)
@@ -689,7 +672,7 @@ func TestCreateComment_EmptyContentRejected(t *testing.T) {
 func TestCreateComment_NoCardRootRejected(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	// Personal task with no channel/DM card and no tracked task_posts.
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments", `{"content":"hi"}`, "u1"))
@@ -801,7 +784,11 @@ func TestListComments_ReturnsInCreationOrder(t *testing.T) {
 
 func TestListComments_ForbiddenForNonParticipant(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u-owner"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u-owner"})
+
+	api := p.API.(*plugintest.API)
+	reseedGetChannelMember(t, api)
+	api.On("GetChannelMember", "ch1", "u-stranger").Return(nil, nil).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/comments", "", "u-stranger"))
@@ -820,7 +807,7 @@ func TestListComments_ForbiddenForNonParticipant(t *testing.T) {
 func TestListComments_AssigneeAllowedViaAssignAction(t *testing.T) {
 	p, st := newTestPlugin(t)
 	// Personal task, no channel: only creator + assignee may view/comment.
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u-creator"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u-creator"})
 
 	// Assign via the real Assign service path (server/task/service.go Assign ->
 	// SetAssignee -> AddMember role='assignee'). This is the action path, not a
@@ -1018,13 +1005,13 @@ func TestListComments_NewestFirstOrder(t *testing.T) {
 }
 
 // TestListComments_RootIDEmptyReturnsDeletedFlag asserts the defensive branch:
-// when the task has no card post (ChannelPostID and DMPostID both empty), the
+// when the task has no card post (ChannelPostID empty), the
 // handler returns all comments with content:"" and deleted:true (no N+1
-// fallback, no panic). Covers the Personal-task DMPostID empty edge case.
+// fallback, no panic). Covers the no-card edge case.
 func TestListComments_RootIDEmptyReturnsDeletedFlag(t *testing.T) {
 	p, st := newTestPlugin(t)
-	// Personal task: no channel, no card posts added => ChannelPostID/DMPostID empty.
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	// Task with no channel: no card posts added => ChannelPostID empty.
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 	seedCommentRow(t, st, created.ID, "c1", "p1", "alice", 1000)
 	// FIX-3: GetPost fallback must also miss p1 for it to stay deleted.
 	api := p.API.(*plugintest.API)
@@ -1077,7 +1064,7 @@ func TestGetTask_Existing(t *testing.T) {
 
 func TestPatchTask_Partial(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "orig", Description: "d", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "orig", Description: "d", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID, `{"update_fields":["summary"],"summary":"renamed"}`, "u1"))
@@ -1091,7 +1078,7 @@ func TestPatchTask_Partial(t *testing.T) {
 
 func TestDeleteTask_Cascade(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 	createTaskViaService(t, p, task.CreateInput{Summary: "sub", CreatorID: "u1", ParentTaskID: created.ID})
 
 	w := httptest.NewRecorder()
@@ -1127,9 +1114,9 @@ func TestListTasks_BadStatus(t *testing.T) {
 func TestListTasks_ReturnsDirectScope(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	// Shared task: u-me is creator, u-partner is assignee → both are members.
-	createTaskViaService(t, p, task.CreateInput{Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
 	// Unrelated task: neither u-me nor u-partner is a member.
-	createTaskViaService(t, p, task.CreateInput{Summary: "other", CreatorID: "u-third", AssigneeID: "u-other"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "other", CreatorID: "u-third", AssigneeID: "u-other"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-partner", "", "u-me"))
@@ -1147,7 +1134,7 @@ func TestListTasks_ReturnsDirectScope(t *testing.T) {
 func TestListTasks_DirectScopePreventsPartnerEnumeration(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	// u-third created a task assigned to u-other; u-me is not involved.
-	createTaskViaService(t, p, task.CreateInput{Summary: "private", CreatorID: "u-third", AssigneeID: "u-other"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "private", CreatorID: "u-third", AssigneeID: "u-other"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-third", "", "u-me"))
@@ -1171,7 +1158,7 @@ func TestCreateTask_PriorityRoundTrip(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks",
-		`{"summary":"urgent task","creator_id":"u1","priority":"urgent"}`, "u1"))
+		`{"summary":"urgent task","channel_id":"ch1","creator_id":"u1","priority":"urgent"}`, "u1"))
 	require.Equal(t, http.StatusCreated, w.Code)
 	var created model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
@@ -1180,7 +1167,7 @@ func TestCreateTask_PriorityRoundTrip(t *testing.T) {
 	// Default priority when omitted.
 	w2 := httptest.NewRecorder()
 	p.ServeHTTP(nil, w2, authedRequest(http.MethodPost, "/api/v1/tasks",
-		`{"summary":"default priority","creator_id":"u1"}`, "u1"))
+		`{"summary":"default priority","channel_id":"ch1","creator_id":"u1"}`, "u1"))
 	require.Equal(t, http.StatusCreated, w2.Code)
 	var created2 model.Task
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &created2))
@@ -1190,7 +1177,7 @@ func TestCreateTask_PriorityRoundTrip(t *testing.T) {
 // TestPatchTask_Priority verifies priority is patchable via update_fields.
 func TestPatchTask_Priority(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	newPrio := model.PriorityImportant
 	body, _ := json.Marshal(map[string]any{
@@ -1209,7 +1196,7 @@ func TestPatchTask_Priority(t *testing.T) {
 // rejected as a 400 rather than persisted.
 func TestPatchTask_InvalidPriorityRejected(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 	body, _ := json.Marshal(map[string]any{
 		"update_fields": []string{"priority"},
 		"priority":      "blocker",
@@ -1258,7 +1245,7 @@ func TestHelloWorld_StillWorks(t *testing.T) {
 
 func TestPatchTaskStatus_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID+"/status", `{"status":"done"}`, "u1"))
@@ -1272,7 +1259,7 @@ func TestPatchTaskStatus_Endpoint(t *testing.T) {
 
 func TestPatchTaskStatus_Invalid(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID+"/status", `{"status":"paused"}`, "u1"))
@@ -1288,7 +1275,7 @@ func TestPatchTaskStatus_NotFound(t *testing.T) {
 
 func TestPatchTaskStatus_BadJSON(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID+"/status", `{not json`, "u1"))
@@ -1300,7 +1287,7 @@ func TestPatchTaskStatus_BadJSON(t *testing.T) {
 // than returning 409.
 func TestPatchTaskStatus_ParentDoneCascadesOpenSubtasks(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
+	parent := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "p", CreatorID: "u1"})
 	createTaskViaService(t, p, task.CreateInput{Summary: "open", CreatorID: "u1", ParentTaskID: parent.ID})
 
 	w := httptest.NewRecorder()
@@ -1312,7 +1299,7 @@ func TestPatchTaskStatus_ParentDoneCascadesOpenSubtasks(t *testing.T) {
 func TestSetReminder_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	due := int64(100_000)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", DueAt: &due})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", DueAt: &due})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder", `{"offset_ms":60000}`, "u1"))
@@ -1326,7 +1313,7 @@ func TestSetReminder_Endpoint(t *testing.T) {
 
 func TestSetReminder_NeedsDue(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder", `{"offset_ms":60000}`, "u1"))
@@ -1336,7 +1323,7 @@ func TestSetReminder_NeedsDue(t *testing.T) {
 func TestSetReminder_InvalidOffset(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	due := int64(100_000)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", DueAt: &due})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", DueAt: &due})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder", `{"offset_ms":0}`, "u1"))
@@ -1353,7 +1340,7 @@ func TestDeleteReminder_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	due := int64(100_000)
 	offset := int64(60_000)
-	created, err := p.taskService.Create(task.CreateInput{Summary: "x", CreatorID: "u1", DueAt: &due, ReminderOffset: &offset})
+	created, err := p.taskService.Create(task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", DueAt: &due, ReminderOffset: &offset})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -1367,7 +1354,7 @@ func TestDeleteReminder_Endpoint(t *testing.T) {
 
 func TestSetAssignee_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee", `{"user_id":"u-new"}`, "u1"))
@@ -1380,7 +1367,7 @@ func TestSetAssignee_Endpoint(t *testing.T) {
 
 func TestSetAssignee_RequiresUserID(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee", `{"user_id":""}`, "u1"))
@@ -1396,7 +1383,7 @@ func TestSetAssignee_NotFound(t *testing.T) {
 
 func TestDeleteAssignee_Endpoint(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", AssigneeID: "u-old"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID+"/assignee", "", "u1"))
@@ -1436,7 +1423,11 @@ func TestListTaskEvents_ReturnsAuditTrail(t *testing.T) {
 
 func TestListTaskEvents_ForbiddenForNonParticipant(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u-owner"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u-owner"})
+
+	api := p.API.(*plugintest.API)
+	reseedGetChannelMember(t, api)
+	api.On("GetChannelMember", "ch1", "u-stranger").Return(nil, nil).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID+"/events", "", "u-stranger"))
@@ -1479,7 +1470,7 @@ var _ = sort.Slice
 
 func TestPatchTaskStatus_ReopenFromDoneToInProgress(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	parent := createTaskViaService(t, p, task.CreateInput{Summary: "p", CreatorID: "u1"})
+	parent := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "p", CreatorID: "u1"})
 
 	// Mark Done first.
 	w := httptest.NewRecorder()
@@ -1589,7 +1580,7 @@ func TestListComments_ChannelTaskReadableByOutsider(t *testing.T) {
 
 func TestPatchTask_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID,
@@ -1599,7 +1590,7 @@ func TestPatchTask_ForbiddenForNonOwner(t *testing.T) {
 
 func TestPatchTask_AllowedForAssignee(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID,
@@ -1609,7 +1600,7 @@ func TestPatchTask_AllowedForAssignee(t *testing.T) {
 
 func TestPatchTaskStatus_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPatch, "/api/v1/tasks/"+created.ID+"/status",
@@ -1619,7 +1610,7 @@ func TestPatchTaskStatus_ForbiddenForNonOwner(t *testing.T) {
 
 func TestSetAssignee_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee",
@@ -1629,7 +1620,7 @@ func TestSetAssignee_ForbiddenForNonOwner(t *testing.T) {
 
 func TestSetAssignee_AssigneeCanReassign(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/assignee",
@@ -1639,7 +1630,7 @@ func TestSetAssignee_AssigneeCanReassign(t *testing.T) {
 
 func TestSetReminder_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/reminder",
@@ -1649,7 +1640,7 @@ func TestSetReminder_ForbiddenForNonOwner(t *testing.T) {
 
 func TestDeleteAssignee_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID+"/assignee", "", "u2"))
@@ -1658,7 +1649,7 @@ func TestDeleteAssignee_ForbiddenForNonOwner(t *testing.T) {
 
 func TestDeleteTask_ForbiddenForAssignee(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1", AssigneeID: "u2"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "u2"))
@@ -1697,7 +1688,7 @@ func TestPatchTask_ForbiddenForChannelMember(t *testing.T) {
 
 func TestDeleteTask_AllowedForCreator(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodDelete, "/api/v1/tasks/"+created.ID, "", "u1"))
@@ -1715,17 +1706,19 @@ func TestDeleteTask_NotFound(t *testing.T) {
 
 // View/list guards DO consult channel membership.
 
-func TestGetTask_PersonalTaskHiddenFromOthers(t *testing.T) {
+func TestGetTask_ChannelTaskHiddenFromNonMember(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	// Personal task (no ChannelID): only creator + assignee may view.
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "secret", CreatorID: "u1", AssigneeID: "u2"})
+	// Channel-scoped task: only creator, assignee, or channel members may view.
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "secret", CreatorID: "u1", AssigneeID: "u2"})
 
 	api := p.API.(*plugintest.API)
-	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(&mmmodel.ChannelMember{}, nil).Maybe()
+	// u3 is NOT a member of ch1 → denied.
+	reseedGetChannelMember(t, api)
+	api.On("GetChannelMember", "ch1", "u3").Return(nil, nil).Maybe()
 
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks/"+created.ID, "", "u3"))
-	assert.Equal(t, http.StatusForbidden, w.Code, "personal task hidden from non creator/assignee")
+	assert.Equal(t, http.StatusForbidden, w.Code, "channel task hidden from non-member")
 }
 
 // Behavior change: a channel-surfaced task (ChannelID != "") is now readable
@@ -1775,7 +1768,7 @@ func TestListSubtasks_ChannelTaskReadableByOutsider(t *testing.T) {
 
 func TestHandleCardAction_Status_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	body := fmt.Sprintf(`{"user_id":"u2","context":{"action":"status","task_id":%q}}`, created.ID)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions", bytes.NewReader([]byte(body)))
@@ -1788,7 +1781,7 @@ func TestHandleCardAction_Status_ForbiddenForNonOwner(t *testing.T) {
 
 func TestHandleCardAction_Priority_ForbiddenForNonOwner(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", CreatorID: "u1"})
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
 
 	body := fmt.Sprintf(`{"user_id":"u2","context":{"action":"priority","task_id":%q}}`, created.ID)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions", bytes.NewReader([]byte(body)))

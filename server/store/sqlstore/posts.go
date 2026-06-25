@@ -78,7 +78,7 @@ func (s *SQLStore) ListPosts(ctx context.Context, taskID string) ([]model.TaskPo
 }
 
 // GetPostByKind returns the post_id of the single tracked card of `kind` for
-// `taskID` (e.g. the channel card or the DM card). Returns store.ErrPostNotFound
+// `taskID` (e.g. the channel card or a share card). Returns store.ErrPostNotFound
 // when no such row exists. LIMIT 1 keeps it cheap even if a future kind allows
 // multiples.
 func (s *SQLStore) GetPostByKind(ctx context.Context, taskID, kind string) (string, error) {

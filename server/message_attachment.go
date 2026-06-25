@@ -455,21 +455,6 @@ func (p *Plugin) postCard(channelID string, t *taskmodel.Task) string {
 	return ""
 }
 
-// postCardDM posts the task card as a DM to assigneeID from the bot and returns
-// the post id. Used to notify an assignee when a task is created/assigned.
-func (p *Plugin) postCardDM(assigneeID string, t *taskmodel.Task) string {
-	channel, err := p.API.GetDirectChannel(assigneeID, p.botUserID)
-	if err != nil || channel == nil {
-		// GetDirectChannel can return (nil, nil) during RPC shutdown; guard
-		// against a nil-pointer on channel.Id below.
-		if err != nil {
-			p.API.LogError("Failed to open DM for task card", "assignee_id", assigneeID, "error", err)
-		}
-		return ""
-	}
-	return p.postCard(channel.Id, t)
-}
-
 // postCardReply posts the task card as a thread reply rooted at rootPostID in
 // channelID, and returns the reply post id. Used to post a subtask inside its
 // parent's thread so the parent's conversation groups the subtasks together.
@@ -536,7 +521,7 @@ func (p *Plugin) updateTaskCards(t *taskmodel.Task) {
 // p.taskStore is always set after OnActivate (the SQL store is wired before
 // the router serves), so a nil store only occurs in degenerate test setups
 // where card refresh isn't exercised. There is no fallback to the assembled
-// Task's ChannelPostID/DMPostID: the normalized task_posts table is the single
+// Task's ChannelPostID: the normalized task_posts table is the single
 // source of truth for card locations post-migration.
 func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
 	if p.taskStore == nil {
@@ -554,7 +539,7 @@ func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
 // returning (rootPostID, channelID, true) or ("", "", false) if none.
 //
 // Simple model: the task is already surfaced via its card posts (channel card,
-// DM card, or a share card); a comment is a reply under ONE of those cards. We
+// share card); a comment is a reply under ONE of those cards. We
 // pick the card the commenter can actually post into:
 //  1. Prefer the card in the channel the viewer is acting from (reqChannelID)
 //     when the commenter is a member of it.
@@ -603,9 +588,6 @@ func (p *Plugin) commentRoot(taskID string, t *taskmodel.Task, commenterID, reqC
 	}
 	if !add(t.ChannelPostID) {
 		return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", t.ChannelPostID)
-	}
-	if !add(t.DMPostID) {
-		return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", t.DMPostID)
 	}
 
 	isMember := func(ch string) bool {

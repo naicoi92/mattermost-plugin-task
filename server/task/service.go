@@ -95,12 +95,10 @@ func (s *Service) assembleTask(ctx context.Context, row *model.TaskRow) (*model.
 		return nil, errors.Wrap(err, "assemble task: assignee")
 	}
 
-	// Card post ids (task_posts).
+	// Card post id (task_posts). Only the home-channel card kind remains
+	// under the all-channel model.
 	if ch, err := s.store.GetPostByKind(ctx, row.ID, model.PostKindChannel); err == nil {
 		t.ChannelPostID = ch
-	}
-	if dm, err := s.store.GetPostByKind(ctx, row.ID, model.PostKindDM); err == nil {
-		t.DMPostID = dm
 	}
 
 	// Reminder (task_reminders; at most one per task at MVP).
@@ -193,6 +191,14 @@ func (s *Service) Create(in CreateInput) (*model.Task, error) {
 	}
 	if !model.IsValidPriority(priority) {
 		return nil, errors.New("invalid priority")
+	}
+
+	// ChannelID is required: every task is bound to a channel (team channel,
+	// DM, or self-DM). The client always has a channel context, so it sends a
+	// real channel id. A subtask inherits its parent's channel, so the check
+	// runs only for top-level tasks.
+	if in.ParentTaskID == "" && in.ChannelID == "" {
+		return nil, errors.New("channel_id required")
 	}
 
 	// Resolve parent inheritance BEFORE the transaction so the tx body is a
@@ -478,10 +484,11 @@ func (s *Service) CreateSubtask(parentID, creatorID, summary, assigneeID string,
 	return created, nil
 }
 
-// SetPostIDs records the channel/DM card post ids for the task. Either value
-// may be empty to leave that post kind unchanged. The writes (AddPost for each
-// kind + UpdatedAt touch) commit atomically via WithTx.
-func (s *Service) SetPostIDs(id, channelPostID, dmPostID string) (*model.Task, error) {
+// SetPostIDs records the channel card post id for the task (the single
+// interactive surface under the all-channel model). An empty channelPostID
+// leaves the post kind unchanged. The write (AddPost + UpdatedAt touch) commits
+// atomically via WithTx.
+func (s *Service) SetPostIDs(id, channelPostID string) (*model.Task, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	if _, err := s.loadTaskRow(ctx, id); err != nil {
@@ -494,11 +501,6 @@ func (s *Service) SetPostIDs(id, channelPostID, dmPostID string) (*model.Task, e
 	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
 		if channelPostID != "" {
 			if err := tx.AddPost(txCtx, taskutil.GenerateULID(), id, channelPostID, model.PostKindChannel); err != nil {
-				return err
-			}
-		}
-		if dmPostID != "" {
-			if err := tx.AddPost(txCtx, taskutil.GenerateULID(), id, dmPostID, model.PostKindDM); err != nil {
 				return err
 			}
 		}
@@ -943,6 +945,10 @@ func derefBool(p *bool) bool {
 
 // ptrString returns a pointer to s; used for TaskEvent.FromValue/ToValue which
 // are *string.
+//
+//go:fix inline
+//go:fix inline
+//go:fix inline
 func ptrString(s string) *string { return &s }
 
 // ErrNotFound is returned by Get/Patch/Delete when the task id does not exist.
