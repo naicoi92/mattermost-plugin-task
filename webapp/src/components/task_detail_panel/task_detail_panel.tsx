@@ -23,6 +23,7 @@ import {
     getChannel,
     getCurrentChannelId,
 } from 'mattermost-redux/selectors/entities/channels';
+import {getCurrentUserId, getUser} from 'mattermost-redux/selectors/entities/users';
 
 import formatDueRelative from 'components/shared/format_due_relative';
 import MetaDropdown from 'components/shared/meta_dropdown';
@@ -366,12 +367,34 @@ export default function TaskDetailPanel({
     // @mention candidate channel (FEAT-C): the task's home channel, else the
     // viewer's current channel. '' => globally visible users (personal task).
     const mentionChannelID = full?.channel_id || currentChannelID || '';
+
+    // Resolve a human-friendly channel name. For a team/public channel this is
+    // the channel display_name. For a DM (name like "<uid1>__<uid2>") the
+    // Mattermost store leaves display_name empty and name as the raw id pair;
+    // fall back to the other user's display name when the store exposes it.
     const channelName = useSelector((s: GlobalState) => {
         if (!channelIDForSelector) {
             return '';
         }
         const ch = getChannel(s as never, channelIDForSelector);
-        return ch?.display_name || ch?.name || '';
+        if (ch?.display_name) {
+            return ch.display_name;
+        }
+
+        // DM fallback: name is "<uid1>__<uid2>". Resolve the non-current user's
+        // display name from the users store.
+        if (ch?.name && ch.name.includes('__')) {
+            const me = getCurrentUserId(s as never);
+            const partner = ch.name.split('__').find((id) => id && id !== me);
+            if (partner) {
+                const u = getUser(s as never, partner);
+                if (u) {
+                    return u.username ? '@' + u.username : partner;
+                }
+            }
+            return '';
+        }
+        return ch?.name || '';
     });
 
     // Resolve the parent task's summary so the meta-table can show a readable
@@ -979,7 +1002,6 @@ export default function TaskDetailPanel({
                         <UserPicker
                             value={full.assignee_id}
                             valueLabel={assigneeLabel}
-                            channelID={full.channel_id || undefined}
                             onSelect={(u) => setAssignee(u ? u.id : '')}
                             placeholder={t('webapp.task.assignee.placeholder')}
                         />
