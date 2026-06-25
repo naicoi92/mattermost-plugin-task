@@ -162,6 +162,11 @@ type Store interface {
 	// (channel/direct), but tests need an unfiltered snapshot to assert fixtures.
 	ListAllTasksForTest(ctx context.Context) ([]model.TaskRow, error)
 
+	// ListTasksByMember returns every task on which userID holds the creator or
+	// assignee role, ordered by order_key. Used by the deactivation hook to find
+	// DM-scoped tasks that may need migrating away from the deactivated user.
+	ListTasksByMember(ctx context.Context, userID string, limit int) ([]model.TaskRow, error)
+
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error
 	RemoveMember(ctx context.Context, taskID, userID, role string) error

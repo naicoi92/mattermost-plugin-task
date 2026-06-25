@@ -135,3 +135,56 @@ func TestMessageHasBeenPosted_BotPostIgnored(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "bot post must not be linked as a comment")
 }
+
+// TestOtherDMParticipant verifies the DM name parsing helper used by the
+// deactivation hook to find the non-deactivated participant.
+func TestOtherDMParticipant(t *testing.T) {
+	cases := []struct {
+		name    string
+		channel *mmmodel.Channel
+		userID  string
+		want    string
+	}{
+		{"two-user DM, me first", &mmmodel.Channel{Type: mmmodel.ChannelTypeDirect, Name: "u1__u2"}, "u1", "u2"},
+		{"two-user DM, me second", &mmmodel.Channel{Type: mmmodel.ChannelTypeDirect, Name: "u2__u1"}, "u1", "u2"},
+		{"self-DM", &mmmodel.Channel{Type: mmmodel.ChannelTypeDirect, Name: "u1__u1"}, "u1", ""},
+		{"not a DM", &mmmodel.Channel{Type: mmmodel.ChannelTypeOpen, Name: "town-square"}, "u1", ""},
+		{"nil channel", nil, "u1", ""},
+		{"user not in DM", &mmmodel.Channel{Type: mmmodel.ChannelTypeDirect, Name: "u2__u3"}, "u1", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, otherDMParticipant(tc.channel, tc.userID))
+		})
+	}
+}
+
+// TestUserHasBeenDeactivated_MigratesDMTask: when a DM participant is
+// deactivated, their DM-scoped task is relocated to the other (still-active)
+// participant's self-DM. The card is reposted and the ChannelID updated.
+func TestUserHasBeenDeactivated_MigratesDMTask(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	api := p.API.(*plugintest.API)
+	reseedGetChannelMember(t, api)
+	// Drop default GetChannel/GetDirectChannel mocks so DM-specific ones win.
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "GetChannel" && c.Method != "GetDirectChannel" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+
+	created := createTaskViaService(t, p, task.CreateInput{ChannelID: "dm-a-b", Summary: "dm task", CreatorID: "u-a", AssigneeID: "u-b"})
+	api.On("GetChannel", "dm-a-b").Return(&mmmodel.Channel{Id: "dm-a-b", Type: mmmodel.ChannelTypeDirect, Name: "u-a__u-b"}, nil).Maybe()
+	api.On("GetUser", "u-a").Return(&mmmodel.User{Id: "u-a", DeleteAt: 0}, nil).Maybe()
+	api.On("GetDirectChannel", "u-a", "u-a").Return(&mmmodel.Channel{Id: "dm-a-self", Type: mmmodel.ChannelTypeDirect}, nil).Maybe()
+	api.On("GetChannelMember", mock.Anything, mock.Anything).Return(&mmmodel.ChannelMember{}, nil).Maybe()
+
+	p.UserHasBeenDeactivated(nil, &mmmodel.User{Id: "u-b"})
+
+	got, err := p.taskService.Get(created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "dm-a-self", got.ChannelID, "task relocated to active participant's self-DM")
+}
+

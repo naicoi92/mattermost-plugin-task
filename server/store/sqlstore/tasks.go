@@ -380,6 +380,37 @@ func (s *SQLStore) ListAllTasksForTest(ctx context.Context) ([]model.TaskRow, er
 	return scanTaskRows(rows)
 }
 
+// ListTasksByMember returns every task on which userID holds the creator or
+// assignee role (JOIN task_members), ordered by order_key, capped at limit.
+// Used by the deactivation hook to find DM-scoped tasks that may need
+// migrating away from the deactivated user.
+func (s *SQLStore) ListTasksByMember(ctx context.Context, userID string, limit int) ([]model.TaskRow, error) {
+	if userID == "" {
+		return nil, errors.New("list tasks by member: user id is required")
+	}
+	t := s.tableName(taskTableShort)
+	m := s.tableName(membersTableShort)
+	selCols := make([]string, len(taskColumns))
+	for i, c := range taskColumns {
+		selCols[i] = "t." + c
+	}
+	qb := s.builder().
+		Select(selCols...).
+		From(t + " t").
+		Join(m + " m ON m.task_id = t.id").
+		Where(sq.Eq{"m.user_id": userID}).
+		OrderByClause(s.escapeField("t.order_key") + " ASC")
+	if limit > 0 {
+		qb = qb.Limit(uint64(limit))
+	}
+	rows, err := qb.QueryContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks by member %s: %w", userID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanTaskRows(rows)
+}
+
 // applyTaskFilters returns a SelectBuilder with the WHERE clauses implied by
 // the ListQuery (scope, status, priority, due). Columns selects what to
 // project; both ListTasks and CountTasksByStatus use it so the WHERE stays
