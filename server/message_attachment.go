@@ -549,6 +549,72 @@ func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
 	return posts
 }
 
+// commentRoot resolves the card post that a new comment should thread under,
+// returning (rootPostID, channelID, true) or ("", "", false) if none.
+//
+// Simple model: the task is already surfaced via its card posts (channel card,
+// DM card, or a share card); a comment is a reply under ONE of those cards. We
+// pick the card the commenter can actually post into:
+//  1. Prefer the card in the channel the viewer is acting from (reqChannelID)
+//     when the commenter is a member of it.
+//  2. Else prefer any tracked card whose channel the commenter is a member of.
+//  3. Else fall back to the first tracked card (the commenter could view the
+//     task, so the card is at least readable; CreatePost may still reject if the
+//     host denies posting).
+//
+// Channel + root are always sourced from the SAME card post, so the reply lands
+// inside the fetched thread (no root/channel mismatch → no "(deleted)").
+func (p *Plugin) commentRoot(taskID string, t *taskmodel.Task, commenterID, reqChannelID string) (rootID, channelID string, ok bool) {
+	type candidate struct {
+		postID, channel string
+	}
+	var cands []candidate
+	seen := map[string]struct{}{}
+	add := func(postID string) {
+		if postID == "" {
+			return
+		}
+		if _, dup := seen[postID]; dup {
+			return
+		}
+		seen[postID] = struct{}{}
+		post, err := p.API.GetPost(postID)
+		if err != nil || post == nil || post.ChannelId == "" {
+			return
+		}
+		cands = append(cands, candidate{postID: postID, channel: post.ChannelId})
+	}
+	for _, tp := range p.taskPosts(taskID) {
+		add(tp.PostID)
+	}
+	add(t.ChannelPostID)
+	add(t.DMPostID)
+
+	isMember := func(ch string) bool {
+		return p.channelMembership() != nil && p.channelMembership().IsChannelMember(commenterID, ch)
+	}
+
+	// 1. Requested channel + membership.
+	if reqChannelID != "" {
+		for _, c := range cands {
+			if c.channel == reqChannelID && isMember(c.channel) {
+				return c.postID, c.channel, true
+			}
+		}
+	}
+	// 2. Any card the commenter is a member of.
+	for _, c := range cands {
+		if isMember(c.channel) {
+			return c.postID, c.channel, true
+		}
+	}
+	// 3. First tracked card (best-effort).
+	if len(cands) > 0 {
+		return cands[0].postID, cands[0].channel, true
+	}
+	return "", "", false
+}
+
 // cardPostInChannel returns the post id of the task's card post that lives in
 // channelID (any kind: channel card, DM card, or a shared card), or "" if none.
 // Used by createComment (Change B) to resolve the thread root for the channel
