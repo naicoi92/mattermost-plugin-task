@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -188,27 +187,34 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// Create in an outer tx because CreatePost is a server RPC that can't
 	// participate in a DB transaction.
 	var channelPostID, dmPostID string
-	// Decide where the announce card is posted. A channel task (ChannelID set)
-	// posts into its own channel. A personal task (empty ChannelID) created in
-	// an originating channel (e.g. a DM) posts into post_channel_id instead —
-	// but only after verifying the requesting user is a member of that channel,
-	// so a client cannot direct the bot to post into a channel the caller cannot
-	// access (defense-in-depth on client-controlled post_channel_id). The task's
-	// channel_id (scope) is never changed here; only the card destination is
-	// decided. The DM-assignee notification below is left untouched (additive).
+	// Card-preview model: post the task card where the viewer will see it.
+	//  - A channel task posts into its own channel (created.ChannelID) — this
+	//    id is server-side truth, trusted.
+	//  - A personal task created inside a DM (no ChannelID) posts into the
+	//    originating channel the client sent as post_channel_id. This is
+	//    client-controlled, so it is gated by an IsChannelMember check to keep
+	//    the bot from being directed into a channel the caller cannot access.
+	//  - A task with an assignee != creator sends a bot DM card as a notification
+	//    surface. The task's channel_id (scope) is never changed here.
 	announceChannel := created.ChannelID
 	if announceChannel == "" {
 		announceChannel = req.PostChannelID
 	}
+	// Defense-in-depth: a client-controlled announce channel must be verified —
+	// the bot must not post into a channel the caller is not a member of.
 	if announceChannel != "" && announceChannel != created.ChannelID {
 		if !p.channelMembership().IsChannelMember(currentUserID(r), announceChannel) {
-			p.API.LogDebug("Ignoring post_channel_id announce: caller is not a channel member",
-				"task_id", created.ID, "post_channel_id", announceChannel)
+			p.API.LogWarn("createTask: caller is not a member of post_channel_id; skipping card",
+				"task_id", created.ID, "caller", currentUserID(r), "post_channel_id", announceChannel)
 			announceChannel = ""
 		}
 	}
 	if announceChannel != "" {
 		channelPostID = p.postCard(announceChannel, created)
+		if channelPostID == "" {
+			p.API.LogError("createTask: postCard failed; no card preview",
+				"task_id", created.ID, "announce_channel", announceChannel)
+		}
 	}
 	if created.AssigneeID != "" && created.AssigneeID != created.CreatorID {
 		dmPostID = p.postCardDM(created.AssigneeID, created)
@@ -791,35 +797,26 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Comment-as-thread: create the reply post in the task's card thread, then
-	// link the post to the task. Change B: for a SHARED task the comment must
-	// thread under the card post in the channel the viewer is acting from
-	// (req.ChannelID, sent by the webapp as the active channel), not the home
-	// channel card. Resolve the root from the card post living in that channel;
-	// if none is found there, fall back to the legacy home/DM-card resolution
-	// (and warn) so channel and root stay consistent.
-	rootID := ""
-	postChannel := ""
-	if req.ChannelID != "" {
-		if rp := p.cardPostInChannel(t.ID, req.ChannelID); rp != "" {
-			rootID = rp
-			postChannel = req.ChannelID
-		} else {
-			p.API.LogWarn("createComment: no task card in the requested channel; falling back to home/DM card",
-				"task_id", t.ID, "requested_channel_id", req.ChannelID)
-		}
+	// Comment-as-thread: the comment is a reply in the task's card thread.
+	// Resolve the card post that backs this task (its root + channel) and reply
+	// under it. The card post id is already tracked in task_posts / on the task
+	// (ChannelPostID/DMPostID); we just need ONE card the commenter can post
+	// into. Prefer a card whose channel the commenter is a member of; otherwise
+	// fall back to the first tracked card. The comment goes into THAT card's
+	// channel, so channel + root stay consistent and the reply is always in the
+	// fetched thread.
+	rootID, channelID, ok, err := p.commentRoot(taskID, t, actorID, req.ChannelID)
+	if err != nil {
+		p.API.LogError("createComment: transient error resolving card root", "task_id", taskID, "error", err)
+		p.writeError(w, http.StatusInternalServerError, "failed to resolve task card")
+		return
 	}
-	if rootID == "" {
-		rootID = t.ChannelPostID
-		if rootID == "" {
-			rootID = t.DMPostID
-		}
-		postChannel = t.ChannelID
-		if postChannel == "" {
-			postChannel = t.AssigneeID // personal task: post in the assignee's context
-		}
+	if !ok {
+		p.API.LogWarn("createComment: task has no card root; rejecting comment",
+			"task_id", taskID, "requested_channel_id", req.ChannelID)
+		p.writeError(w, http.StatusBadRequest, "task has no card to comment on")
+		return
 	}
-	channelID := postChannel
 	commentPost := &mmmodel.Post{
 		// Change A: the comment post is authored by the HUMAN commenter, not the
 		// bot. This fixes channel attribution (the real person appears as the
@@ -833,7 +830,23 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 	created, appErr := p.API.CreatePost(commentPost)
 	if appErr != nil {
+		p.API.LogError("createComment: CreatePost failed",
+			"task_id", taskID, "actor_id", actorID,
+			"root_id", rootID, "post_channel_id", channelID,
+			"user_id", actorID, "error", appErr.Error(),
+			"status_code", appErr.StatusCode)
 		p.writeError(w, appErr.StatusCode, "failed to create comment post: "+appErr.Error())
+		return
+	}
+	if created == nil {
+		// Defensive: the plugin API contract returns a non-nil post on success,
+		// but a nil post with a nil error has been observed in production (the
+		// caller would otherwise dereference created.Id below and panic the
+		// plugin process, surfacing as an RPC EOF / crash loop). Log loudly and
+		// fail the request cleanly instead of crashing.
+		p.API.LogError("createComment: CreatePost returned a nil post with no error",
+			"task_id", taskID, "actor_id", actorID, "channel_id", channelID, "root_id", rootID)
+		p.writeError(w, http.StatusInternalServerError, "failed to create comment post")
 		return
 	}
 
@@ -858,7 +871,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	p.updateTaskCards(t)
 
 	w.WriteHeader(http.StatusCreated)
-	p.writeJSON(w, comment)
+	p.writeJSON(w, toCommentResponse(comment, created.Message, false))
 
 	// Real-time: a new comment arrived — Task Detail comment list refreshes (#32).
 	// Reload the task: AddComment bumped UpdatedAt, so the pre-comment snapshot `t`
@@ -883,6 +896,23 @@ type commentResponse struct {
 	CreatedAt int64  `json:"created_at"`
 	Content   string `json:"content"`
 	Deleted   bool   `json:"deleted"`
+}
+
+// toCommentResponse builds the transport commentResponse from a task_comments
+// row snapshot plus content/deleted resolved from the backing post. Shared by
+// listComments (content from a batched thread fetch) and createComment
+// (content from the just-created post). AuthorID/ID/... come from the row
+// snapshot, NOT re-derived from the post, so audit survives post deletion.
+func toCommentResponse(c taskmodel.TaskComment, content string, deleted bool) commentResponse {
+	return commentResponse{
+		ID:        c.ID,
+		TaskID:    c.TaskID,
+		PostID:    c.PostID,
+		AuthorID:  c.AuthorID,
+		CreatedAt: c.CreatedAt,
+		Content:   content,
+		Deleted:   deleted,
+	}
 }
 
 // listComments handles GET /tasks/:id/comments, returning comments newest-first
@@ -915,60 +945,41 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve content via a SINGLE batched GetPostThread(rootID) call (Q-B
-	// resolved: GetPostsByIds is not exposed on the pinned plugin API, so we
-	// use GetPostThread, which returns the root + every reply in one call).
-	// The comment threads under EVERY card post of the task are fetched: the
-	// home channel card, the assignee DM card, AND any shared-card channel. A
-	// shared task has ChannelPostID="" and DMPostID="", so a single-root
-	// lookup would mark every comment deleted (Bug: comments rendered
-	// "(comment deleted)" for shared tasks). Each card post is at most 3
-	// (home + DM + 1 share), so this is bounded — not N+1 over comments.
-	posts := map[string]*mmmodel.Post{}
-	rootIDs := map[string]struct{}{}
-	if t.ChannelPostID != "" {
-		rootIDs[t.ChannelPostID] = struct{}{}
-	}
-	if t.DMPostID != "" {
-		rootIDs[t.DMPostID] = struct{}{}
-	}
-	for _, tp := range p.taskPosts(taskID) {
-		rootIDs[tp.PostID] = struct{}{}
-	}
-	for rootID := range rootIDs {
-		thread, appErr := p.API.GetPostThread(rootID)
-		if appErr != nil {
-			p.API.LogWarn("listComments: failed to load a comment thread",
-				"task_id", taskID, "root_id", rootID, "error", appErr.Error())
-			continue
-		}
-		if thread != nil {
-			maps.Copy(posts, thread.Posts)
-		}
-	}
-	if len(posts) == 0 {
-		// No card post (should not happen for a task with comments, but handled
-		// defensively): every comment is treated as deleted. No N+1 fallback.
-		p.API.LogError("listComments: task has no card post root; comments returned as deleted", "task_id", taskID)
-	}
-
+	// Resolve each comment's content directly from its backing post via GetPost.
+	// The comment-as-thread design stores only the post_id link in task_comments;
+	// the content lives in the Mattermost post. A direct GetPost per comment is
+	// used (NOT GetPostThread over card roots): it is robust to root/channel
+	// resolution mismatches and to thread-cache lag — the post is always
+	// retrievable by its id.
+	//
+	// Error handling distinguishes a truly-missing post (deleted out-of-band;
+	// AppError 404) from a transient backend failure (5xx/network). Only the
+	// former yields deleted:true; a transient error aborts the whole request so
+	// the caller can retry instead of silently showing comments as deleted.
 	out := make([]commentResponse, len(comments))
 	for i, c := range comments {
-		resp := commentResponse{
-			ID:        c.ID,
-			TaskID:    c.TaskID,
-			PostID:    c.PostID,
-			AuthorID:  c.AuthorID, // row snapshot, NOT re-derived from the post
-			CreatedAt: c.CreatedAt,
+		post, pErr := p.API.GetPost(c.PostID)
+		switch {
+		case pErr == nil && post != nil:
+			out[i] = toCommentResponse(c, post.Message, false)
+		case pErr != nil && pErr.StatusCode == http.StatusNotFound:
+			// The backing post was deleted out-of-band. Mark deleted but keep the
+			// row so the feed shows the placeholder.
+			out[i] = toCommentResponse(c, "", true)
+		default:
+			// Transient backend error (or an unexpected nil post without error).
+			// Fail the request instead of rendering a live comment as deleted.
+			p.API.LogError("listComments: transient error resolving comment post",
+				"task_id", taskID, "comment_id", c.ID, "post_id", c.PostID,
+				"status_code", func() int {
+					if pErr != nil {
+						return pErr.StatusCode
+					}
+					return 0
+				}())
+			p.writeError(w, http.StatusInternalServerError, "failed to load comments")
+			return
 		}
-		if post, ok := posts[c.PostID]; ok {
-			resp.Content = post.Message
-			resp.Deleted = false
-		} else {
-			resp.Content = ""
-			resp.Deleted = true
-		}
-		out[i] = resp
 	}
 
 	// Newest-first: descending created_at, descending id (ULID is monotonic) as

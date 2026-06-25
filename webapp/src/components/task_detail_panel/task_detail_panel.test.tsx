@@ -253,16 +253,16 @@ function findComposer(root: TestRenderer.ReactTestInstance) {
     return root.
         findAllByType('textarea').
         find((t) =>
-            String(t.props.className ?? '').includes(
-                'task-detail__composer-textarea',
-            ),
+            String(t.props.className ?? '').includes('task-detail__comment-input'),
         );
 }
 
 function findSendButton(root: TestRenderer.ReactTestInstance) {
     return root.
         findAllByType('button').
-        find((b) => String(b.props.className ?? '').includes('task-btn--primary'));
+        find((b) =>
+            String(b.props.className ?? '').includes('task-detail__comment-send'),
+        );
 }
 
 // defer returns a controllable pending promise for dedupe timing tests.
@@ -419,6 +419,7 @@ describe('Activity feed merge/sort (Task 7.3 — AC5)', () => {
             actor_id: 'a',
             event_type: eventType,
             created_at: createdAt,
+            to_value: undefined,
         };
     }
     function cm(id: string, createdAt: number): Comment {
@@ -451,6 +452,31 @@ describe('Activity feed merge/sort (Task 7.3 — AC5)', () => {
         const events = [ev('a1', 2000), ev('b2', 2000)];
         const merged = mergeActivity([], events);
         expect(merged.map((m) => m.id)).toEqual(['b2', 'a1']);
+    });
+
+    // Bug: a comment produces BOTH a task_comments row AND an EventCommented
+    // audit event whose to_value points at the same comment id. The merged
+    // feed used to render both as separate items (a comment card + a bare
+    // "@author đã bình luận" event with no body) — appearing as "2 comment boxes".
+    // mergeActivity MUST drop the EventCommented whose to_value is a comment id
+    // already present in the feed (the comment item carries the body).
+    test('dedupes EventCommented whose to_value is a present comment id', () => {
+        const comment = cm('c1', 2000);
+        const events = [
+            {...ev('e-comment', 2000, 'commented'), to_value: 'c1'},
+            ev('e-other', 1000, 'status_changed'),
+        ];
+        const merged = mergeActivity([comment], events);
+        expect(merged.map((m) => m.id)).toEqual(['c1', 'e-other']);
+    });
+
+    // Keep an EventCommented whose to_value does NOT match a present comment
+    // (e.g. its backing post was deleted out-of-band so the comment row is gone):
+    // it still shows in the feed as a bare event (author + "đã bình luận").
+    test('keeps EventCommented whose to_value has no matching comment', () => {
+        const events = [{...ev('e-orphan', 2000, 'commented'), to_value: 'gone'}];
+        const merged = mergeActivity([], events);
+        expect(merged.map((m) => m.id)).toEqual(['e-orphan']);
     });
 });
 
@@ -836,7 +862,7 @@ describe('GAP 4 — AC7 element-level composer (task-details-panel)', () => {
         const composer = textareas[0]!;
         expect(composer.type).toBe('textarea');
         expect(String(composer.props.className)).toContain(
-            'task-detail__composer-textarea',
+            'task-detail__comment-input',
         );
     });
 
@@ -1010,5 +1036,276 @@ describe('GAP 5 — AC5/AC6 status-dot wiring (task-details-panel styling)', () 
             'task-detail__activity-avatar--offline',
         );
         expect(actorStatusClass('')).toBe('task-detail__activity-avatar--offline');
+    });
+});
+
+describe('FIX-B — composer markup follows open-design (task-comment-composer-fix)', () => {
+    test('composer uses .comment-box > .comment-field with a textarea + icon-only send button', async () => {
+        resetHarnessState();
+        setupClientMocks({});
+        let renderer!: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = renderPanel();
+        });
+        const root = renderer.root;
+
+        // The open-design container (.comment-box) wraps a .comment-field that
+        // holds the textarea + the send control.
+        const box = root.
+            findAllByType('div').
+            find((d) =>
+                String(d.props.className ?? '').includes('task-detail__comment-box'),
+            );
+        expect(box).toBeTruthy();
+        if (!box) {
+            throw new Error('expected a .task-detail__comment-box container');
+        }
+
+        const field = box.
+            findAllByType('div').
+            find((d) =>
+                String(d.props.className ?? '').includes('task-detail__comment-field'),
+            );
+        expect(field).toBeTruthy();
+        if (!field) {
+            throw new Error('expected a .task-detail__comment-field inside the box');
+        }
+
+        // The field holds exactly one textarea (the composer).
+        const textareas = field.findAllByType('textarea');
+        expect(textareas).toHaveLength(1);
+        expect(String(textareas[0]!.props.className)).toContain(
+            'task-detail__comment-input',
+        );
+
+        // The field holds exactly one icon-only send button (.comment-send),
+        // NOT the old text "Gửi" primary button (.task-btn--primary).
+        const sendBtns = field.
+            findAllByType('button').
+            filter((b) =>
+                String(b.props.className ?? '').includes('task-detail__comment-send'),
+            );
+        expect(sendBtns).toHaveLength(1);
+        expect(sendBtns[0]!.props['aria-label']).toBeTruthy();
+
+        // The old flex-row container (.task-detail__comment-input as a DIV)
+        // must no longer exist.
+        const oldContainer = root.
+            findAllByType('div').
+            find(
+                (d) =>
+                    String(d.props.className ?? '').trim() ===
+					'task-detail__comment-input',
+            );
+        expect(oldContainer).toBeFalsy();
+    });
+});
+
+// ============================================================================
+// FEAT-C — @mention autocomplete (task-comment-composer-fix)
+// ============================================================================
+
+function findMentionDropdown(root: TestRenderer.ReactTestInstance) {
+    return root.
+        findAllByType('ul').
+        find((ul) =>
+            String(ul.props.className ?? '').includes(
+                'task-detail__mention-dropdown',
+            ),
+        );
+}
+
+function findMentionItems(root: TestRenderer.ReactTestInstance) {
+    return root.
+        findAllByType('li').
+        filter((li) =>
+            String(li.props.className ?? '').includes('task-detail__mention-item'),
+        );
+}
+
+// Wait for the debounced (150ms) mention fetch + its async resolution to flush.
+async function flushMentionFetch() {
+    await act(async () => {
+        await new Promise((r) => setTimeout(r, 220));
+    });
+}
+
+describe('FEAT-C — @mention autocomplete (task-comment-composer-fix)', () => {
+    test('3.2: typing fast coalesces to the last query (debounce + drop-stale)', async () => {
+        jest.useFakeTimers();
+        try {
+            resetHarnessState();
+            (client.searchUsers as jest.Mock).mockResolvedValue([
+                {id: 'u-ab', username: 'abby'},
+            ]);
+            setupClientMocks({task: makeTask({channel_id: 'ch1'})});
+            let renderer!: TestRenderer.ReactTestRenderer;
+            await act(async () => {
+                renderer = renderPanel();
+            });
+
+            // Type ' @a' then ' @ab' before the 150ms debounce fires.
+            let composer = findComposer(renderer.root)!;
+            await act(async () => {
+                composer.props.onChange({
+                    target: {value: ' @a', selectionStart: 3},
+                });
+            });
+            composer = findComposer(renderer.root)!;
+            await act(async () => {
+                composer.props.onChange({
+                    target: {value: ' @ab', selectionStart: 4},
+                });
+            });
+
+            // No fetch yet (debounced).
+            expect(client.searchUsers as jest.Mock).not.toHaveBeenCalled();
+
+            // Advance past the debounce window.
+            await act(async () => {
+                jest.advanceTimersByTime(200);
+            });
+
+            // Only the LAST query ('ab') was issued — the 'a' fetch was coalesced away.
+            const calls = (client.searchUsers as jest.Mock).mock.calls;
+            expect(calls.length).toBe(1);
+            expect(calls[0]![0]).toBe('ab');
+
+            // The dropdown reflects the last query's result.
+            const items = findMentionItems(renderer.root);
+            expect(items.length).toBe(1);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('3.4: ArrowDown/ArrowUp wrap highlight; Enter inserts; Esc closes without inserting', async () => {
+        resetHarnessState();
+        (client.searchUsers as jest.Mock).mockResolvedValue([
+            {id: 'u1', username: 'alice'},
+            {id: 'u2', username: 'bob'},
+            {id: 'u3', username: 'carol'},
+        ]);
+        setupClientMocks({task: makeTask({channel_id: 'ch1'})});
+        let renderer!: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = renderPanel();
+        });
+
+        // Open the dropdown by typing ' @'.
+        let composer = findComposer(renderer.root)!;
+        await act(async () => {
+            composer.props.onChange({target: {value: ' @', selectionStart: 2}});
+        });
+        await flushMentionFetch();
+
+        let items = findMentionItems(renderer.root);
+        expect(items).toHaveLength(3);
+
+        // First item is highlighted by default.
+        expect(String(items[0]!.props.className)).toContain('--highlighted');
+        expect(String(items[1]!.props.className)).not.toContain('--highlighted');
+
+        // ArrowDown moves highlight to the 2nd item.
+        composer = findComposer(renderer.root)!;
+        act(() => {
+            composer.props.onKeyDown({
+                key: 'ArrowDown',
+                preventDefault: () => {},
+            });
+        });
+        items = findMentionItems(renderer.root);
+        expect(String(items[0]!.props.className)).not.toContain('--highlighted');
+        expect(String(items[1]!.props.className)).toContain('--highlighted');
+
+        // ArrowUp from the 2nd item wraps? No — go back up to 1st, then ArrowUp
+        // again to wrap to the LAST (carol). Two ArrowUps from index 1 → index 2 (wrap).
+        composer = findComposer(renderer.root)!;
+        act(() => {
+            composer.props.onKeyDown({key: 'ArrowUp', preventDefault: () => {}});
+        });
+        composer = findComposer(renderer.root)!;
+        act(() => {
+            composer.props.onKeyDown({key: 'ArrowUp', preventDefault: () => {}});
+        });
+        items = findMentionItems(renderer.root);
+        expect(String(items[2]!.props.className)).toContain('--highlighted');
+
+        // Enter inserts the highlighted mention (@carol) and closes the dropdown.
+        composer = findComposer(renderer.root)!;
+        await act(async () => {
+            composer.props.onKeyDown({
+                key: 'Enter',
+                shiftKey: false,
+                preventDefault: () => {},
+            });
+        });
+        expect(findMentionDropdown(renderer.root)).toBeFalsy();
+        expect(findComposer(renderer.root)!.props.value).toContain('@carol');
+    });
+
+    test('3.4: Escape closes the dropdown without inserting', async () => {
+        resetHarnessState();
+        (client.searchUsers as jest.Mock).mockResolvedValue([
+            {id: 'u1', username: 'alice'},
+        ]);
+        setupClientMocks({task: makeTask({channel_id: 'ch1'})});
+        let renderer!: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = renderPanel();
+        });
+
+        let composer = findComposer(renderer.root)!;
+        await act(async () => {
+            composer.props.onChange({target: {value: ' @', selectionStart: 2}});
+        });
+        await flushMentionFetch();
+        expect(findMentionDropdown(renderer.root)).toBeTruthy();
+
+        composer = findComposer(renderer.root)!;
+        act(() => {
+            composer.props.onKeyDown({key: 'Escape', preventDefault: () => {}});
+        });
+        expect(findMentionDropdown(renderer.root)).toBeFalsy();
+
+        // Text unchanged (still just ' @').
+        expect(findComposer(renderer.root)!.props.value).toBe(' @');
+    });
+
+    test('3.6: selecting a mention then sending posts content containing @username verbatim', async () => {
+        resetHarnessState();
+        (client.createComment as jest.Mock).mockResolvedValue(
+            makeComment({id: 'c-new', content: 'x', created_at: 5000}),
+        );
+        (client.searchUsers as jest.Mock).mockResolvedValue([
+            {id: 'u-carol', username: 'carol'},
+        ]);
+        setupClientMocks({task: makeTask({channel_id: 'ch1'})});
+        let renderer!: TestRenderer.ReactTestRenderer;
+        await act(async () => {
+            renderer = renderPanel();
+        });
+
+        // Open dropdown and pick 'carol' via mouseDown on the item.
+        const composer = findComposer(renderer.root)!;
+        await act(async () => {
+            composer.props.onChange({target: {value: ' @', selectionStart: 2}});
+        });
+        await flushMentionFetch();
+        const item = findMentionItems(renderer.root)[0]!;
+        await act(async () => {
+            item.props.onMouseDown({preventDefault: () => {}});
+        });
+
+        // The composer now contains '@carol '. Click the send button.
+        const send = findSendButton(renderer.root)!;
+        await act(async () => {
+            send.props.onClick();
+        });
+
+        const call = (client.createComment as jest.Mock).mock.calls[0]!;
+        expect(call[1]).toMatchObject({
+            content: expect.stringContaining('@carol'),
+        });
     });
 });

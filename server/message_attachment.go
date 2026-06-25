@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -549,22 +550,87 @@ func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
 	return posts
 }
 
-// cardPostInChannel returns the post id of the task's card post that lives in
-// channelID (any kind: channel card, DM card, or a shared card), or "" if none.
-// Used by createComment (Change B) to resolve the thread root for the channel
-// the viewer is acting from, so a shared task's comment replies to the SHARE
-// card in the shared channel. Mirrors the idempotency lookup in shareTask.
-func (p *Plugin) cardPostInChannel(taskID, channelID string) string {
-	for _, tp := range p.taskPosts(taskID) {
-		post, gerr := p.API.GetPost(tp.PostID)
-		if gerr != nil || post == nil {
-			continue
+// commentRoot resolves the card post that a new comment should thread under,
+// returning (rootPostID, channelID, true) or ("", "", false) if none.
+//
+// Simple model: the task is already surfaced via its card posts (channel card,
+// DM card, or a share card); a comment is a reply under ONE of those cards. We
+// pick the card the commenter can actually post into:
+//  1. Prefer the card in the channel the viewer is acting from (reqChannelID)
+//     when the commenter is a member of it.
+//  2. Else prefer any tracked card whose channel the commenter is a member of.
+//  3. Else fall back to the first tracked card (the commenter could view the
+//     task, so the card is at least readable; CreatePost may still reject if the
+//     host denies posting).
+//
+// Channel + root are always sourced from the SAME card post, so the reply lands
+// inside the fetched thread (no root/channel mismatch → no "(deleted)").
+//
+// A card post that is missing (AppError 404) is skipped; a transient backend
+// error (any other status) is returned as err so createComment can emit 5xx
+// instead of wrongly concluding the task has no card.
+func (p *Plugin) commentRoot(taskID string, t *taskmodel.Task, commenterID, reqChannelID string) (rootID, channelID string, ok bool, err error) {
+	type candidate struct {
+		postID, channel string
+	}
+	var cands []candidate
+	seen := map[string]struct{}{}
+	add := func(postID string) bool {
+		if postID == "" {
+			return true
 		}
-		if post.ChannelId == channelID {
-			return tp.PostID
+		if _, dup := seen[postID]; dup {
+			return true
+		}
+		seen[postID] = struct{}{}
+		post, gErr := p.API.GetPost(postID)
+		if gErr != nil {
+			if gErr.StatusCode == http.StatusNotFound {
+				return true // card deleted out-of-band; skip it
+			}
+			return false // transient error: abort candidate collection
+		}
+		if post == nil || post.ChannelId == "" {
+			return true
+		}
+		cands = append(cands, candidate{postID: postID, channel: post.ChannelId})
+		return true
+	}
+	for _, tp := range p.taskPosts(taskID) {
+		if !add(tp.PostID) {
+			return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", tp.PostID)
 		}
 	}
-	return ""
+	if !add(t.ChannelPostID) {
+		return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", t.ChannelPostID)
+	}
+	if !add(t.DMPostID) {
+		return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", t.DMPostID)
+	}
+
+	isMember := func(ch string) bool {
+		return p.channelMembership() != nil && p.channelMembership().IsChannelMember(commenterID, ch)
+	}
+
+	// 1. Requested channel + membership.
+	if reqChannelID != "" {
+		for _, c := range cands {
+			if c.channel == reqChannelID && isMember(c.channel) {
+				return c.postID, c.channel, true, nil
+			}
+		}
+	}
+	// 2. Any card the commenter is a member of.
+	for _, c := range cands {
+		if isMember(c.channel) {
+			return c.postID, c.channel, true, nil
+		}
+	}
+	// 3. First tracked card (best-effort).
+	if len(cands) > 0 {
+		return cands[0].postID, cands[0].channel, true, nil
+	}
+	return "", "", false, nil
 }
 
 // cardChannelIDs returns the set of channel ids that hold one of the task's

@@ -11,6 +11,7 @@
 
 import * as client from 'client';
 import {ClientError} from 'client';
+import type {UserSearchResult} from 'client';
 import {useActiveLocale, useFormatMessage} from 'i18n_utils';
 import React, {useEffect, useRef, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
@@ -28,6 +29,10 @@ import MetaDropdown from 'components/shared/meta_dropdown';
 import {PriorityDot, priorityLabel} from 'components/shared/priority_pill';
 import StatusPill, {statusLabel} from 'components/shared/status_pill';
 import TaskCheck from 'components/shared/task_check';
+import {
+    applyMention,
+    detectMention,
+} from 'components/task_detail_panel/mention';
 import {isDueSoon} from 'components/task_sidebar/quick_list';
 import {
     useResolvedUser,
@@ -43,6 +48,7 @@ import type {
     TaskEvent,
     TaskPriority,
 } from 'types/tasks';
+import {TaskEventType} from 'types/tasks';
 
 // The plugin reducer is mounted by registerReducer at
 // state['plugins-<pluginId>'] (Mattermost convention), so the slice lives at a
@@ -133,8 +139,46 @@ export default function TaskDetailPanel({
     // scrollHeight and cap it at 120px.
     const composerRef = useRef<HTMLTextAreaElement>(null);
 
+    // @mention autocomplete state (FEAT-C). `mention` drives the dropdown;
+    // mentionReqId drops stale searchUsers responses, mentionCache avoids
+    // refetching the same query@channel, and mentionTimer debounces the fetch.
+    const [mention, setMention] = useState<{
+        open: boolean;
+        query: string;
+        candidates: UserSearchResult[];
+        highlight: number;
+    }>({open: false, query: '', candidates: [], highlight: 0});
+    const mentionReqId = useRef(0);
+    const mentionCache = useRef<Map<string, UserSearchResult[]>>(new Map());
+    const mentionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
     // Load the task + subtasks + comments + activity events whenever the
     // selected id changes.
+    // Reset the panel's data state immediately on taskID change so the UI never
+    // briefly renders task A's content while task B loads (CR #4). The fetch
+    // effect below repopulates these once the new task's data arrives.
+    useEffect(() => {
+        setFull(null);
+        setSubtasks([]);
+        setComments([]);
+        setEvents([]);
+        setError('');
+
+        // Reset draft composer/subtask state so a previous task's draft can't
+        // be submitted to the next one (CR re-review). Also cancel any pending
+        // mention debounce so a stale searchUsers result can't repopulate the
+        // dropdown for the new task.
+        setNewComment('');
+        setNewSubtask('');
+        setSubtaskAdding(false);
+        setMention({open: false, query: '', candidates: [], highlight: 0});
+        if (mentionTimer.current !== null) {
+            clearTimeout(mentionTimer.current);
+            mentionTimer.current = null;
+        }
+        mentionReqId.current++;
+    }, [taskID]);
+
     useEffect(() => {
         let cancelled = false;
         const load = async () => {
@@ -277,7 +321,16 @@ export default function TaskDetailPanel({
 
     // Resolve the assignee id → "@username" for display, and comment author
     // ids → labels. Hooks run before the early returns so the order is stable.
-    const assigneeLabel = useResolvedUser(full?.assignee_id ?? '').label;
+    // assigneeUser carries the profile (with .username) so the mention dropdown
+    // can seed candidates with the known assignee participant (FEAT-C).
+    const assigneeResolved = useResolvedUser(full?.assignee_id ?? '');
+    const assigneeLabel = assigneeResolved.label;
+    const assigneeUser = assigneeResolved.user;
+
+    // The channel whose members seed the @mention candidates: the task's home
+    // channel (where its card lives), falling back to the channel the viewer
+    // is acting from. '' scopes searchUsers to globally visible users.
+    // Declared after currentChannelID below; see mentionChannelID assignment.
 
     // Resolve labels for BOTH comment authors and event actors (the merged
     // Activity feed interleaves them, Decision 3).
@@ -309,6 +362,10 @@ export default function TaskDetailPanel({
     // The channel the user is currently viewing (center pane). Share Task posts
     // the card here. '' when there is no current channel (Share is disabled).
     const currentChannelID = useSelector(getCurrentChannelId) || '';
+
+    // @mention candidate channel (FEAT-C): the task's home channel, else the
+    // viewer's current channel. '' => globally visible users (personal task).
+    const mentionChannelID = full?.channel_id || currentChannelID || '';
     const channelName = useSelector((s: GlobalState) => {
         if (!channelIDForSelector) {
             return '';
@@ -523,6 +580,158 @@ export default function TaskDetailPanel({
             setNewComment('');
         } catch (err) {
             setError(messageFor(err));
+        }
+    };
+
+    // closeMention resets the @mention dropdown state and cancels any pending
+    // debounced fetch (FEAT-C).
+    const closeMention = () => {
+        if (mentionTimer.current !== null) {
+            clearTimeout(mentionTimer.current);
+            mentionTimer.current = null;
+        }
+        setMention((s) => ({...s, open: false}));
+    };
+
+    // fetchMentionCandidates runs the (debounced) searchUsers call for the
+    // current query@channel, deduped against the known assignee participant,
+    // and drops stale responses via mentionReqId. Results are cached per
+    // query@channel for the life of the panel.
+    const fetchMentionCandidates = (query: string) => {
+        const cacheKey = `${query}@${mentionChannelID}`;
+
+        // Invalidate any prior scheduled/in-flight lookup FIRST, before the cache
+        // fast-path. Otherwise a cached-query sequence like cached "@a" -> type
+        // "@ab" -> backspace to cached "@a" would leave the in-flight "ab"
+        // request alive to overwrite the restored "a" candidates (CR re-review).
+        if (mentionTimer.current !== null) {
+            clearTimeout(mentionTimer.current);
+            mentionTimer.current = null;
+        }
+        const myReq = ++mentionReqId.current;
+
+        const mergeParticipants = (
+            list: UserSearchResult[],
+            query: string,
+        ): UserSearchResult[] => {
+            // Seed with the known assignee (if resolved and not already present)
+            // so the dropdown is never empty while the fetch is in flight — but
+            // ONLY when the current query is empty or matches the assignee's
+            // username. Otherwise the dropdown would preselect an unrelated
+            // assignee for a query they don't match (CR #5).
+            const seed: UserSearchResult[] = [];
+            if (assigneeUser?.username && assigneeUser.id) {
+                const q = query.trim().toLowerCase();
+                const matches =
+					q === '' || assigneeUser.username.toLowerCase().includes(q);
+                if (matches) {
+                    seed.push({
+                        id: assigneeUser.id,
+                        username: assigneeUser.username,
+                        first_name: assigneeUser.first_name,
+                        last_name: assigneeUser.last_name,
+                        nickname: assigneeUser.nickname,
+                        is_bot: assigneeUser.is_bot,
+                        delete_at: assigneeUser.delete_at,
+                    });
+                }
+            }
+            const seen = new Set<string>();
+            const merged: UserSearchResult[] = [];
+            for (const u of [...seed, ...list]) {
+                if (!u.id || seen.has(u.id)) {
+                    continue;
+                }
+
+                // Client-side filter mirrors searchUsers (drop bots/deleted) so
+                // the seed participant is consistent with fetched results.
+                if (u.is_bot || u.delete_at) {
+                    continue;
+                }
+                seen.add(u.id);
+                merged.push(u);
+            }
+            merged.sort((a, b) => a.username.localeCompare(b.username));
+            return merged;
+        };
+
+        const apply = (list: UserSearchResult[]) => {
+            setMention((s) => ({
+                ...s,
+                candidates: mergeParticipants(list, query),
+                highlight: 0,
+            }));
+        };
+
+        if (mentionCache.current.has(cacheKey)) {
+            apply(mentionCache.current.get(cacheKey)!);
+            return;
+        }
+
+        // Show the seed (participants) immediately while the fetch runs.
+        apply([]);
+
+        mentionTimer.current = setTimeout(async () => {
+            try {
+                const list = await client.searchUsers(
+                    query,
+                    mentionChannelID || undefined,
+                    50,
+                );
+                if (myReq !== mentionReqId.current) {
+                    return; // a newer keystroke superseded this request
+                }
+                mentionCache.current.set(cacheKey, list);
+                apply(list);
+            } catch {
+                // Non-fatal: leave the seed candidates in place.
+            } finally {
+                if (myReq === mentionReqId.current) {
+                    mentionTimer.current = null;
+                }
+            }
+        }, 150);
+    };
+
+    // insertMention replaces the active @query token with @<username> + space,
+    // updates the composer text, repositions the caret, and closes the dropdown.
+    const insertMention = (username: string) => {
+        const el = composerRef.current;
+        const caret = el?.selectionStart ?? newComment.length;
+        const detection = detectMention(newComment, caret);
+        const ins = applyMention(newComment, caret, detection, username);
+        setNewComment(ins.text);
+        closeMention();
+
+        // Restore the caret after React re-renders with the new text.
+        // requestAnimationFrame may be absent in non-browser test envs; fall
+        // back to setTimeout(0) there so the caret still lands correctly.
+        const restoreCaret = () => {
+            const node = composerRef.current;
+            if (node) {
+                node.setSelectionRange(ins.caret, ins.caret);
+                node.focus();
+            }
+        };
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(restoreCaret);
+        } else {
+            setTimeout(restoreCaret, 0);
+        }
+    };
+
+    // handleComposerChange updates the comment text and re-evaluates the
+    // @mention trigger at the caret position.
+    const handleComposerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const val = e.target.value;
+        setNewComment(val);
+        const caret = e.target.selectionStart ?? val.length;
+        const detection = detectMention(val, caret);
+        if (detection.open) {
+            setMention((s) => ({...s, open: true, query: detection.query}));
+            fetchMentionCandidates(detection.query);
+        } else {
+            closeMention();
         }
     };
 
@@ -1006,12 +1215,14 @@ export default function TaskDetailPanel({
                         );
                     })}
                 </ul>
-                <div className='task-detail__comment-input'>
+            </div>
+            <div className='task-detail__comment-box'>
+                <div className='task-detail__comment-field'>
                     <textarea
                         ref={composerRef}
-                        className='task-input task-detail__composer-textarea'
+                        className='task-detail__comment-input'
                         value={newComment}
-                        onChange={(e) => setNewComment(e.target.value)}
+                        onChange={handleComposerChange}
                         onInput={(e) => {
                             // Auto-grow: reset then cap at 120px (AC7).
                             const el = e.currentTarget;
@@ -1020,6 +1231,41 @@ export default function TaskDetailPanel({
                         }}
                         placeholder={t('webapp.task.add_comment')}
                         onKeyDown={(e) => {
+                            // @mention keyboard nav (FEAT-C): when the dropdown
+                            // is open, ↑/↓ wrap the highlight, Enter inserts the
+                            // highlighted mention, Esc closes without inserting.
+                            if (mention.open && mention.candidates.length > 0) {
+                                if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    setMention((s) => ({
+                                        ...s,
+                                        highlight: (s.highlight + 1) % s.candidates.length,
+                                    }));
+                                    return;
+                                }
+                                if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    setMention((s) => {
+                                        const len = s.candidates.length;
+                                        return {...s, highlight: (((s.highlight - 1) + len) % len)};
+                                    });
+                                    return;
+                                }
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    const picked = mention.candidates[mention.highlight];
+                                    if (picked) {
+                                        insertMention(picked.username);
+                                    }
+                                    return;
+                                }
+                                if (e.key === 'Escape') {
+                                    e.preventDefault();
+                                    closeMention();
+                                    return;
+                                }
+                            }
+
                             const decision = composerKeyDown({
                                 key: e.key,
                                 shiftKey: e.shiftKey,
@@ -1033,14 +1279,43 @@ export default function TaskDetailPanel({
                         }}
                     />
                     <button
-                        className='task-btn task-btn--primary'
-                        onClick={addComment}
+                        className='task-detail__comment-send'
                         type='button'
+                        onClick={addComment}
                         disabled={!composerInputValid(newComment)}
+                        aria-label={t('webapp.task.comments.post')}
                     >
-                        {t('webapp.task.comments.post')}
+                        <CommentSendIcon/>
                     </button>
                 </div>
+                {mention.open && mention.candidates.length > 0 && (
+                    <ul
+                        className='task-detail__mention-dropdown'
+                        role='listbox'
+                    >
+                        {mention.candidates.map((u, i) => (
+                            <li
+                                key={u.id}
+                                role='option'
+                                aria-selected={i === mention.highlight}
+                                className={`task-detail__mention-item${i === mention.highlight ? ' task-detail__mention-item--highlighted' : ''}`}
+                                onMouseDown={(e) => {
+                                    // mousedown (not click) so the textarea
+                                    // never loses focus before we insert.
+                                    e.preventDefault();
+                                    insertMention(u.username);
+                                }}
+                                onMouseEnter={() => setMention((s) => ({...s, highlight: i}))}
+                            >
+                                <span className='task-detail__mention-avatar'>
+                                    {u.username.slice(0, 2).toUpperCase()}
+                                </span>
+                                {'@'}
+                                {u.username}
+                            </li>
+                        ))}
+                    </ul>
+                )}
             </div>
         </div>
     );
@@ -1197,6 +1472,23 @@ export function mergeActivity(
     events: TaskEvent[],
 ): ActivityItem[] {
     const typeRank = (item: ActivityItem) => (item.kind === 'comment' ? 0 : 1);
+
+    // Dedup: a comment produces BOTH a task_comments row AND an EventCommented
+    // audit event whose to_value points at the same comment id. Rendering both
+    // would show two items for one comment (a card with the body + a bare
+    // "@author đã bình luận" event). Drop EventCommented events whose to_value
+    // matches a comment id that is present in the feed; the comment item
+    // carries the body. An EventCommented whose to_value has no matching
+    // comment (e.g. backing post deleted out-of-band) is kept so the action
+    // still appears as a bare event.
+    const commentIDs = new Set(comments.map((c) => c.id));
+    const visibleEvents = events.filter((e) => {
+        if (e.event_type !== TaskEventType.Commented) {
+            return true;
+        }
+        return !(e.to_value && commentIDs.has(e.to_value));
+    });
+
     const items: ActivityItem[] = [
         ...comments.map((c) => ({
             kind: 'comment' as const,
@@ -1204,7 +1496,7 @@ export function mergeActivity(
             created_at: c.created_at,
             comment: c,
         })),
-        ...events.map((e) => ({
+        ...visibleEvents.map((e) => ({
             kind: 'event' as const,
             id: e.id,
             created_at: e.created_at,
@@ -1329,6 +1621,30 @@ function ShareIcon(): JSX.Element {
         >
             <path d='M9 3h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1h3'/>
             <path d='M8 1.5v8M5 4.5L8 1.5L11 4.5'/>
+        </svg>
+    );
+}
+
+// CommentSendIcon is the icon-only send control for the comment composer
+// (open-design .comment-send). Matches the reference arrow glyph in
+// mattermost-task-sidebar-3-2.html.
+function CommentSendIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{
+                width: 16,
+                height: 16,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.8,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+            }}
+        >
+            <path d='M2.5 8H13.5'/>
+            <path d='M9 3.5L13.5 8L9 12.5'/>
         </svg>
     );
 }
