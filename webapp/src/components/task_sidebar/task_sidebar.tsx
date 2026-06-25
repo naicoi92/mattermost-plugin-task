@@ -62,17 +62,6 @@ export interface TaskSidebarProps {
     onNewTask?: () => void;
 }
 
-// dmPartnerID parses the partner user id from a DM channel's name
-// ("<uid1>__<uid2>"), returning "" for non-DM channels / DM-with-self.
-function dmPartnerID(channel: Channel | undefined, currentUserID: string): string {
-    if (!channel || channel.type !== 'D') {
-        return '';
-    }
-    const parts = (channel.name || '').split('__').filter((s) => s.length > 0);
-    const partner = parts.find((id) => id !== currentUserID);
-    return partner || '';
-}
-
 export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskSidebarProps): JSX.Element {
     const dispatch = useDispatch();
     const slice = useSelector(selectSlice);
@@ -110,11 +99,10 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
         dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: ''});
     };
 
-    // Derive the Quick List context: for a DM, the "channel" passed to the
-    // list is the partner id (scope=direct); for a regular channel it is the
-    // channel id (scope=channel).
-    const isDM = channel?.type === 'D';
-    const quickListChannel = isDM ? dmPartnerID(channel, hostUserID) : hostChannelID;
+    // Under the all-channel model the Quick List always lists by the real
+    // channel id (team channel, DM, or self-DM) — no separate scope=direct
+    // partner_id path.
+    const quickListChannel = hostChannelID;
 
     return (
         <div

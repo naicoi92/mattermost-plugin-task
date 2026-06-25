@@ -216,49 +216,31 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 
 // listTasks handles GET /tasks with scope/status/due/cursor query params.
 //
-// Two scopes are supported (the desktop RHS picks based on channel type):
-//   - scope=channel&channel_id=X  → tasks of channel X
-//   - scope=direct&partner_id=Y   → tasks shared between the caller and Y
-//     (assignee OR creator for either user)
+// Under the all-channel model there is one list view: scope=channel with
+// channel_id = the home channel (team channel, DM, or self-DM). The legacy
+// scope=direct (JOIN task_members) path has been removed.
 //
 // Membership defense: for scope=channel the caller must be a member of the
 // channel they ask about, otherwise the request is rejected as 403 (this
 // prevents a user from enumerating another channel's tasks by guessing the
-// channel id). Scope=direct is bounded to the caller + the named partner, so
-// no third-party data can leak.
+// channel id).
 func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 
 	scope := task.Scope(q.Get("scope"))
 	channelID := q.Get("channel_id")
-	partnerID := q.Get("partner_id")
 	userID := currentUserID(r)
 
-	// Validate scope at the API boundary: empty or unknown scopes are client
-	// errors (400), not 500s from the deeper store layer.
-	if scope != task.ScopeChannel && scope != task.ScopeDirect {
-		p.writeError(w, http.StatusBadRequest, "scope must be 'channel' or 'direct'")
+	if scope != task.ScopeChannel {
+		p.writeError(w, http.StatusBadRequest, "scope must be 'channel'")
 		return
 	}
-
-	// Note: list-level membership is intentionally NOT pre-gated here. The
-	// host's GetChannelMember can flap on transient failures (cache miss,
-	// network blip), surfacing as a spurious 403. The scope=channel query is
-	// already data-bounded (returns only tasks whose channel_id matches the
-	// caller-supplied channelID), and the per-task CanUserViewTask rule gates
-	// getTask/list-subtasks/comments/events. List-level hard enforcement is
-	// tracked separately to avoid read-path flapping.
-	//
-	// TODO(perm): revisit list-level visibility filtering once a reliable,
-	// non-flapping membership signal is available so caller-supplied channel_id
-	// alone cannot discover tasks without CanUserListTask authorization.
 
 	query := task.ListQuery{
 		Scope:         scope,
 		UserID:        userID,
 		ChannelID:     channelID,
-		PartnerID:     partnerID,
 		Status:        q.Get("status"),
 		DueAt:         q.Get("due"),
 		Priority:      q.Get("priority"),
@@ -266,12 +248,8 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 		Limit:         limit,
 	}
 
-	if query.Scope == task.ScopeChannel && query.ChannelID == "" {
-		p.writeError(w, http.StatusBadRequest, "channel_id is required when scope=channel")
-		return
-	}
-	if query.Scope == task.ScopeDirect && (query.UserID == "" || query.PartnerID == "") {
-		p.writeError(w, http.StatusBadRequest, "partner_id is required when scope=direct")
+	if query.ChannelID == "" {
+		p.writeError(w, http.StatusBadRequest, "channel_id is required")
 		return
 	}
 	if query.Status != "" && !taskmodel.IsValidStatus(query.Status) {

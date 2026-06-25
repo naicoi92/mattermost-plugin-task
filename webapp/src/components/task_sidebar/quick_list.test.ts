@@ -49,11 +49,11 @@ describe('buildParams', () => {
         expect(p.limit).toBe(25);
     });
 
-    test('direct mode (DM) sends scope=direct + partner_id', () => {
+    test('direct mode (DM) now uses scope=channel + channel_id (all-channel model)', () => {
         const p = buildParams('all', 'u-partner', true, '');
-        expect(p.scope).toBe('direct');
-        expect(p.partner_id).toBe('u-partner');
-        expect(p.channel_id).toBeUndefined();
+        expect(p.scope).toBe('channel');
+        expect(p.channel_id).toBe('u-partner');
+        expect(p.partner_id).toBeUndefined();
     });
 
     test('channel mode without a channelID omits channel_id', () => {

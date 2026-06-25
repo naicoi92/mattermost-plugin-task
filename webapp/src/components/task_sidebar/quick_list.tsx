@@ -579,23 +579,18 @@ export function truncateDescription(
 export function buildParams(
     tab: FilterTab,
     channelID: string | undefined,
-    isDM: boolean,
+    _isDM: boolean,
     afterOrderKey: string,
 ): ListTasksParams {
     const filter = TAB_FILTER[tab];
+
+    // All-channel model: always list by the real channel id (team, DM, or
+    // self-DM). No separate scope=direct partner_id path.
     const params: ListTasksParams = {
-        scope: (isDM ? 'direct' : 'channel') as ListScope,
+        scope: 'channel' as ListScope,
         limit: pageLimit,
     };
-    if (isDM) {
-        // Direct mode requires partner_id; the webapp resolves it from the DM
-        // channel name in TaskSidebar and passes it via the currentUserID
-        // fallback below. The actual partner id arrives as channelID-encoded
-        // by the caller; here we forward it as partner_id.
-        if (channelID) {
-            params.partner_id = channelID;
-        }
-    } else if (channelID) {
+    if (channelID) {
         params.channel_id = channelID;
     }
     if (filter.status) {

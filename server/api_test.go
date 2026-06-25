@@ -894,19 +894,16 @@ func TestListTasks_BadStatus(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestListTasks_ReturnsDirectScope verifies the DM scope returns only tasks
-// where BOTH the caller and the partner are members (mutual-membership). A
-// task created by u-me and assigned to u-partner has both as members → returned.
-// A task created by u-third and assigned to u-other has neither → hidden.
-func TestListTasks_ReturnsDirectScope(t *testing.T) {
+// Under the all-channel model scope=direct is gone; tests below verify the
+// scope=channel path that replaces it (DM tasks now list by their DM channel
+// id, just like team-channel tasks).
+func TestListTasks_ChannelScope_ListsByChannelID(t *testing.T) {
 	p, _ := newTestPlugin(t)
-	// Shared task: u-me is creator, u-partner is assignee → both are members.
-	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
-	// Unrelated task: neither u-me nor u-partner is a member.
-	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "other", CreatorID: "u-third", AssigneeID: "u-other"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "dm-me-partner", Summary: "shared", CreatorID: "u-me", AssigneeID: "u-partner"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch-other", Summary: "other", CreatorID: "u-third", AssigneeID: "u-other"})
 
 	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-partner", "", "u-me"))
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=channel&channel_id=dm-me-partner", "", "u-me"))
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var got []model.Task
@@ -915,27 +912,10 @@ func TestListTasks_ReturnsDirectScope(t *testing.T) {
 	assert.Equal(t, "shared", got[0].Summary)
 }
 
-// TestListTasks_DirectScopePreventsPartnerEnumeration verifies the security
-// invariant: u-me cannot see u-third's tasks by passing partner_id=u-third,
-// because u-me is not a member of any task u-third relates to.
-func TestListTasks_DirectScopePreventsPartnerEnumeration(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	// u-third created a task assigned to u-other; u-me is not involved.
-	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "private", CreatorID: "u-third", AssigneeID: "u-other"})
-
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct&partner_id=u-third", "", "u-me"))
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var got []model.Task
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Empty(t, got, "u-me cannot enumerate u-third's tasks by guessing partner_id")
-}
-
-func TestListTasks_DirectScopeRequiresPartnerID(t *testing.T) {
+func TestListTasks_ChannelScopeRequiresChannelID(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct", "", "u-me"))
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=channel", "", "u-me"))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
