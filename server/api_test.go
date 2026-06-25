@@ -179,7 +179,8 @@ func TestCreateTask_DMChannelIDPostsSingleCard(t *testing.T) {
 	var got model.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, "dm1", got.ChannelID, "DM channel id is the task scope")
-	assert.Equal(t, "post-1", got.ChannelPostID, "single card posted into the DM")
+	require.NotNil(t, got.ChannelPostID)
+	assert.Equal(t, "post-1", *got.ChannelPostID, "single card posted into the DM")
 	p.API.(*plugintest.API).AssertNumberOfCalls(t, "CreatePost", 1)
 }
 
@@ -193,229 +194,6 @@ func TestCreateTask_ChannelIDRequired_NotPostChannelID(t *testing.T) {
 	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks", body, "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code, "channel_id required; post_channel_id is not a fallback")
 }
-
-// TestShareTask_PostsCardAndLinks verifies the happy path: sharing an existing
-// task into a channel posts a card there, links it via task_posts with
-// kind="share", and returns 200 {post_id}.
-func TestShareTask_PostsCardAndLinks(t *testing.T) {
-	p, st := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "Share me", CreatorID: "u1"})
-
-	api := p.API.(*plugintest.API)
-	api.On("GetChannelMember", "ch1", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
-
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"ch1"}`, "u1"))
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	var resp struct {
-		PostID string `json:"post_id"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "post-1", resp.PostID)
-
-	// The card was posted into the target channel.
-	api.AssertCalled(t, "CreatePost", mock.MatchedBy(func(post *mmmodel.Post) bool {
-		return post.ChannelId == "ch1"
-	}))
-
-	// A kind="share" task_post row links the card to the task.
-	posts, err := st.ListPosts(context.Background(), taskObj.ID)
-	require.NoError(t, err)
-	var found bool
-	for _, tp := range posts {
-		if tp.Kind == "share" && tp.PostID == "post-1" {
-			found = true
-		}
-	}
-	assert.True(t, found, "expected a kind=share task_post row with post_id=post-1, got %v", posts)
-}
-
-func TestShareTask_404_UnknownTask(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/nonexistent/share",
-		`{"channel_id":"ch1"}`, "u1"))
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
-func TestShareTask_400_MissingChannelID(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "x", CreatorID: "u1"})
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{}`, "u1"))
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestShareTask_403_NotViewer: a task in ch1 created by u1 — a third user
-// u3 (not creator/assignee AND not a member of ch1) cannot view/share it → 403.
-func TestShareTask_403_NotViewer(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "private", CreatorID: "u1"})
-
-	api := p.API.(*plugintest.API)
-	reseedGetChannelMember(t, api)
-	api.On("GetChannelMember", "ch1", "u3").Return(nil, nil).Maybe()
-
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"ch1"}`, "u3"))
-	assert.Equal(t, http.StatusForbidden, w.Code)
-}
-
-// TestShareTask_403_NotChannelMember: the caller can view the task (is creator)
-// but is NOT a member of the target channel → 403.
-func TestShareTask_403_NotChannelMember(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "share me", CreatorID: "u1"})
-
-	api := p.API.(*plugintest.API)
-	// u1 is NOT a member of ch-secret: drop the default member-true mock first.
-	reseedGetChannelMember(t, api)
-	api.On("GetChannelMember", "ch-secret", "u1").Return(nil, nil).Maybe()
-
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"ch-secret"}`, "u1"))
-	assert.Equal(t, http.StatusForbidden, w.Code)
-}
-
-// TestShareTask_Idempotent_ExistingCardInChannel: sharing into ch1 twice returns
-// the SAME post id and does NOT post a second card. The idempotency check
-// resolves the task's existing posts via GetPost; the second call short-
-// circuits when it finds a card already in ch1.
-func TestShareTask_Idempotent_ExistingCardInChannel(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "share me", CreatorID: "u1"})
-
-	api := p.API.(*plugintest.API)
-	api.On("GetChannelMember", "ch1", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
-	// Override the default GetPost mock: testify mock matches FIFO, so the
-	// general GetPost(mock.Anything) registered in newTestPlugin always wins
-	// over a specific one registered later. Clear the GetPost mocks and
-	// re-register specific-first, then the general fallback, so GetPost("post-1")
-	// returns the correct ChannelId for the idempotency check.
-	var kept []*mock.Call
-	for _, c := range api.ExpectedCalls {
-		if c.Method != "GetPost" {
-			kept = append(kept, c)
-		}
-	}
-	api.ExpectedCalls = kept
-	api.On("GetPost", "post-1").Return(&mmmodel.Post{Id: "post-1", ChannelId: "ch1"}, nil).Maybe()
-	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
-
-	// First share: posts post-1.
-	w1 := httptest.NewRecorder()
-	p.ServeHTTP(nil, w1, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"ch1"}`, "u1"))
-	require.Equal(t, http.StatusOK, w1.Code, w1.Body.String())
-	var resp1 struct {
-		PostID string `json:"post_id"`
-	}
-	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
-	assert.Equal(t, "post-1", resp1.PostID)
-
-	// Second share into the same channel: returns the SAME post id.
-	w2 := httptest.NewRecorder()
-	p.ServeHTTP(nil, w2, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"ch1"}`, "u1"))
-	require.Equal(t, http.StatusOK, w2.Code, w2.Body.String())
-	var resp2 struct {
-		PostID string `json:"post_id"`
-	}
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
-	assert.Equal(t, "post-1", resp2.PostID)
-
-	// Exactly ONE CreatePost call — no duplicate card.
-	api.AssertNumberOfCalls(t, "CreatePost", 1)
-}
-
-// TestShareTask_409_AlreadySharedElsewhere locks in the single-share invariant:
-// task_posts UNIQUE(task_id, kind) allows at most one kind="share" card, so
-// sharing a task that is already shared in another channel is rejected with
-// 409 (no orphan card, no constraint violation) rather than 500.
-func TestShareTask_409_AlreadySharedElsewhere(t *testing.T) {
-	p, _ := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "share me", CreatorID: "u1"})
-
-	api := p.API.(*plugintest.API)
-	api.On("GetChannelMember", "chA", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
-	api.On("GetChannelMember", "chB", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
-	// GetPost("post-1") reports the existing share lives in chA, so a chB share
-	// does not match idempotency and hits the single-share guard. Same FIFO
-	// caveat as TestShareTask_Idempotent_ExistingCardInChannel: re-register
-	// specific-first.
-	var kept []*mock.Call
-	for _, c := range api.ExpectedCalls {
-		if c.Method != "GetPost" {
-			kept = append(kept, c)
-		}
-	}
-	api.ExpectedCalls = kept
-	api.On("GetPost", "post-1").Return(&mmmodel.Post{Id: "post-1", ChannelId: "chA"}, nil).Maybe()
-	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
-
-	// First share to chA succeeds.
-	w1 := httptest.NewRecorder()
-	p.ServeHTTP(nil, w1, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"chA"}`, "u1"))
-	require.Equal(t, http.StatusOK, w1.Code, w1.Body.String())
-
-	// Second share to a DIFFERENT channel is rejected: single-share invariant.
-	w2 := httptest.NewRecorder()
-	p.ServeHTTP(nil, w2, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"chB"}`, "u1"))
-	assert.Equal(t, http.StatusConflict, w2.Code)
-	assert.Contains(t, w2.Body.String(), "already shared")
-
-	// Only the first share posted a card.
-	api.AssertNumberOfCalls(t, "CreatePost", 1)
-}
-
-// TestShareTask_Idempotent_EvenWhenSharedElsewhere locks the precedence between
-// the two guards: if the TARGET channel already has a card (any kind), the
-// share is idempotent (200, existing card) — NOT 409 — even when a share-kind
-// card exists in a different channel. The single-share 409 only applies to a
-// channel that has no existing card. (Spec: idempotent per channel.)
-func TestShareTask_Idempotent_EvenWhenSharedElsewhere(t *testing.T) {
-	p, st := newTestPlugin(t)
-	taskObj := createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "dual card", CreatorID: "u1"})
-	ctx := context.Background()
-	// Seed a channel-kind card in X and a share-kind card in Y.
-	require.NoError(t, st.AddPost(ctx, "row1", taskObj.ID, "post-x", model.PostKindChannel))
-	require.NoError(t, st.AddPost(ctx, "row2", taskObj.ID, "post-y", model.PostKindShare))
-
-	api := p.API.(*plugintest.API)
-	api.On("GetChannelMember", "X", "u1").Return(&mmmodel.ChannelMember{}, nil).Maybe()
-	var kept []*mock.Call
-	for _, c := range api.ExpectedCalls {
-		if c.Method != "GetPost" {
-			kept = append(kept, c)
-		}
-	}
-	api.ExpectedCalls = kept
-	api.On("GetPost", "post-x").Return(&mmmodel.Post{Id: "post-x", ChannelId: "X"}, nil).Maybe()
-	api.On("GetPost", "post-y").Return(&mmmodel.Post{Id: "post-y", ChannelId: "Y"}, nil).Maybe()
-	api.On("GetPost", mock.Anything).Return(&mmmodel.Post{Props: map[string]any{}}, nil).Maybe()
-
-	// Share to X: X already has the channel card → idempotent 200 (post-x), not
-	// 409, despite the share in Y.
-	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+taskObj.ID+"/share",
-		`{"channel_id":"X"}`, "u1"))
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var resp struct {
-		PostID string `json:"post_id"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "post-x", resp.PostID)
-	// No new card posted (idempotent).
-	api.AssertNumberOfCalls(t, "CreatePost", 0)
-}
-
 func TestCreateTask_RequiresSummary(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
@@ -497,7 +275,7 @@ func TestCreateComment_PersistsAndReturns(t *testing.T) {
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 	// Give the task a card root in ch1 so createComment can thread the reply
 	// under it (FIX-2: a task with no resolvable card root now rejects 400).
-	require.NoError(t, st.AddPost(context.Background(), "tp-card", created.ID, "cardpost", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardpost"))
 	api := p.API.(*plugintest.API)
 	reseedGetPost(t, api, map[string]*mmmodel.Post{
 		"cardpost": {Id: "cardpost", ChannelId: "ch1"},
@@ -521,7 +299,7 @@ func TestCreateComment_NonRegression_PathUnchanged(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 	// FIX-2: createComment now requires a resolvable card root. Seed one in ch1.
-	require.NoError(t, st.AddPost(context.Background(), "tp-card", created.ID, "cardpost", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardpost"))
 
 	var capturedPost *mmmodel.Post
 	api := p.API.(*plugintest.API)
@@ -611,7 +389,7 @@ func TestCreateComment_TaskNotFound(t *testing.T) {
 func TestCreateComment_ThreadsUnderCardInRequestedChannel(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
-	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "sharepost"))
 
 	api := p.API.(*plugintest.API)
 	reseedGetPost(t, api, map[string]*mmmodel.Post{
@@ -691,7 +469,7 @@ func TestCreateComment_ResponseIncludesContent(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 	// FIX-2: createComment now requires a resolvable card root. Seed one in ch1.
-	require.NoError(t, st.AddPost(context.Background(), "tp-card", created.ID, "cardpost", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardpost"))
 
 	// Capture the post the handler creates so we can assert the response PostID
 	// matches it and no extra GetPost lookup is issued.
@@ -741,7 +519,7 @@ func TestCreateComment_NilPostNoCrash(t *testing.T) {
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
 	// FIX-2: createComment requires a resolvable card root; seed one in ch1 so
 	// the handler reaches CreatePost (where the nil-post edge case lives).
-	require.NoError(t, st.AddPost(context.Background(), "tp-card", created.ID, "cardpost", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardpost"))
 
 	// Override CreatePost to return (nil, nil) — the production edge case.
 	api := p.API.(*plugintest.API)
@@ -896,7 +674,7 @@ func TestListComments_ResolvesContentViaGetPost(t *testing.T) {
 func TestListComments_DeletedFlagForMissingPost(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
-	require.NoError(t, st.AddPost(context.Background(), "tp-1", created.ID, "cardroot", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardroot"))
 	seedCommentRow(t, st, created.ID, "c1", "p-alive", "alice", 1000)
 	seedCommentRow(t, st, created.ID, "c2", "p-gone", "alice", 2000)
 
@@ -947,7 +725,7 @@ func TestListComments_DeletedFlagForMissingPost(t *testing.T) {
 func TestListComments_GetPostFallbackForUnresolvedComment(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
-	require.NoError(t, st.AddPost(context.Background(), "tp-1", created.ID, "cardroot", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardroot"))
 	seedCommentRow(t, st, created.ID, "c1", "p-orphan", "alice", 1000)
 
 	api := p.API.(*plugintest.API)
@@ -978,7 +756,7 @@ func TestListComments_GetPostFallbackForUnresolvedComment(t *testing.T) {
 func TestListComments_NewestFirstOrder(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
-	require.NoError(t, st.AddPost(context.Background(), "tp-1", created.ID, "cardroot", model.PostKindChannel))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardroot"))
 	seedCommentRow(t, st, created.ID, "c1", "pa", "alice", 1000)
 	seedCommentRow(t, st, created.ID, "c2", "pb", "alice", 2000)
 	seedCommentRow(t, st, created.ID, "c3", "pc", "alice", 3000)
@@ -1529,7 +1307,7 @@ func TestListComments_SharedChannelMemberAllowed(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
 	// Track a share card post in ch-shared (kind=share).
-	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "sharepost"))
 
 	api := p.API.(*plugintest.API)
 	reseedGetPost(t, api, map[string]*mmmodel.Post{
@@ -1555,7 +1333,7 @@ func TestListComments_SharedChannelMemberAllowed(t *testing.T) {
 func TestListComments_ChannelTaskReadableByOutsider(t *testing.T) {
 	p, st := newTestPlugin(t)
 	created := createTaskViaService(t, p, task.CreateInput{Summary: "shared", ChannelID: "ch-home", CreatorID: "u-creator"})
-	require.NoError(t, st.AddPost(context.Background(), "tp-share", created.ID, "sharepost", model.PostKindShare))
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "sharepost"))
 
 	api := p.API.(*plugintest.API)
 	reseedGetPost(t, api, map[string]*mmmodel.Post{

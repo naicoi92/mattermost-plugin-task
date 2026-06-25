@@ -30,8 +30,8 @@ var (
 	// ErrReminderNotFound is returned by MarkReminderFired when no reminder row
 	// matches the given reminder id.
 	ErrReminderNotFound = errors.New("task reminder not found")
-	// ErrPostNotFound is returned by GetPostByKind/DeletePost when no tracked
-	// post matches.
+	// ErrPostNotFound is returned by GetTaskIDByChannelPost when no task's card
+	// matches the given post id.
 	ErrPostNotFound = errors.New("task post not found")
 	// ErrCommentNotFound is returned by UnlinkComment when no comment mapping
 	// matches the given post id.
@@ -179,14 +179,12 @@ type Store interface {
 	ListDueReminders(ctx context.Context, nowMs, graceMs int64) ([]model.DueReminder, error)
 	MarkReminderFired(ctx context.Context, reminderID string, firedAt int64) error
 
-	// --- Posts (M2-4) ---
-	AddPost(ctx context.Context, id, taskID, postID, kind string) error
-	ListPosts(ctx context.Context, taskID string) ([]model.TaskPost, error)
-	GetPostByKind(ctx context.Context, taskID, kind string) (string, error)
-	// GetTaskIDByPost reverse-looks-up the task whose card is postID. Used by
-	// the MessageHasBeenPosted hook to detect task-thread replies.
-	GetTaskIDByPost(ctx context.Context, postID string) (string, error)
-	DeletePost(ctx context.Context, postID string) error
+	// SetChannelPostID sets the home-channel card post id for a task (the
+	// single card surface under the all-channel model). Pass "" to clear it.
+	SetChannelPostID(ctx context.Context, taskID, postID string) error
+	// GetTaskIDByChannelPost reverse-looks-up the task whose card is postID.
+	// Used by the MessageHasBeenPosted hook to detect task-thread replies.
+	GetTaskIDByChannelPost(ctx context.Context, postID string) (string, error)
 
 	// --- Comments (M2-5) ---
 	// GetCommentByPostID returns the comment mapping row whose post_id matches,

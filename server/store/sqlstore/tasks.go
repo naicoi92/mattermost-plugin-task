@@ -24,7 +24,7 @@ const taskTableShort = "tasks"
 var taskColumns = []string{
 	"id", "summary", "description", "channel_id", "parent_task_id",
 	"status", "priority", "order_key", "is_all_day", "due_at", "completed_at",
-	"cancelled_at", "created_at", "updated_at",
+	"cancelled_at", "created_at", "updated_at", "channel_post_id",
 }
 
 // when no row matches the given id. Service-layer code checks errors.Is to
@@ -45,7 +45,7 @@ func (s *SQLStore) CreateTask(ctx context.Context, task model.TaskRow) (model.Ta
 			task.ID, task.Summary, task.Description, task.ChannelID,
 			nullableString(task.ParentTaskID), task.Status, task.Priority,
 			task.OrderKey, task.IsAllDay, task.DueAt, task.CompletedAt,
-			task.CancelledAt, task.CreatedAt, task.UpdatedAt,
+			task.CancelledAt, task.CreatedAt, task.UpdatedAt, task.ChannelPostID,
 		)
 	if _, err := qb.ExecContext(ctx); err != nil {
 		return model.TaskRow{}, fmt.Errorf("create task %s: %w", task.ID, err)
@@ -566,15 +566,19 @@ func joinColumns(cols []string) string {
 func scanTaskRow(r scanner) (*model.TaskRow, error) {
 	var t model.TaskRow
 	var parentTaskID sql.NullString
+	var channelPostID sql.NullString
 	if err := r.Scan(
 		&t.ID, &t.Summary, &t.Description, &t.ChannelID, &parentTaskID,
 		&t.Status, &t.Priority, &t.OrderKey, &t.IsAllDay, &t.DueAt,
-		&t.CompletedAt, &t.CancelledAt, &t.CreatedAt, &t.UpdatedAt,
+		&t.CompletedAt, &t.CancelledAt, &t.CreatedAt, &t.UpdatedAt, &channelPostID,
 	); err != nil {
 		return nil, err
 	}
 	if parentTaskID.Valid {
 		t.ParentTaskID = parentTaskID.String
+	}
+	if channelPostID.Valid {
+		t.ChannelPostID = &channelPostID.String
 	}
 	return &t, nil
 }

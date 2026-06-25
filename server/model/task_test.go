@@ -52,19 +52,6 @@ func TestIsValidMemberRole(t *testing.T) {
 	}
 }
 
-func TestIsValidPostKind(t *testing.T) {
-	for _, s := range []string{PostKindChannel, PostKindShare} {
-		if !IsValidPostKind(s) {
-			t.Errorf("IsValidPostKind(%q) = false, want true", s)
-		}
-	}
-	for _, s := range []string{"", "broadcast", "bogus"} {
-		if IsValidPostKind(s) {
-			t.Errorf("IsValidPostKind(%q) = true, want false", s)
-		}
-	}
-}
-
 func TestTaskJSONRoundTrip(t *testing.T) {
 	// Task embeds TaskRow, so a literal must set the row fields directly and
 	// the denormalized relation fields alongside them.

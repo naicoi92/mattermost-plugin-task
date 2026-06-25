@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
@@ -44,7 +43,7 @@ func createCardForTask(t *testing.T, p *Plugin, taskID string) string {
 	t.Helper()
 	ctx := context.Background()
 	rootPostID := "card-root-" + taskID
-	require.NoError(t, p.taskStore.AddPost(ctx, "postrow-"+taskID, taskID, rootPostID, taskmodel.PostKindChannel))
+	require.NoError(t, p.taskStore.SetChannelPostID(ctx, taskID, rootPostID))
 	return rootPostID
 }
 

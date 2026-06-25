@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -500,39 +499,14 @@ func (p *Plugin) updateCard(postID string, t *taskmodel.Task) {
 	}
 }
 
-// updateTaskCards refreshes EVERY tracked card for the task (channel, DM, and
-// any future locations) by listing task_posts rather than hard-coding two
-// columns. A task may be posted in several places, and a status/assignee change
-// must update them all. A deleted post is skipped (defensive self-heal) so one
-// stale card can't block the rest.
+// updateTaskCards refreshes the task's single home-channel card (the only
+// card surface under the all-channel model). A deleted post is skipped
+// (defensive self-heal).
 func (p *Plugin) updateTaskCards(t *taskmodel.Task) {
-	if t == nil {
+	if t == nil || t.ChannelPostID == nil || *t.ChannelPostID == "" {
 		return
 	}
-	posts := p.taskPosts(t.ID)
-	for _, tp := range posts {
-		p.updateCard(tp.PostID, t)
-	}
-}
-
-// taskPosts returns the tracked card posts for taskID, or nil on error
-// (best-effort — refreshing fewer cards beats failing the whole transition).
-//
-// p.taskStore is always set after OnActivate (the SQL store is wired before
-// the router serves), so a nil store only occurs in degenerate test setups
-// where card refresh isn't exercised. There is no fallback to the assembled
-// Task's ChannelPostID: the normalized task_posts table is the single
-// source of truth for card locations post-migration.
-func (p *Plugin) taskPosts(taskID string) []taskmodel.TaskPost {
-	if p.taskStore == nil {
-		return nil
-	}
-	posts, err := p.taskStore.ListPosts(context.Background(), taskID)
-	if err != nil {
-		p.API.LogDebug("Failed to list task posts for card refresh", "task_id", taskID, "error", err)
-		return nil
-	}
-	return posts
+	p.updateCard(*t.ChannelPostID, t)
 }
 
 // commentRoot resolves the card post that a new comment should thread under,
@@ -581,13 +555,10 @@ func (p *Plugin) commentRoot(taskID string, t *taskmodel.Task, commenterID, reqC
 		cands = append(cands, candidate{postID: postID, channel: post.ChannelId})
 		return true
 	}
-	for _, tp := range p.taskPosts(taskID) {
-		if !add(tp.PostID) {
-			return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", tp.PostID)
+	if t.ChannelPostID != nil {
+		if !add(*t.ChannelPostID) {
+			return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", *t.ChannelPostID)
 		}
-	}
-	if !add(t.ChannelPostID) {
-		return "", "", false, fmt.Errorf("commentRoot: transient error reading card post %s", t.ChannelPostID)
 	}
 
 	isMember := func(ch string) bool {

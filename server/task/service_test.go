@@ -189,12 +189,13 @@ func TestGet_AssemblesRelations(t *testing.T) {
 	svc, s := newTestService(t)
 	ctx := context.Background()
 	task := mustCreateTask(t, svc, CreateInput{Summary: "x", CreatorID: "u-creator", AssigneeID: "u-assignee", ChannelID: "ch1"})
-	require.NoError(t, s.AddPost(ctx, nextTestULID(), task.ID, "post-ch", model.PostKindChannel))
+	require.NoError(t, s.SetChannelPostID(ctx, task.ID, "post-ch"))
 	got, err := svc.Get(task.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "u-creator", got.CreatorID)
 	assert.Equal(t, "u-assignee", got.AssigneeID)
-	assert.Equal(t, "post-ch", got.ChannelPostID)
+	require.NotNil(t, got.ChannelPostID)
+	assert.Equal(t, "post-ch", *got.ChannelPostID)
 }
 
 // --- ListSubtasks ---

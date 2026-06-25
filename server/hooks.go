@@ -46,7 +46,7 @@ func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, post *model.Post) {
 	defer cancel()
 
 	// Reverse-lookup: is the root post a tracked task card?
-	taskID, err := p.taskStore.GetTaskIDByPost(ctx, post.RootId)
+	taskID, err := p.taskStore.GetTaskIDByChannelPost(ctx, post.RootId)
 	if err != nil {
 		if errors.Is(err, store.ErrPostNotFound) {
 			// Root post is not a task card — not a task comment.

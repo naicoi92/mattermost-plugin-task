@@ -95,11 +95,9 @@ func (s *Service) assembleTask(ctx context.Context, row *model.TaskRow) (*model.
 		return nil, errors.Wrap(err, "assemble task: assignee")
 	}
 
-	// Card post id (task_posts). Only the home-channel card kind remains
-	// under the all-channel model.
-	if ch, err := s.store.GetPostByKind(ctx, row.ID, model.PostKindChannel); err == nil {
-		t.ChannelPostID = ch
-	}
+	// ChannelPostID is now stored inline on the task row (migration 000010
+	// collapsed the posts table), so it is already populated on the row we
+	// loaded; nothing to join here.
 
 	// Reminder (task_reminders; at most one per task at MVP).
 	if reminders, err := s.store.ListReminders(ctx, row.ID); err == nil && len(reminders) > 0 {
@@ -499,10 +497,8 @@ func (s *Service) SetPostIDs(id, channelPostID string) (*model.Task, error) {
 	txCtx, txCancel := s.ctx()
 	defer txCancel()
 	if err := s.store.WithTx(txCtx, func(tx store.Store) error {
-		if channelPostID != "" {
-			if err := tx.AddPost(txCtx, taskutil.GenerateULID(), id, channelPostID, model.PostKindChannel); err != nil {
-				return err
-			}
+		if err := tx.SetChannelPostID(txCtx, id, channelPostID); err != nil {
+			return err
 		}
 		return tx.TouchTaskUpdatedAt(txCtx, id, now)
 	}); err != nil {
@@ -946,6 +942,7 @@ func derefBool(p *bool) bool {
 // ptrString returns a pointer to s; used for TaskEvent.FromValue/ToValue which
 // are *string.
 //
+//go:fix inline
 //go:fix inline
 //go:fix inline
 //go:fix inline

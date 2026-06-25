@@ -16,8 +16,13 @@ type TaskRow struct {
 	Summary string `json:"summary" db:"summary"`
 	// Description is the long-form body (markdown). Empty string, not nil.
 	Description string `json:"description" db:"description"`
-	// ChannelID scopes the task; "" means a personal task.
+	// ChannelID scopes the task to a channel (team channel, DM, or self-DM).
+	// Required and non-empty under the all-channel model.
 	ChannelID string `json:"channel_id" db:"channel_id"`
+	// ChannelPostID is the Mattermost post id of the task's home-channel card
+	// (NULL until a card is posted). Stored inline on task_tasks under the
+	// all-channel model; the legacy task_posts table has been collapsed.
+	ChannelPostID *string `json:"channel_post_id,omitempty" db:"channel_post_id"`
 	// ParentTaskID is the ULID of the parent task for subtasks; "" (stored as
 	// NULL) means a top-level task.
 	ParentTaskID string `json:"parent_task_id,omitempty" db:"parent_task_id"`
@@ -49,12 +54,15 @@ type TaskRow struct {
 // Task is the task entity returned to REST/WS consumers. It embeds the core
 // TaskRow (id, summary, status, due, ...) and denormalizes the relations back
 // into the flat JSON shape the webapp expects: creator_id and assignee_id
-// (from task_members), the card post ids (from task_posts), the reminder state
-// (from task_reminders), plus subtask progress and comment count aggregates.
+// (from task_members), the card post id (now inline on task_tasks), the
+// reminder state (from task_reminders), plus subtask progress and comment
+// count aggregates.
 //
 // The storage layer is fully normalized (6 tables); Task is the assembled
 // projection consumers see. It is built by assembleTask at read time, never
 // written directly — writes go through the repository methods on each table.
+// (The posts table was collapsed into an inline channel_post_id column; see
+// migration 000010.)
 type Task struct {
 	TaskRow
 	// CreatorID is the user who created the task (task_members role=creator).
@@ -62,10 +70,6 @@ type Task struct {
 	// AssigneeID is the user assigned to the task (task_members role=assignee).
 	// "" means unassigned.
 	AssigneeID string `json:"assignee_id"`
-	// ChannelPostID is the card root-post id in the task's home channel, if
-	// any. Tracked via task_posts kind=channel. This is the single interactive
-	// card surface under the all-channel model.
-	ChannelPostID string `json:"channel_post_id,omitempty"`
 	// ReminderOffset is how many ms before due the reminder fires; nil means
 	// no reminder. Assembled from task_reminders.
 	ReminderOffset *int64 `json:"reminder_offset,omitempty"`
