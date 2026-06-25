@@ -188,17 +188,26 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 	// participate in a DB transaction.
 	var channelPostID, dmPostID string
 	// Card-preview model: post the task card where the viewer will see it.
-	//  - A channel task posts into its own channel (created.ChannelID).
+	//  - A channel task posts into its own channel (created.ChannelID) — this
+	//    id is server-side truth, trusted.
 	//  - A personal task created inside a DM (no ChannelID) posts into the
-	//    originating channel the client sent as post_channel_id (the DM the
-	//    viewer is in — e.g. a DM with the partner who is the assignee).
-	// Additionally, a task with an assignee != creator sends a bot DM card as a
-	// notification surface. No IsChannelMember probe: the server trusts the
-	// channel ids the client sends; the flaky probe was the source of missing
-	// cards. The task's channel_id (scope) is never changed here.
+	//    originating channel the client sent as post_channel_id. This is
+	//    client-controlled, so it is gated by an IsChannelMember check to keep
+	//    the bot from being directed into a channel the caller cannot access.
+	//  - A task with an assignee != creator sends a bot DM card as a notification
+	//    surface. The task's channel_id (scope) is never changed here.
 	announceChannel := created.ChannelID
 	if announceChannel == "" {
 		announceChannel = req.PostChannelID
+	}
+	// Defense-in-depth: a client-controlled announce channel must be verified —
+	// the bot must not post into a channel the caller is not a member of.
+	if announceChannel != "" && announceChannel != created.ChannelID {
+		if !p.channelMembership().IsChannelMember(currentUserID(r), announceChannel) {
+			p.API.LogWarn("createTask: caller is not a member of post_channel_id; skipping card",
+				"task_id", created.ID, "caller", currentUserID(r), "post_channel_id", announceChannel)
+			announceChannel = ""
+		}
 	}
 	if announceChannel != "" {
 		channelPostID = p.postCard(announceChannel, created)
