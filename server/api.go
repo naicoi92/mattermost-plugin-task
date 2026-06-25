@@ -812,8 +812,6 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "task has no card to comment on")
 		return
 	}
-	p.API.LogDebug("createComment: target resolved",
-		"task_id", taskID, "root_id", rootID, "post_channel", channelID)
 	commentPost := &mmmodel.Post{
 		// Change A: the comment post is authored by the HUMAN commenter, not the
 		// bot. This fixes channel attribution (the real person appears as the
