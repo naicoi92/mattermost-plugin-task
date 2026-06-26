@@ -371,7 +371,7 @@ export default function TaskDetailPanel({
     // Resolve a human-friendly channel name. For a team/public channel this is
     // the channel display_name. For a DM (name like "<uid1>__<uid2>") the
     // Mattermost store leaves display_name empty and name as the raw id pair;
-    // fall back to the other user's display name when the store exposes it.
+    // resolve the partner's username, or fall back to a generic label.
     const channelName = useSelector((s: GlobalState) => {
         if (!channelIDForSelector) {
             return '';
@@ -382,19 +382,23 @@ export default function TaskDetailPanel({
         }
 
         // DM fallback: name is "<uid1>__<uid2>". Resolve the non-current user's
-        // display name from the users store.
+        // username from the users store.
         if (ch?.name && ch.name.includes('__')) {
             const me = getCurrentUserId(s as never);
             const partner = ch.name.split('__').find((id) => id && id !== me);
             if (partner) {
                 const u = getUser(s as never, partner);
-                if (u) {
-                    return u.username ? '@' + u.username : partner;
+                if (u?.username) {
+                    return '@' + u.username;
                 }
             }
-            return '';
+
+            // User not loaded in store — show generic label instead of raw ids.
+            return 'Direct Message';
         }
-        return ch?.name || '';
+
+        // Channel not loaded or team channel without display_name.
+        return ch?.display_name || '';
     });
 
     // Resolve the parent task's summary so the meta-table can show a readable
