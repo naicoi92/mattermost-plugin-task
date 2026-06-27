@@ -1,0 +1,61 @@
+// TaskDeepLink is the webapp custom route component mounted at
+// /plug/<plugin-id>/task/:id. A DM notification renders the task name as a
+// markdown link to this route; clicking it opens the task's Task Details in the
+// RHS and sends the user back to where they came from (so they never land on a
+// blank route page).
+//
+// On mount it: (1) dispatches SELECT_TASK with the id from the URL, (2) opens
+// the RHS via the opener captured during initialize (same setter pattern as
+// task_post_card), and (3) navigates back. When there is no previous history
+// entry (the URL was pasted directly) it falls back to '/' so the user lands on
+// a real page rather than a blank route.
+//
+// NOTE: clicking the markdown link causes a brief page reload/flash because the
+// host navigates to the route URL before this component mounts. This is an
+// accepted trade-off: the feature works (the task opens), the flash is cosmetic.
+// See change notification-overdue-and-context, design D9.
+
+import {useEffect} from 'react';
+import {useDispatch} from 'react-redux';
+import {useHistory, useParams} from 'react-router-dom';
+import {ACTION_TYPES} from 'reducer';
+
+// rhsOpener opens the plugin's Right-Hand Sidebar. It is captured during
+// initialize (index.tsx) and injected via setTaskDeepLinkRhsOpener, mirroring
+// the task_post_card pattern. Keeping it module-scoped avoids a circular import
+// back into index.tsx.
+let rhsOpener: () => void = () => {};
+export function setTaskDeepLinkRhsOpener(opener: () => void) {
+    rhsOpener = opener;
+}
+
+interface RouteParams {
+    id: string;
+}
+
+export default function TaskDeepLink() {
+    const dispatch = useDispatch();
+    const history = useHistory();
+    const {id} = useParams<RouteParams>();
+
+    useEffect(() => {
+        if (id) {
+            dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id});
+            rhsOpener();
+        }
+
+        // Send the user back to where they opened the link from (typically the
+        // DM). With no previous entry (pasted URL) goBack is a no-op, so push
+        // to a sane landing page instead of leaving a blank route.
+        if (history.length > 1) {
+            history.goBack();
+        } else {
+            history.push('/');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id]);
+
+    // Render nothing: the route exists only for its side effects (open RHS +
+    // select task + navigate away).
+    return null;
+}

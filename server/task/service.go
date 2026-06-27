@@ -806,6 +806,39 @@ func (s *Service) MarkReminderFired(reminderID, taskID string) error {
 	})
 }
 
+// ListOverdueTasks returns every past-due, non-terminal task assembled with its
+// creator and assignee ids (so the daily overdue notification job can DM both).
+// nowMs is the scan instant in ms UTC. Per-day dedupe (last_overdue_sent_at) is
+// NOT applied here — the caller checks the stamp so this stays a pure scan
+// (change notification-overdue-and-context, design D3).
+func (s *Service) ListOverdueTasks(nowMs int64) ([]*model.Task, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	rows, err := s.store.ListOverdueTasks(ctx, nowMs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Task, 0, len(rows))
+	for i := range rows {
+		t, err := s.assembleTask(ctx, &rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// MarkOverdueSent stamps last_overdue_sent_at = now (UTC ms) on a task so the
+// daily overdue job can dedupe a task already notified within the current UTC
+// day. Thin wrapper: no audit event (unlike reminder-fired), because overdue is
+// a scheduler-side dedupe marker, not a user-visible lifecycle transition.
+func (s *Service) MarkOverdueSent(taskID string) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.MarkOverdueSent(ctx, taskID, nowFunc())
+}
+
 // PatchInput is the partial-update payload. Only fields listed in UpdateFields
 // are modified; a field present in UpdateFields with the corresponding pointer
 // nil clears that field.

@@ -29,7 +29,12 @@ import type {GlobalState} from '@mattermost/types/store';
 
 import KanbanModal from 'components/kanban_modal/kanban_modal';
 import NewTaskDialog from 'components/new_task_dialog/connected_new_task_dialog';
-import TaskPostCard, {setTaskPostCardRhsOpener} from 'components/task_post_card/task_post_card';
+import TaskDeepLink, {
+    setTaskDeepLinkRhsOpener,
+} from 'components/task_deep_link';
+import TaskPostCard, {
+    setTaskPostCardRhsOpener,
+} from 'components/task_post_card/task_post_card';
 import TaskSidebar from 'components/task_sidebar/task_sidebar';
 
 import type {PluginRegistry} from 'types/mattermost-webapp';
@@ -68,8 +73,8 @@ function getTranslationsForLocale(locale: string): Record<string, string> {
 // We read `draft.channelId` to open the New Task dialog scoped to the current
 // channel; getSelectedText/updateText are unused but part of the contract.
 interface PostEditorActionProps {
-    draft?: {channelId?: string; rootId?: string};
-    getSelectedText?: () => {start?: number; end?: number};
+    draft?: { channelId?: string; rootId?: string };
+    getSelectedText?: () => { start?: number; end?: number };
     updateText?: (message: string) => void;
 }
 
@@ -84,7 +89,9 @@ interface PostEditorActionProps {
 // NewTaskDialog opens pre-scoped (scope "Channel" radio enabled). Desktop only:
 // the host does not render the composer plugin slot on the mobile app; mobile
 // uses the /task new slash command instead.
-export function NewTaskComposerButton({draft}: PostEditorActionProps): JSX.Element {
+export function NewTaskComposerButton({
+    draft,
+}: PostEditorActionProps): JSX.Element {
     const dispatch = useDispatch();
     const t = useFormatMessage();
     const onClick = () => {
@@ -164,7 +171,9 @@ export default class Plugin {
 
                 // Don't hijack clicks on interactive bits inside the card (links,
                 // buttons, the reaction picker) — let those do their own thing.
-                if (target.closest('a, button, input, textarea, select, [role="button"]')) {
+                if (
+                    target.closest('a, button, input, textarea, select, [role="button"]')
+                ) {
                     return;
                 }
 
@@ -184,9 +193,21 @@ export default class Plugin {
         // "New Task" button and the post-dropdown "Tạo task" action can open the
         // RHS (and route the New Task form into it) without re-deriving it —
         // registry is only safely usable inside initialize.
-        const {showRHSPlugin} = registry.registerRightHandSidebarComponent(TaskSidebar, 'Tasks');
+        const {showRHSPlugin} = registry.registerRightHandSidebarComponent(
+            TaskSidebar,
+            'Tasks',
+        );
         rhsOpener = () => store.dispatch(showRHSPlugin);
         setTaskPostCardRhsOpener(rhsOpener);
+        setTaskDeepLinkRhsOpener(rhsOpener);
+
+        // Custom route /task/:id so a DM notification's clickable task name
+        // (a markdown link to /plug/<plugin-id>/task/<id>) opens the task's
+        // Task Details in the RHS. NOTE: clicking causes a brief page reload
+        // (host navigates to the route URL before this component mounts) —
+        // accepted trade-off, the feature works (task opens) and the flash is
+        // cosmetic (change notification-overdue-and-context, design D9).
+        registry.registerCustomRoute('/task/:id', TaskDeepLink);
 
         // Custom React body for "custom_task" posts (the task card). Renders in
         // place of the native SlackAttachment on desktop, with a real checkbox
@@ -221,29 +242,48 @@ export default class Plugin {
         // create/update/delete/status/assignee/due/comment/reminder change (#32).
         // The handler forwards the server's seq so the reducer can drop stale
         // out-of-order events; a delete carries task_id without a task body.
-        registry.registerWebSocketEventHandler('task_updated', (msg: WebSocketMessage) => {
-            const data = (msg.data ?? {}) as {
-                task_id?: string;
-                task?: Record<string, unknown>;
-                seq?: number;
-                changed_fields?: string[];
-            };
-            const seq = typeof data.seq === 'number' ? data.seq : undefined;
-            if (data.task_id && !data.task) {
-                store.dispatch({type: ACTION_TYPES.DELETE_TASK, taskID: data.task_id, seq});
-                return;
-            }
-            if (data.task) {
-                store.dispatch({type: ACTION_TYPES.UPSERT_TASK, task: data.task, seq});
-            }
+        registry.registerWebSocketEventHandler(
+            'task_updated',
+            (msg: WebSocketMessage) => {
+                const data = (msg.data ?? {}) as {
+                    task_id?: string;
+                    task?: Record<string, unknown>;
+                    seq?: number;
+                    changed_fields?: string[];
+                };
+                const seq = typeof data.seq === 'number' ? data.seq : undefined;
+                if (data.task_id && !data.task) {
+                    store.dispatch({
+                        type: ACTION_TYPES.DELETE_TASK,
+                        taskID: data.task_id,
+                        seq,
+                    });
+                    return;
+                }
+                if (data.task) {
+                    store.dispatch({
+                        type: ACTION_TYPES.UPSERT_TASK,
+                        task: data.task,
+                        seq,
+                    });
+                }
 
-            // Comment realtime (#32): when the server signals a comment change,
-            // bump the comment-refetch signal so an open Task Detail panel
-            // refetches comments without reselecting the task (Decision 2).
-            if (data.task_id && Array.isArray(data.changed_fields) && data.changed_fields.includes('comment')) {
-                store.dispatch({type: ACTION_TYPES.COMMENT_REV_BUMP, taskID: data.task_id, seq});
-            }
-        });
+                // Comment realtime (#32): when the server signals a comment change,
+                // bump the comment-refetch signal so an open Task Detail panel
+                // refetches comments without reselecting the task (Decision 2).
+                if (
+                    data.task_id &&
+					Array.isArray(data.changed_fields) &&
+					data.changed_fields.includes('comment')
+                ) {
+                    store.dispatch({
+                        type: ACTION_TYPES.COMMENT_REV_BUMP,
+                        taskID: data.task_id,
+                        seq,
+                    });
+                }
+            },
+        );
 
         // Plugin view state: RHS open/close, selected task, normalized cache.
         registry.registerReducer(reducer);
@@ -285,7 +325,10 @@ export default class Plugin {
 // (the remaining lines), then dispatches OPEN_NEW_TASK_DIALOG so the
 // NewTaskDialog root component opens pre-filled. Declared module-level so it can
 // be referenced by name in the registration and unit-tested independently.
-export function openNewTaskFromMessage(store: Store<GlobalState>, postId?: string): void {
+export function openNewTaskFromMessage(
+    store: Store<GlobalState>,
+    postId?: string,
+): void {
     const post = postId ? resolvePost(store.getState(), postId) : undefined;
     const message = post?.message ?? '';
     const {summary, description} = splitMessageForTask(message);
@@ -308,14 +351,19 @@ interface PostLike {
     message?: string;
     channel_id?: string;
     type?: string;
-    props?: Record<string, unknown> & {task_id?: string};
+    props?: Record<string, unknown> & { task_id?: string };
 }
 
 // resolvePost reads a post by id from the host Redux store. Mattermost stores
 // posts at state.entities.posts.posts[postId]; we access it defensively so a
 // missing or differently-shaped store yields undefined rather than throwing.
-export function resolvePost(state: unknown, postId: string): PostLike | undefined {
-    const entities = (state as {entities?: {posts?: {posts?: Record<string, PostLike>}}})?.entities;
+export function resolvePost(
+    state: unknown,
+    postId: string,
+): PostLike | undefined {
+    const entities = (
+        state as { entities?: { posts?: { posts?: Record<string, PostLike> } } }
+    )?.entities;
     return entities?.posts?.posts?.[postId];
 }
 
@@ -323,14 +371,18 @@ export function resolvePost(state: unknown, postId: string): PostLike | undefine
 // The first non-empty line becomes the summary (truncated to summaryLimit chars
 // with an ellipsis); any remaining lines form the description. An empty message
 // yields empty fields so the dialog opens blank.
-export function splitMessageForTask(message: string): {summary: string; description: string} {
+export function splitMessageForTask(message: string): {
+    summary: string;
+    description: string;
+} {
     const trimmed = message.trim();
     if (trimmed === '') {
         return {summary: '', description: ''};
     }
     const lines = trimmed.split('\n');
     const firstLine = lines[0].trim();
-    const summary = firstLine.length > summaryLimit ? firstLine.slice(0, summaryLimit - 1) + '…' : firstLine;
+    const summary =
+		firstLine.length > summaryLimit ? firstLine.slice(0, summaryLimit - 1) + '…' : firstLine;
     const description = lines.slice(1).join('\n').trim();
     return {summary, description};
 }

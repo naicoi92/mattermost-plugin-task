@@ -158,6 +158,16 @@ type Store interface {
 	// realign channel_id with the card post's actual channel.
 	ListTasksWithCardPost(ctx context.Context, limit int) ([]model.TaskRow, error)
 
+	// ListOverdueTasks returns every task whose due_at is in the past (due_at <
+	// nowMs) and whose status is NOT terminal (done/cancelled), ordered by
+	// order_key. The daily overdue notification job uses this to decide whom to
+	// DM; dedupe per UTC day is handled by the caller via last_overdue_sent_at.
+	ListOverdueTasks(ctx context.Context, nowMs int64) ([]model.TaskRow, error)
+	// MarkOverdueSent stamps last_overdue_sent_at = ms (UTC) on a task so the
+	// daily overdue job can dedupe: a task already stamped within the current
+	// UTC day is skipped on the next scan.
+	MarkOverdueSent(ctx context.Context, taskID string, ms int64) error
+
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error
 	RemoveMember(ctx context.Context, taskID, userID, role string) error

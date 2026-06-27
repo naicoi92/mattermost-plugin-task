@@ -84,6 +84,7 @@
       "^.*i18n.*\\.(json)$": "<rootDir>/tests/i18n_mock.json",
       "^bundle-loader\\?lazy\\!(.*)$": "$1",
       "^react-bootstrap$": "<rootDir>/tests/react-bootstrap-mock.js",
+      "^react-router-dom$": "<rootDir>/tests/react-router-dom-mock.js",
       "^mattermost-redux/client$": "<rootDir>/tests/mattermost-redux-client-mock.js",
       "^mattermost-redux/selectors/entities/channels$": "<rootDir>/tests/mattermost-redux-selectors-mock.js",
       "^mattermost-redux/selectors/entities/users$": "<rootDir>/tests/mattermost-redux-selectors-mock.js"

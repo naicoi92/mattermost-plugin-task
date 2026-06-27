@@ -105,6 +105,22 @@ func TestRunMigrations_BootstrapMigrationRan(t *testing.T) {
 	assert.Contains(t, cols, "Name")
 }
 
+// TestRunMigrations_OverdueTrackingColumn asserts migration 000011 added the
+// nullable last_overdue_sent_at BIGINT column to the tasks table. This is the
+// dedupe bookkeeping column for the daily overdue notification job: the
+// scheduler stamps it with now-ms each time it sends an overdue DM, and skips a
+// task whose stamp is already within the current UTC day (see change
+// notification-overdue-and-context, design D2).
+func TestRunMigrations_OverdueTrackingColumn(t *testing.T) {
+	s := newSQLiteTestStore(t)
+	runMigrationsSilent(t, s)
+
+	cols, err := columnsOf(t, s.db, s.tableName(taskTableShort))
+	require.NoError(t, err)
+	assert.Contains(t, cols, "last_overdue_sent_at",
+		"migration 000011 must add last_overdue_sent_at to the tasks table")
+}
+
 func TestRenderMigrations_TemplatePrefixAndDialectFlags(t *testing.T) {
 	// Use a synthetic fstest.MapFS so the assertion really exercises
 	// {{prefix}} substitution and {{if sqlite}}/{{if postgres}} branches,
