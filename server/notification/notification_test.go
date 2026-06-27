@@ -95,6 +95,50 @@ func userNamed(id, nickname string) *model.User {
 	return &model.User{Id: id, Username: "user_" + id, Nickname: nickname}
 }
 
+// newTestNotifierAtTime returns a notifier whose clock is pinned to nowMs so
+// the due-band emoji prefix (⚠/🔴) is deterministic regardless of wall time.
+func newTestNotifierAtTime(api API, nowMs int64) *Notifier {
+	n := newTestNotifier(api)
+	n.nowMs = func() int64 { return nowMs }
+	return n
+}
+
+func TestNotifyAssigned_EmojiPrefixByBand(t *testing.T) {
+	now := int64(1_700_000_000_000)
+	const hour = int64(60 * 60 * 1000)
+
+	cases := []struct {
+		name   string
+		dueAt  *int64
+		status string
+		want   string // expected emoji prefix at start of message
+	}{
+		{"warning band (48h) → ⚠", ptrInt64(now + (48 * hour)), "todo", "⚠ "},
+		{"danger band (12h) → 🔴", ptrInt64(now + (12 * hour)), "todo", "🔴 "},
+		{"overdue → 🔴 (danger)", ptrInt64(now - (5 * hour)), "todo", "🔴 "},
+		{"muted band (>72h) → no prefix", ptrInt64(now + (73 * hour)), "todo", ""},
+		{"no due → no prefix", nil, "todo", ""},
+		{"terminal done → no prefix even if overdue", ptrInt64(now - hour), "done", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			api := &fakeAPI{users: map[string]*model.User{
+				"a": userWithLocale("a", "vi"),
+				"c": userNamed("c", "Alice"),
+			}}
+			n := newTestNotifierAtTime(api, now)
+			n.NotifyAssigned("a", "c", TaskSummary{
+				ID: "01HXYZTASK0001", Summary: "x", Status: c.status, DueAt: c.dueAt,
+			})
+			require.Len(t, api.posts, 1)
+			assert.True(t, strings.HasPrefix(api.posts[0].message, c.want),
+				"message %q should start with %q", api.posts[0].message, c.want)
+		})
+	}
+}
+
+func ptrInt64(v int64) *int64 { return &v }
+
 func TestNotifyAssigned_DMsAssigneeNotCreator(t *testing.T) {
 	api := &fakeAPI{
 		users: map[string]*model.User{
@@ -298,6 +342,35 @@ func TestNotifyReminder_DeliveryFailureReturnsError(t *testing.T) {
 	err := n.NotifyReminder("u1", TaskSummary{Summary: "x"})
 	require.Error(t, err)
 	assert.Empty(t, api.posts)
+}
+
+func TestNotifyDueSoon_DMsOnlyAssignee(t *testing.T) {
+	now := int64(1_700_000_000_000)
+	const hour = int64(60 * 60 * 1000)
+	due := now + (12 * hour) // within 24h → due-soon
+	api := &fakeAPI{users: map[string]*model.User{
+		"creator":  userWithLocale("creator", "vi"),
+		"assignee": userWithLocale("assignee", "vi"),
+	}}
+	n := newTestNotifierAtTime(api, now)
+
+	n.NotifyDueSoon("assignee", TaskSummary{
+		ID: "01HXYZTASK0001", Summary: "Slipped", Status: "todo", DueAt: &due,
+	})
+
+	// Only assignee notified (not creator).
+	require.Len(t, api.posts, 1)
+	assert.Contains(t, api.posts[0].channelID, "assignee")
+	msg := api.posts[0].message
+	// Danger band (<24h) → 🔴 prefix.
+	assert.True(t, strings.HasPrefix(msg, "🔴 "))
+	assert.Contains(t, msg, "vi:notification.due_soon:")
+	assert.Contains(t, msg, "vi:task.status.todo")
+}
+
+func TestNotifyDueSoon_EmptyAssigneeNoop(t *testing.T) {
+	n := newTestNotifier(&fakeAPI{})
+	n.NotifyDueSoon("", TaskSummary{ID: "x", Summary: "s"})
 }
 
 func TestNotifyOverdue_DMsCreatorAndAssigneeNoActor(t *testing.T) {

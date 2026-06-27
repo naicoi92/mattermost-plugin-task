@@ -67,6 +67,10 @@ type Notifier struct {
 	siteURL string
 	// pluginID is the plugin id used in the deep-link path.
 	pluginID string
+	// nowMs returns the current time in ms UTC; used to compute the due band for
+	// the DM emoji prefix (⚠ warning, 🔴 danger). Indirected so tests can pin
+	// time without touching the clock.
+	nowMs func() int64
 }
 
 // New returns a Notifier that posts DMs as botUserID, translating via t. The
@@ -79,6 +83,7 @@ func New(api API, t Translator, botUserID, siteURL, pluginID string) *Notifier {
 		botUserID:  botUserID,
 		siteURL:    strings.TrimRight(siteURL, "/"),
 		pluginID:   pluginID,
+		nowMs:      func() int64 { return time.Now().UnixMilli() },
 	}
 }
 
@@ -254,10 +259,60 @@ func (n *Notifier) statusLabel(locale, status string) string {
 // followed by the optional due clause (when DueAt != nil) and the optional
 // comment-preview clause (when preview != "", commented event only). Trailing
 // whitespace is trimmed so omitted clauses leave no dangling separator.
-func (n *Notifier) renderMessage(locale, coreKey string, coreArgs []any, dueAt *int64, isAllDay bool, preview string) string {
-	msg := n.translator.T(locale, coreKey, coreArgs...)
-	if dueAt != nil {
-		msg += n.translator.T(locale, "notification.due.suffix", formatDue(locale, *dueAt, isAllDay))
+// bandEmoji prefixes a DM message with a warning/danger emoji based on the
+// task's due band, so a DM-only reader gets the same urgency cue as the card /
+// sidebar (which tint via CSS). Muted band → no prefix. Overdue template
+// already carries 🔴 in its own wording, so this is skipped when coreKey is the
+// overdue key (avoid double emoji).
+func (n *Notifier) bandEmoji(coreKey string, task TaskSummary) string {
+	if coreKey == "notification.overdue" {
+		return ""
+	}
+	dueMs := int64(0)
+	if task.DueAt != nil {
+		dueMs = *task.DueAt
+	}
+	switch dueBandLocal(dueMs, n.nowMs(), task.Status) {
+	case "danger":
+		return "🔴 "
+	case "warning":
+		return "⚠ "
+	default:
+		return ""
+	}
+}
+
+// dueBandLocal mirrors server/due_band.go's dueBand so this package stays
+// self-contained (notification is a separate package; importing main would
+// create a cycle). Thresholds MUST stay in sync with the main-package helper
+// (change due-color-and-scheduled-notify, design D1).
+func dueBandLocal(dueMs, nowMs int64, status string) string {
+	if dueMs == 0 {
+		return "muted"
+	}
+	if status == "done" || status == "cancelled" {
+		return "muted"
+	}
+	const (
+		msPerHour = int64(60 * 60 * 1000)
+		dangerMs  = 24 * msPerHour
+		warningMs = 72 * msPerHour
+	)
+	delta := dueMs - nowMs
+	switch {
+	case delta < dangerMs:
+		return "danger"
+	case delta <= warningMs:
+		return "warning"
+	default:
+		return "muted"
+	}
+}
+
+func (n *Notifier) renderMessage(locale, coreKey string, coreArgs []any, task TaskSummary, preview string) string {
+	msg := n.bandEmoji(coreKey, task) + n.translator.T(locale, coreKey, coreArgs...)
+	if task.DueAt != nil {
+		msg += n.translator.T(locale, "notification.due.suffix", formatDue(locale, *task.DueAt, task.IsAllDay))
 	}
 	if preview != "" {
 		msg += n.translator.T(locale, "notification.preview.suffix", preview)
@@ -279,7 +334,7 @@ func (n *Notifier) NotifyAssigned(assigneeID, actorID string, task TaskSummary) 
 		n.renderTaskNameLink(task.ID, task.Summary),
 		shortID(task.ID),
 		n.statusLabel(locale, task.Status),
-	}, task.DueAt, task.IsAllDay, "")
+	}, task, "")
 	n.postDM(assigneeID, msg)
 }
 
@@ -295,7 +350,7 @@ func (n *Notifier) NotifyCompleted(task TaskSummary, actorID, creatorID, assigne
 			n.renderTaskNameLink(task.ID, task.Summary),
 			shortID(task.ID),
 			actor,
-		}, task.DueAt, task.IsAllDay, "")
+		}, task, "")
 		n.postDM(recipient, msg)
 	}
 }
@@ -310,7 +365,7 @@ func (n *Notifier) NotifyCancelled(task TaskSummary, actorID, creatorID, assigne
 			n.renderTaskNameLink(task.ID, task.Summary),
 			shortID(task.ID),
 			actor,
-		}, task.DueAt, task.IsAllDay, "")
+		}, task, "")
 		n.postDM(recipient, msg)
 	}
 }
@@ -327,7 +382,7 @@ func (n *Notifier) NotifyCommented(task TaskSummary, actorID, creatorID, assigne
 			n.renderTaskNameLink(task.ID, task.Summary),
 			shortID(task.ID),
 			n.statusLabel(locale, task.Status),
-		}, task.DueAt, task.IsAllDay, task.CommentPreview)
+		}, task, task.CommentPreview)
 		n.postDM(recipient, msg)
 	}
 }
@@ -346,7 +401,7 @@ func (n *Notifier) NotifyReminder(assigneeID string, task TaskSummary) error {
 		n.renderTaskNameLink(task.ID, task.Summary),
 		shortID(task.ID),
 		n.statusLabel(locale, task.Status),
-	}, task.DueAt, task.IsAllDay, "")
+	}, task, "")
 	channel, err := n.api.GetDirectChannel(assigneeID, n.botUserID)
 	if err != nil || channel == nil {
 		// GetDirectChannel can return (nil, nil) during RPC shutdown;
@@ -389,6 +444,32 @@ func (n *Notifier) NotifyOverdue(task TaskSummary, nowMs int64, creatorID, assig
 		))
 		n.postDM(recipient, msg)
 	}
+}
+
+// NotifyDueSoon DMs the assignee that a task is due within the next 24h.
+// Scheduler-fired (no human actor), so only the assignee is notified (not the
+// creator — the assignee is the responsible party). Best-effort like overdue:
+// a delivery failure is logged but not returned; the next-day run retries
+// naturally (change due-color-and-scheduled-notify, design D6).
+func (n *Notifier) NotifyDueSoon(assigneeID string, task TaskSummary) {
+	if assigneeID == "" {
+		return
+	}
+	locale := n.localeFor(assigneeID)
+	dueStr := ""
+	if task.DueAt != nil {
+		dueStr = formatDue(locale, *task.DueAt, task.IsAllDay)
+	}
+	// bandEmoji prefixes 🔴 (due-soon is <24h = danger band). The template itself
+	// carries no emoji so there is no duplication.
+	msg := strings.TrimSpace(n.bandEmoji("notification.due_soon", task) +
+		n.translator.T(locale, "notification.due_soon",
+			n.renderTaskNameLink(task.ID, task.Summary),
+			shortID(task.ID),
+			n.statusLabel(locale, task.Status),
+			dueStr,
+		))
+	n.postDM(assigneeID, msg)
 }
 
 // derefInt64 returns *v when non-nil, else fallback.

@@ -58,3 +58,50 @@ func (s *SQLStore) MarkOverdueSent(ctx context.Context, taskID string, ms int64)
 	}
 	return nil
 }
+
+// ListDueSoonTasks returns every open task whose due_at falls in the half-open
+// window [fromMs, toMs) — i.e. due within the next 24h but not yet overdue.
+// Used by the 8h-GMT+7 scheduler to decide whom to DM a due-soon notification.
+// Terminal tasks (done/cancelled) are excluded; dedupe (last_due_soon_sent_at)
+// is NOT applied here — the caller checks the stamp (change due-color-and-
+// scheduled-notify, design D6).
+func (s *SQLStore) ListDueSoonTasks(ctx context.Context, fromMs, toMs int64) ([]model.TaskRow, error) {
+	qb := s.builder().
+		Select(taskColumns...).
+		From(s.tableName(taskTableShort)).
+		Where(sq.NotEq{"due_at": nil}).
+		Where(sq.GtOrEq{"due_at": fromMs}).
+		Where(sq.Lt{"due_at": toMs}).
+		Where(sq.NotEq{"status": []string{model.StatusDone, model.StatusCancelled}}).
+		OrderBy("order_key ASC")
+	rows, err := qb.QueryContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list due-soon tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanTaskRows(rows)
+}
+
+// MarkDueSoonSent stamps last_due_soon_sent_at = ms (UTC) on a task so the
+// 8h-GMT+7 due-soon job can dedupe per GMT+7 day. Mirror of MarkOverdueSent.
+func (s *SQLStore) MarkDueSoonSent(ctx context.Context, taskID string, ms int64) error {
+	if taskID == "" {
+		return errors.New("mark due-soon sent: id is required")
+	}
+	res, err := s.builder().
+		Update(s.tableName(taskTableShort)).
+		Set("last_due_soon_sent_at", ms).
+		Where(sq.Eq{"id": taskID}).
+		ExecContext(ctx)
+	if err != nil {
+		return fmt.Errorf("mark due-soon sent %s: %w", taskID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark due-soon sent %s: rows affected: %w", taskID, err)
+	}
+	if rows == 0 {
+		return store.ErrTaskNotFound
+	}
+	return nil
+}

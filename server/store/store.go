@@ -163,10 +163,17 @@ type Store interface {
 	// order_key. The daily overdue notification job uses this to decide whom to
 	// DM; dedupe per UTC day is handled by the caller via last_overdue_sent_at.
 	ListOverdueTasks(ctx context.Context, nowMs int64) ([]model.TaskRow, error)
+	// ListDueSoonTasks returns every open task whose due_at falls in [fromMs,
+	// toMs) — due within the next 24h but not yet overdue. Used by the 8h-GMT+7
+	// scheduler to decide whom to DM a due-soon notification.
+	ListDueSoonTasks(ctx context.Context, fromMs, toMs int64) ([]model.TaskRow, error)
 	// MarkOverdueSent stamps last_overdue_sent_at = ms (UTC) on a task so the
 	// daily overdue job can dedupe: a task already stamped within the current
 	// UTC day is skipped on the next scan.
 	MarkOverdueSent(ctx context.Context, taskID string, ms int64) error
+	// MarkDueSoonSent stamps last_due_soon_sent_at = ms (UTC) so the due-soon
+	// job can dedupe per GMT+7 day. Mirror of MarkOverdueSent.
+	MarkDueSoonSent(ctx context.Context, taskID string, ms int64) error
 
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error

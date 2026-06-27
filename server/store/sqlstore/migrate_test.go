@@ -121,6 +121,22 @@ func TestRunMigrations_OverdueTrackingColumn(t *testing.T) {
 		"migration 000011 must add last_overdue_sent_at to the tasks table")
 }
 
+// TestRunMigrations_DueSoonColumn asserts migration 000012 added the nullable
+// last_due_soon_sent_at BIGINT column to the tasks table. This is the dedupe
+// bookkeeping column for the 8h-GMT+7 due-soon notification job: the scheduler
+// stamps it with now-ms each time it sends a due-soon DM, and skips a task
+// whose stamp is already within the current GMT+7 day (see change
+// due-color-and-scheduled-notify, design D6).
+func TestRunMigrations_DueSoonColumn(t *testing.T) {
+	s := newSQLiteTestStore(t)
+	runMigrationsSilent(t, s)
+
+	cols, err := columnsOf(t, s.db, s.tableName(taskTableShort))
+	require.NoError(t, err)
+	assert.Contains(t, cols, "last_due_soon_sent_at",
+		"migration 000012 must add last_due_soon_sent_at to the tasks table")
+}
+
 func TestRenderMigrations_TemplatePrefixAndDialectFlags(t *testing.T) {
 	// Use a synthetic fstest.MapFS so the assertion really exercises
 	// {{prefix}} substitution and {{if sqlite}}/{{if postgres}} branches,
