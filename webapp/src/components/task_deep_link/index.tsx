@@ -15,7 +15,7 @@
 // accepted trade-off: the feature works (the task opens), the flash is cosmetic.
 // See change notification-overdue-and-context, design D9.
 
-import {useEffect} from 'react';
+import React, {useEffect} from 'react';
 import {useDispatch} from 'react-redux';
 import {useHistory, useParams} from 'react-router-dom';
 import {ACTION_TYPES} from 'reducer';
@@ -55,7 +55,21 @@ export default function TaskDeepLink() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
 
-    // Render nothing: the route exists only for its side effects (open RHS +
-    // select task + navigate away).
-    return null;
+    // Render a centered loading placeholder instead of null so the brief
+    // moment between host navigation and goBack shows feedback (spinner) rather
+    // than a blank white page — reduces the flash's perceived severity (design
+    // D9, option B).
+    return (
+        <div
+            style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100vh',
+                color: 'var(--center-channel-color, #3f4354)',
+            }}
+        >
+            {'Đang mở task...'}
+        </div>
+    );
 }

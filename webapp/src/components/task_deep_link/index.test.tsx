@@ -69,14 +69,17 @@ describe('components/task_deep_link', () => {
         expect(mockGoBack).not.toHaveBeenCalled();
     });
 
-    test('renders nothing (route exists only for side effects)', async () => {
+    test('renders a centered loading placeholder (not a blank page)', async () => {
         mockParams = {id: '01HXYZTASK0001'};
         let root: TestRenderer.ReactTestRenderer;
         await act(async () => {
             root = TestRenderer.create(<TaskDeepLink/>);
         });
 
-        // The component returns null.
-        expect(root!.toJSON()).toBeNull();
+        // The component renders a placeholder (not null) so the brief
+        // navigation flash shows feedback instead of a blank white page.
+        const json = root!.toJSON();
+        expect(json).not.toBeNull();
+        expect(json).toHaveProperty('type', 'div');
     });
 });
