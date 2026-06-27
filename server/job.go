@@ -59,41 +59,95 @@ func (p *Plugin) runReminderJob() {
 // day is skipped, so a scheduler restart mid-day never double-DMs. Like the
 // reminder job it is best-effort — a delivery failure is logged and retried
 // naturally the next day (change notification-overdue-and-context, design D8).
-func (p *Plugin) runOverdueJob() {
+// gmt7 is the Asia/Bangkok timezone (UTC+7) used by the scheduled notify job.
+// Falls back to a fixed zone if the host lacks tzdata (some minimal images).
+var gmt7 = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Bangkok")
+	if err != nil {
+		return time.FixedZone("ICT", 7*3600)
+	}
+	return loc
+}()
+
+// nextRunAt8hGMT7 returns the next 08:00 Asia/Bangkok instant strictly after
+// now. If now is before 08:00 today, that's today; otherwise it's tomorrow.
+// The scheduled notify job (overdue + due-soon) fires once at this time each
+// day (change due-color-and-scheduled-notify, design D5).
+func nextRunAt8hGMT7(now time.Time) time.Time {
+	g := now.In(gmt7)
+	next := time.Date(g.Year(), g.Month(), g.Day(), 8, 0, 0, 0, gmt7)
+	if !next.After(g) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
+}
+
+// runScheduledNotifyJob fires the daily overdue + due-soon notifications at
+// 08:00 GMT+7. It scans both sets in one run and dedupes each per GMT+7 day via
+// the last_*_sent_at columns (change due-color-and-scheduled-notify, design D5/D6).
+func (p *Plugin) runScheduledNotifyJob() {
 	if p.taskService == nil || p.notifier == nil {
 		return
 	}
 	now := time.Now()
 	nowMs := now.UnixMilli()
-	tasks, err := p.taskService.ListOverdueTasks(nowMs)
+	// Start-of-day in GMT+7: dedupe boundary so a task notified today (in GMT+7
+	// terms) is skipped even after a mid-day plugin restart.
+	g := now.In(gmt7)
+	startOfTodayGMT7 := time.Date(g.Year(), g.Month(), g.Day(), 0, 0, 0, 0, gmt7).UnixMilli()
+	const day = 24 * 60 * 60 * 1000 // ms
+
+	// 1) Overdue: due_at < now, non-terminal → DM creator + assignee. Atomic
+	// claim per GMT+7 day so two overlapping runners can't both send.
+	overdue, err := p.taskService.ListOverdueTasks(nowMs)
 	if err != nil {
-		p.API.LogError("Overdue job failed to scan tasks", "error", err)
-		return
+		p.API.LogError("Scheduled notify: overdue scan failed", "error", err)
+	} else {
+		for _, t := range overdue {
+			claimed, err := p.taskService.ClaimOverdueSent(t.ID, nowMs, startOfTodayGMT7)
+			if err != nil {
+				p.API.LogError("Scheduled notify: claim overdue failed",
+					"task_id", t.ID, "error", err)
+				continue
+			}
+			if !claimed {
+				continue
+			}
+			p.notifier.NotifyOverdue(notification.TaskSummary{
+				ID: t.ID, Summary: t.Summary, Status: t.Status,
+				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
+			}, nowMs, t.CreatorID, t.AssigneeID)
+		}
 	}
-    	// Start of the current UTC day: the dedupe boundary. ClaimOverdueSent
-    	// atomically refuses to stamp a row whose stamp is already >= this, so
-    	// two overlapping runners can't both send a DM for the same task today.
-    	startOfToday := now.UTC().Truncate(24 * time.Hour).UnixMilli()
-    	for _, t := range tasks {
-    		// Atomic claim: only the winner sends the DM. Losers skip silently.
-    		claimed, err := p.taskService.ClaimOverdueSent(t.ID, nowMs, startOfToday)
-    		if err != nil {
-    			p.API.LogError("Overdue job failed to claim",
-    				"task_id", t.ID, "error", err)
-    			continue
+
+	// 2) Due-soon: now <= due_at < now+24h, non-terminal → DM assignee only.
+	// Atomic claim mirror of overdue.
+	dueSoon, err := p.taskService.ListDueSoonTasks(nowMs, nowMs+day)
+	if err != nil {
+		p.API.LogError("Scheduled notify: due-soon scan failed", "error", err)
+	} else {
+		for _, t := range dueSoon {
+			claimed, err := p.taskService.ClaimDueSoonSent(t.ID, nowMs, startOfTodayGMT7)
+			if err != nil {
+				p.API.LogError("Scheduled notify: claim due-soon failed",
+					"task_id", t.ID, "error", err)
+				continue
+			}
+			if !claimed {
+				continue
+			}
+    			p.notifier.NotifyDueSoon(t.AssigneeID, notification.TaskSummary{
+    				ID: t.ID, Summary: t.Summary, Status: t.Status,
+    				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
+    			})
     		}
-    		if !claimed {
-    			continue // another runner already notified today
-    		}
-		p.notifier.NotifyOverdue(notification.TaskSummary{
-			ID:       t.ID,
-			Summary:  t.Summary,
-			Status:   t.Status,
-			DueAt:    t.DueAt,
-			IsAllDay: t.IsAllDay,
-		}, nowMs, t.CreatorID, t.AssigneeID)
-	}
+    	}
 }
+
+// runOverdueJob is kept as a thin alias for backward compatibility with any
+// caller wiring that still references the old name during the rollout; the real
+// work moved to runScheduledNotifyJob.
+func (p *Plugin) runOverdueJob() { p.runScheduledNotifyJob() }
 
 // fireReminderDM sends the reminder notification DM to the assignee and returns
 // an error when delivery failed (so the caller does NOT mark the reminder fired

@@ -25,6 +25,7 @@ var taskColumns = []string{
 	"id", "summary", "description", "channel_id", "parent_task_id",
 	"status", "priority", "order_key", "is_all_day", "due_at", "completed_at",
 	"cancelled_at", "created_at", "updated_at", "channel_post_id", "last_overdue_sent_at",
+	"last_due_soon_sent_at",
 }
 
 // when no row matches the given id. Service-layer code checks errors.Is to
@@ -47,6 +48,7 @@ func (s *SQLStore) CreateTask(ctx context.Context, task model.TaskRow) (model.Ta
 			task.OrderKey, task.IsAllDay, task.DueAt, task.CompletedAt,
 			task.CancelledAt, task.CreatedAt, task.UpdatedAt, task.ChannelPostID,
 			task.LastOverdueSentAt,
+			task.LastDueSoonSentAt,
 		)
 	if _, err := qb.ExecContext(ctx); err != nil {
 		return model.TaskRow{}, fmt.Errorf("create task %s: %w", task.ID, err)
@@ -612,6 +614,7 @@ func scanTaskRow(r scanner) (*model.TaskRow, error) {
 		&t.Status, &t.Priority, &t.OrderKey, &t.IsAllDay, &t.DueAt,
 		&t.CompletedAt, &t.CancelledAt, &t.CreatedAt, &t.UpdatedAt, &channelPostID,
 		&t.LastOverdueSentAt,
+		&t.LastDueSoonSentAt,
 	); err != nil {
 		return nil, err
 	}

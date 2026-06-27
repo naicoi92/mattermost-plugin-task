@@ -873,6 +873,41 @@ func (s *Service) ClaimOverdueSent(taskID string, ms, claimAfterMs int64) (bool,
 	return s.store.ClaimOverdueSent(ctx, taskID, ms, claimAfterMs)
 }
 
+// ListDueSoonTasks returns every open task whose due_at falls in [fromMs, toMs)
+// assembled with creator + assignee ids (so the 8h-GMT+7 scheduler can DM the
+// assignee). Thin wrapper over the store scan.
+func (s *Service) ListDueSoonTasks(fromMs, toMs int64) ([]*model.Task, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	rows, err := s.store.ListDueSoonTasks(ctx, fromMs, toMs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Task, 0, len(rows))
+	for i := range rows {
+		t, err := s.assembleTaskForNotify(ctx, &rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// MarkDueSoonSent stamps last_due_soon_sent_at so the 8h-GMT+7 job can dedupe.
+func (s *Service) MarkDueSoonSent(taskID string, stampedAt int64) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.MarkDueSoonSent(ctx, taskID, stampedAt)
+}
+
+// ClaimDueSoonSent wraps the atomic store claim for the due-soon notification.
+func (s *Service) ClaimDueSoonSent(taskID string, ms, claimAfterMs int64) (bool, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.ClaimDueSoonSent(ctx, taskID, ms, claimAfterMs)
+}
+
 // PatchInput is the partial-update payload. Only fields listed in UpdateFields
 // are modified; a field present in UpdateFields with the corresponding pointer
 // nil clears that field.

@@ -153,13 +153,16 @@ func (p *Plugin) OnActivate() error {
 	// waiting a full day (change notification-overdue-and-context, design D8).
 	p.overdueCtx, p.overdueCancel = context.WithCancel(context.Background())
 	p.overdueWG.Go(func() {
-		p.runOverdueJob()
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
+		// Catch-up: if the job hasn't run yet today (in GMT+7 terms), fire once
+		// immediately on activate so tasks overdue/due-soon before activation are
+		// caught up. The last_*_sent_at columns guard against duplicates if it
+		// actually already ran today.
+		p.runScheduledNotifyJob()
 		for {
+			next := nextRunAt8hGMT7(time.Now())
 			select {
-			case <-ticker.C:
-				p.runOverdueJob()
+			case <-time.After(time.Until(next)):
+				p.runScheduledNotifyJob()
 			case <-p.overdueCtx.Done():
 				return
 			}

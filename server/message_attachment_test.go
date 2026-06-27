@@ -261,7 +261,42 @@ func TestBuildTaskCard_OverdueOpenTaskIsRed(t *testing.T) {
 	pastDue := int64(1_000) // before now
 	card := buildCard(sampleTask(taskmodel.StatusTodo, &pastDue), 2_000, 0, 0, 0,
 		userRef{}, userRef{})
-	assert.Equal(t, "#D92D20", card.Color)
+	assert.Equal(t, "#e01e5a", card.Color, "overdue open task → danger band red")
+}
+
+func TestBuildTaskCard_DueSoonOpenTaskIsAmber(t *testing.T) {
+	soonDue := int64(2_000 + 48*60*60*1000) // 48h from now=2000 → warning band
+	card := buildCard(sampleTask(taskmodel.StatusTodo, &soonDue), 2_000, 0, 0, 0,
+		userRef{}, userRef{})
+	assert.Equal(t, "#cf8900", card.Color, "task due within 24h..72h → warning band amber")
+}
+
+func TestDueBand(t *testing.T) {
+	now := int64(1_700_000_000_000)
+	hour := int64(60 * 60 * 1000)
+	cases := []struct {
+		name   string
+		dueMs  int64
+		status string
+		want   Band
+	}{
+		{"no due → muted", 0, taskmodel.StatusTodo, BandMuted},
+		{"terminal done → muted even if overdue", now - hour, taskmodel.StatusDone, BandMuted},
+		{"terminal cancelled → muted", now + hour, taskmodel.StatusCancelled, BandMuted},
+		{">72h → muted", now + 73*hour, taskmodel.StatusTodo, BandMuted},
+		{"exactly 72h → warning", now + 72*hour, taskmodel.StatusTodo, BandWarn},
+		{"48h → warning", now + 48*hour, taskmodel.StatusInProgress, BandWarn},
+		{"exactly 24h → warning (boundary inclusive)", now + 24*hour, taskmodel.StatusTodo, BandWarn},
+		{"just under 24h → danger", now + 24*hour - 1, taskmodel.StatusTodo, BandDanger},
+		{"12h → danger", now + 12*hour, taskmodel.StatusTodo, BandDanger},
+		{"overdue → danger", now - 5*hour, taskmodel.StatusTodo, BandDanger},
+		{"far past → danger", now - 100*hour, taskmodel.StatusInProgress, BandDanger},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, dueBand(c.dueMs, now, c.status))
+		})
+	}
 }
 
 func TestBuildTaskCard_OverdueDoneTaskNotRed(t *testing.T) {
