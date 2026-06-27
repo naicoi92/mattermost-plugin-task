@@ -8,78 +8,84 @@
 
 // Mock react-redux so useDispatch returns a recording fn without a Provider.
 const mockDispatch = jest.fn();
-jest.mock('react-redux', () => ({
-    useDispatch: () => mockDispatch,
+jest.mock("react-redux", () => ({
+	useDispatch: () => mockDispatch,
 }));
 
 // Mock react-router-dom: useHistory/useParams return captured fns/values.
 const mockGoBack = jest.fn();
 const mockPush = jest.fn();
-let mockParams: {id?: string} = {};
+let mockParams: { id?: string } = {};
 let mockHistoryLength = 2;
-jest.mock('react-router-dom', () => ({
-    useHistory: () => ({goBack: mockGoBack, push: mockPush, length: mockHistoryLength}),
-    useParams: () => mockParams,
+jest.mock("react-router-dom", () => ({
+	useHistory: () => ({
+		goBack: mockGoBack,
+		push: mockPush,
+		length: mockHistoryLength,
+	}),
+	useParams: () => mockParams,
 }));
 
-import React from 'react';
-import TestRenderer, {act} from 'react-test-renderer';
-import {ACTION_TYPES} from 'reducer';
+import React from "react";
+import TestRenderer, { act } from "react-test-renderer";
+import { ACTION_TYPES } from "reducer";
 
-import TaskDeepLink, {setTaskDeepLinkRhsOpener} from 'components/task_deep_link';
+import TaskDeepLink, {
+	setTaskDeepLinkRhsOpener,
+} from "components/task_deep_link";
 
-describe('components/task_deep_link', () => {
-    const rhsOpener = jest.fn();
+describe("components/task_deep_link", () => {
+	const rhsOpener = jest.fn();
 
-    beforeEach(() => {
-        jest.clearAllMocks();
-        mockParams = {};
-        mockHistoryLength = 2;
-        setTaskDeepLinkRhsOpener(rhsOpener);
-    });
+	beforeEach(() => {
+		jest.clearAllMocks();
+		mockParams = {};
+		mockHistoryLength = 2;
+		setTaskDeepLinkRhsOpener(rhsOpener);
+	});
 
-    test('dispatches SELECT_TASK, opens RHS, and goes back on mount', async () => {
-        mockParams = {id: '01HXYZTASK0001'};
-        mockHistoryLength = 2;
+	test("dispatches SELECT_TASK, opens RHS, and goes back on mount", async () => {
+		mockParams = { id: "01HXYZTASK0001" };
+		mockHistoryLength = 2;
 
-        await act(async () => {
-            TestRenderer.create(<TaskDeepLink/>);
-        });
+		await act(async () => {
+			TestRenderer.create(<TaskDeepLink />);
+		});
 
-        expect(mockDispatch).toHaveBeenCalledWith({
-            type: ACTION_TYPES.SELECT_TASK,
-            taskID: '01HXYZTASK0001',
-        });
-        expect(rhsOpener).toHaveBeenCalledTimes(1);
+		expect(mockDispatch).toHaveBeenCalledWith({
+			type: ACTION_TYPES.SELECT_TASK,
+			taskID: "01HXYZTASK0001",
+		});
+		expect(rhsOpener).toHaveBeenCalledTimes(1);
 
-        // Previous history exists → go back, not push.
-        expect(mockGoBack).toHaveBeenCalledTimes(1);
-        expect(mockPush).not.toHaveBeenCalled();
-    });
+		// Previous history exists → go back, not push.
+		expect(mockGoBack).toHaveBeenCalledTimes(1);
+		expect(mockPush).not.toHaveBeenCalled();
+	});
 
-    test('falls back to "/" when there is no previous history (pasted URL)', async () => {
-        mockParams = {id: '01HXYZTASK0001'};
-        mockHistoryLength = 1; // no entry before this one
+	test('falls back to "/" when there is no previous history (pasted URL)', async () => {
+		mockParams = { id: "01HXYZTASK0001" };
+		mockHistoryLength = 1; // no entry before this one
 
-        await act(async () => {
-            TestRenderer.create(<TaskDeepLink/>);
-        });
+		await act(async () => {
+			TestRenderer.create(<TaskDeepLink />);
+		});
 
-        expect(mockPush).toHaveBeenCalledWith('/');
-        expect(mockGoBack).not.toHaveBeenCalled();
-    });
+		expect(mockPush).toHaveBeenCalledWith("/");
+		expect(mockGoBack).not.toHaveBeenCalled();
+	});
 
-    test('renders a centered loading placeholder (not a blank page)', async () => {
-        mockParams = {id: '01HXYZTASK0001'};
-        let root: TestRenderer.ReactTestRenderer;
-        await act(async () => {
-            root = TestRenderer.create(<TaskDeepLink/>);
-        });
+	test("renders a centered loading placeholder (not a blank page)", async () => {
+		mockParams = { id: "01HXYZTASK0001" };
+		let root: TestRenderer.ReactTestRenderer;
+		await act(async () => {
+			root = TestRenderer.create(<TaskDeepLink />);
+		});
 
-        // The component renders a placeholder (not null) so the brief
-        // navigation flash shows feedback instead of a blank white page.
-        const json = root!.toJSON();
-        expect(json).not.toBeNull();
-        expect(json).toHaveProperty('type', 'div');
-    });
+		// The component renders a placeholder (not null) so the brief
+		// navigation flash shows feedback instead of a blank white page.
+		const json = root!.toJSON();
+		expect(json).not.toBeNull();
+		expect(json).toHaveProperty("type", "div");
+	});
 });

@@ -143,6 +143,9 @@ export default class Plugin {
         // The custom_task post body is rendered by TaskPostCard (registered
         // below), which opens the RHS itself; this listener is a fallback for
         // clicks on the surrounding post chrome / the mobile native attachment.
+        // It also intercepts DM notification deep-links (markdown links to
+        // /plug/<plugin-id>/task/<id>) in the CAPTURE phase so the host router
+        // can't navigate — avoids a full page reload/flash on click.
         // Desktop-only: the RHS doesn't exist on mobile, so the click is a
         // harmless no-op there.
         //
@@ -160,10 +163,38 @@ export default class Plugin {
                     return;
                 }
 
-                // Only clicks that land inside the card itself open the RHS.
-                // The card is the element carrying data-task-id; the caption
-                // above it is intentionally excluded so clicking it opens the
-                // thread like any other post.
+                // 1) Notification deep-link interception (capture phase): a
+                // DM notification renders the task name as a markdown link to
+                // /plug/<plugin-id>/task/<id>. If we let the host navigate,
+                // the whole page reloads (flash). Intercept in CAPTURE so we
+                // run BEFORE the host's router, preventDefault +
+                // stopImmediatePropagation to fully suppress navigation, then
+                // open the RHS in place. If interception ever fails, the
+                // custom route /task/:id (registered below) still opens the
+                // task — graceful fallback (change notification-overdue-and-
+                // context, design D9 option A).
+                const linkEl = target.closest('a') as HTMLAnchorElement | null;
+                if (linkEl) {
+                    const href = linkEl.getAttribute('href') || '';
+                    const m = href.match(
+                        /\/plug\/com\.mattermost\.plugin-task\/task\/([A-Za-z0-9]+)/,
+                    );
+                    if (m) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        rhsOpener();
+                        store.dispatch({
+                            type: ACTION_TYPES.SELECT_TASK,
+                            taskID: m[1],
+                        });
+                        return;
+                    }
+                }
+
+                // 2) Channel task card: only clicks landing inside the card
+                // itself open the RHS. The card is the element carrying
+                // data-task-id; the caption above it is intentionally excluded
+                // so clicking it opens the thread like any other post.
                 const cardEl = target.closest('[data-task-id]') as HTMLElement | null;
                 if (!cardEl) {
                     return;
@@ -185,7 +216,10 @@ export default class Plugin {
                 rhsOpener();
                 store.dispatch({type: ACTION_TYPES.SELECT_TASK, taskID});
             };
-            document.addEventListener('click', this.clickListener);
+
+            // Capture phase (3rd arg true): fire BEFORE target/bubble so the
+            // host router can't stopPropagation us away from the DM deep-link.
+            document.addEventListener('click', this.clickListener, true);
         }
 
         // Register the RHS. The returned action creators open/close/toggle the
@@ -313,7 +347,7 @@ export default class Plugin {
         // duplicate handlers. The registry's other registrations are cleaned up
         // by the host automatically.
         if (this.clickListener && typeof document !== 'undefined') {
-            document.removeEventListener('click', this.clickListener);
+            document.removeEventListener('click', this.clickListener, true);
             this.clickListener = undefined;
         }
     }
