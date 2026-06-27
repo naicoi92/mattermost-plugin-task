@@ -23,7 +23,10 @@ import {
     getChannel,
     getCurrentChannelId,
 } from 'mattermost-redux/selectors/entities/channels';
-import {getCurrentUserId, getUser} from 'mattermost-redux/selectors/entities/users';
+import {
+    getCurrentUserId,
+    getUser,
+} from 'mattermost-redux/selectors/entities/users';
 
 import formatDueRelative from 'components/shared/format_due_relative';
 import MetaDropdown from 'components/shared/meta_dropdown';
@@ -371,7 +374,7 @@ export default function TaskDetailPanel({
     // Resolve a human-friendly channel name. For a team/public channel this is
     // the channel display_name. For a DM (name like "<uid1>__<uid2>") the
     // Mattermost store leaves display_name empty and name as the raw id pair;
-    // fall back to the other user's display name when the store exposes it.
+    // resolve the partner's username, or fall back to a generic label.
     const channelName = useSelector((s: GlobalState) => {
         if (!channelIDForSelector) {
             return '';
@@ -382,19 +385,23 @@ export default function TaskDetailPanel({
         }
 
         // DM fallback: name is "<uid1>__<uid2>". Resolve the non-current user's
-        // display name from the users store.
+        // username from the users store.
         if (ch?.name && ch.name.includes('__')) {
             const me = getCurrentUserId(s as never);
             const partner = ch.name.split('__').find((id) => id && id !== me);
             if (partner) {
                 const u = getUser(s as never, partner);
-                if (u) {
-                    return u.username ? '@' + u.username : partner;
+                if (u?.username) {
+                    return '@' + u.username;
                 }
             }
-            return '';
+
+            // User not loaded in store — show generic label instead of raw ids.
+            return 'Direct Message';
         }
-        return ch?.name || '';
+
+        // Channel not loaded or team channel without display_name.
+        return ch?.display_name || '';
     });
 
     // Resolve the parent task's summary so the meta-table can show a readable
@@ -818,7 +825,9 @@ export default function TaskDetailPanel({
                     disabled={!currentChannelID}
                     aria-label={t('webapp.task.share.button')}
                     title={
-                        currentChannelID ? t('webapp.task.share.button') : t('webapp.task.share.no_channel')
+                        currentChannelID ?
+                            t('webapp.task.share.button') :
+                            t('webapp.task.share.no_channel')
                     }
                 >
                     <ShareIcon/>
@@ -986,11 +995,13 @@ export default function TaskDetailPanel({
                                 tabIndex={0}
                             >
                                 <CalendarIcon/>
-                                {full.due ? formatDueRelative({
-                                    dueMs: full.due,
-                                    locale,
-                                    isOverdue: isOverdue(full),
-                                }) : t('webapp.task.due.pick')}
+                                {full.due ?
+                                    formatDueRelative({
+                                        dueMs: full.due,
+                                        locale,
+                                        isOverdue: isOverdue(full),
+                                    }) :
+                                    t('webapp.task.due.pick')}
                             </span>
                         )}
                     </div>
@@ -1202,11 +1213,17 @@ export default function TaskDetailPanel({
                         const isComment = item.kind === 'comment';
                         const c = item.comment;
                         const ev = item.event;
-                        const actorID = isComment ? (c?.author_id ?? '') : (ev?.actor_id ?? '');
-                        const label = isComment ? commentAuthorLabel(c as Comment, actorLabels) : actorLabels[actorID] || actorID || '?';
+                        const actorID = isComment ?
+                            (c?.author_id ?? '') :
+                            (ev?.actor_id ?? '');
+                        const label = isComment ?
+                            commentAuthorLabel(c as Comment, actorLabels) :
+                            actorLabels[actorID] || actorID || '?';
                         const initials =
 							label.replace(/^@/, '').trim().slice(0, 2).toUpperCase() || '?';
-                        const actionLabel = isComment ? t(activityLabelKey('commented')) : t(activityLabelKey(ev?.event_type ?? ''));
+                        const actionLabel = isComment ?
+                            t(activityLabelKey('commented')) :
+                            t(activityLabelKey(ev?.event_type ?? ''));
                         const statusClass = actorStatusClass(actorStatuses[actorID]);
                         return (
                             <li
@@ -1269,7 +1286,7 @@ export default function TaskDetailPanel({
                                     e.preventDefault();
                                     setMention((s) => {
                                         const len = s.candidates.length;
-                                        return {...s, highlight: (((s.highlight - 1) + len) % len)};
+                                        return {...s, highlight: ((s.highlight - 1) + len) % len};
                                     });
                                     return;
                                 }

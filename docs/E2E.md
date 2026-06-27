@@ -34,6 +34,7 @@ assets). Uploadable via System Console → Plugins or `mmctl plugin upload`.
 > each flow.
 
 ### Core lifecycle
+
 - [ ] `make dist` succeeds and the plugin uploads + activates without errors.
 - [ ] `POST /api/v1/tasks` (or a client) creates a task; the interactive task card
       posts in the channel (issue #15).
@@ -54,13 +55,14 @@ assets). Uploadable via System Console → Plugins or `mmctl plugin upload`.
       card (issue #15).
 
 ### Permission boundaries (issue #18)
+
 - [ ] Assignee can edit summary/due/status/assignee/subtask/reminder (co-owner).
 - [ ] Assignee CANNOT delete the task.
 - [ ] Creator can delete; a channel admin can delete channel-scoped tasks.
-- [ ] Personal tasks (no ChannelID) are hidden from everyone except
-      creator + assignee.
+- [ ] Tasks in a DM channel are only visible to the two DM participants.
 
 ### Reminders (issue #13)
+
 - [ ] `idx:reminder:` index is rebuilt on create/due-change/status-change/
       offset-change/assignee-change.
 - [ ] The per-minute cluster job fires due reminders once and marks them fired.
@@ -68,6 +70,7 @@ assets). Uploadable via System Console → Plugins or `mmctl plugin upload`.
 - [ ] Terminal statuses drop the reminder edge; self-heal drops any stale edge.
 
 ### Interactive dialogs (issue #17, mobile/fallback)
+
 - [ ] Quick List dialog renders scope/status/due filters + top-N task select.
 - [ ] Task Detail dialog edits summary/status/assignee/due/description; submit
       applies PATCH + status + assignee, reporting partial success on failure.
@@ -78,6 +81,7 @@ assets). Uploadable via System Console → Plugins or `mmctl plugin upload`.
 
 These Phase 1 acceptance criteria require the React webapp (RHS, root
 components) which lands in Phase 3, and are re-verified there:
+
 - `/task add "<summary>"` opening the React `NewTaskDialog` (issue #8).
 - `/task list` / `/task show` opening the RHS views (issue #9).
 - `/task list` opening a Quick List Interactive Dialog from the command path on
@@ -141,7 +145,7 @@ channel, the plugin enabled.
       (minus the commenter) are DM'd. The card shows `Comments: N`.
 - [ ] **Task Detail shows subtasks + comments.** Opening the Task Detail dialog
       shows live subtask progress and the most recent comments in the intro.
-- [ ] **Access control.** A user who cannot view a personal task cannot read its
+- [ ] **Access control.** A user who cannot view a DM-scoped task cannot read its
       comments (`GET /tasks/<id>/comments` → 403) or comment via the command.
 
 ### Deferred to Phase 3 (webapp)

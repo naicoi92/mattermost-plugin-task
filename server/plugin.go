@@ -11,7 +11,6 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
-	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 	"github.com/pkg/errors"
 
 	taskmodel "github.com/naicoi92/mattermost-plugin-task/server/model"
@@ -51,9 +50,11 @@ type Plugin struct {
 	// router is the HTTP router for handling API requests.
 	router *mux.Router
 
-	// reminderJob is the cluster-scheduled job that fires due task reminders
-	// once per minute on a single node.
-	reminderJob *cluster.Job
+	// reminderCtx/reminderCancel/WG control the background reminder ticker
+	// goroutine (replaces cluster.Schedule to avoid KV-RPC instability).
+	reminderCtx    context.Context
+	reminderCancel context.CancelFunc
+	reminderWG     sync.WaitGroup
 
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
@@ -98,7 +99,7 @@ func (p *Plugin) OnActivate() error {
 	if err != nil {
 		return errors.Wrap(err, "failed to initialize task sqlstore")
 	}
-	if migErr := sqlStore.RunMigrationsClusterSafe(p.API); migErr != nil {
+	if migErr := sqlStore.RunMigrations(p.API); migErr != nil {
 		return errors.Wrap(migErr, "failed to run task database migrations")
 	}
 	p.taskStore = sqlStore
@@ -114,16 +115,25 @@ func (p *Plugin) OnActivate() error {
 
 	p.router = p.initRouter()
 
-	reminderJob, err := cluster.Schedule(
-		p.API,
-		"TaskReminderJob",
-		cluster.MakeWaitForRoundedInterval(1*time.Minute),
-		p.runReminderJob,
-	)
-	if err != nil {
-		return errors.Wrap(err, "failed to schedule reminder job")
-	}
-	p.reminderJob = reminderJob
+	// Reminder scheduler: use a plain time.Ticker instead of cluster.Schedule.
+	// cluster.Schedule uses a KV-backed mutex that calls KVSetWithOptions on a
+	// heartbeat, which can destabilize the plugin RPC connection in some
+	// environments (the heartbeat retries forever once RPC dies, spamming
+	// logs). A single-node ticker is sufficient for reminders and avoids the KV
+	// dependency entirely.
+	p.reminderCtx, p.reminderCancel = context.WithCancel(context.Background())
+	p.reminderWG.Go(func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				p.runReminderJob()
+			case <-p.reminderCtx.Done():
+				return
+			}
+		}
+	})
 
 	return nil
 }
@@ -147,13 +157,10 @@ func (p *Plugin) ensureBot() (string, error) {
 
 // OnDeactivate is invoked when the plugin is deactivated.
 func (p *Plugin) OnDeactivate() error {
-	for _, job := range []*cluster.Job{p.reminderJob} {
-		if job != nil {
-			if err := job.Close(); err != nil {
-				p.API.LogError("Failed to close job", "err", err)
-			}
-		}
+	if p.reminderCancel != nil {
+		p.reminderCancel()
 	}
+	p.reminderWG.Wait()
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"slices"
 
 	mmmodel "github.com/mattermost/mattermost/server/public/model"
@@ -35,18 +36,23 @@ func (p *Plugin) broadcastTaskUpdated(task *taskmodel.Task, changedFields []stri
 		return
 	}
 
+	// Marshal the task to a generic map[string]any so the RPC gob encoder does
+	// not need the concrete type registered (avoids 'gob: type not registered
+	// for interface' which kills the RPC connection).
+	raw, err := json.Marshal(task)
+	taskPayload := map[string]any{}
+	if err == nil {
+		_ = json.Unmarshal(raw, &taskPayload)
+	}
+
 	payload := map[string]any{
 		"task_id":        task.ID,
 		"seq":            task.UpdatedAt,
 		"updated_at":     task.UpdatedAt,
 		"changed_fields": changedFields,
 		"status":         task.Status,
+		"task":           taskPayload,
 	}
-
-	// Include the full task object so clients can update without an extra
-	// fetch. Nil-marshals to JSON null; the webapp treats a null/absent task as
-	// a delete signal (it also keys off a missing task body, see index.tsx).
-	payload["task"] = task
 
 	p.publishTaskEvent(payload, task)
 }
