@@ -30,6 +30,7 @@
   "notification.due_soon": "Due soon: task %s [%s] · %s. Due: %s.",
   "notification.preview.suffix": ":\n\"%s\"",
   "notification.overdue.duration": "%d days overdue",
+  "notification.overdue.duration.one": "1 day overdue",
   "task.status.todo": "To do",
   "task.status.in_progress": "In progress",
   "task.status.done": "Done",
