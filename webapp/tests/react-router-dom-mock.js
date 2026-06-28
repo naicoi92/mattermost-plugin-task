@@ -10,6 +10,11 @@
 // jest.mock. Components needing richer router behavior override these in their
 // own test via jest.mock('react-router-dom', () => ({...})).
 module.exports = {
-    useHistory: () => ({goBack: () => {}, push: () => {}, replace: () => {}, length: 1}),
-    useParams: () => ({}),
+	useHistory: () => ({
+		goBack: () => {},
+		push: () => {},
+		replace: () => {},
+		length: 1,
+	}),
+	useParams: () => ({}),
 };

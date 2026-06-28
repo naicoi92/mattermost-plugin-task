@@ -183,7 +183,7 @@ func TestNotifyAssigned_PlainNameWhenNoSiteURL(t *testing.T) {
 	n := newTestNotifier(api) // no site URL
 
 	n.NotifyAssigned("a", "x", TaskSummary{ID: "01HXYZTASK0001", Summary: "Fix [bug]", Status: "todo"})
-    
+
 	require.Len(t, api.posts, 1)
 	// No markdown link; plain-text fallback escapes brackets so a title like
 	// "Fix [bug]" can't become a spurious link label in the DM body.

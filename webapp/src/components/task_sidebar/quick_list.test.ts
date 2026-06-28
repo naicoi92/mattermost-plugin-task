@@ -128,7 +128,13 @@ describe('groupTasks', () => {
         const today = makeTask({
             id: '2',
             status: 'todo',
-            due: Date.now() + 60_000,
+
+            // Anchor to local noon today so the bucket test never crosses a
+            // day boundary when run near midnight (CodeRabbit review).
+            due: (() => {
+                const n = new Date();
+                return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 12, 0, 0).getTime();
+            })(),
         });
         const upcoming = makeTask({
             id: '3',
