@@ -115,7 +115,7 @@ func (p *Plugin) runScheduledNotifyJob() {
 				continue
 			}
 			p.notifier.NotifyOverdue(notification.TaskSummary{
-				ID: t.ID, Summary: t.Summary, Status: t.Status,
+				ID: t.ID, Summary: t.Summary, Status: t.Status, Priority: t.Priority,
 				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
 			}, nowMs, t.CreatorID, t.AssigneeID)
 		}
@@ -138,7 +138,7 @@ func (p *Plugin) runScheduledNotifyJob() {
 				continue
 			}
 			p.notifier.NotifyDueSoon(t.AssigneeID, notification.TaskSummary{
-				ID: t.ID, Summary: t.Summary, Status: t.Status,
+				ID: t.ID, Summary: t.Summary, Status: t.Status, Priority: t.Priority,
 				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
 			})
 		}
@@ -158,6 +158,7 @@ func (p *Plugin) fireReminderDM(r taskmodel.DueReminder) error {
 			summary.Status = t.Status
 			summary.DueAt = t.DueAt
 			summary.IsAllDay = t.IsAllDay
+			summary.Priority = t.Priority
 		}
 		// Propagate the delivery error so the caller can retry instead of
 		// marking the reminder fired (which would silently lose it).

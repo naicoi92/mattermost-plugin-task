@@ -208,6 +208,7 @@ func (p *Plugin) createTask(w http.ResponseWriter, r *http.Request) {
 			ID:       created.ID,
 			Summary:  created.Summary,
 			Status:   created.Status,
+			Priority: created.Priority,
 			DueAt:    created.DueAt,
 			IsAllDay: created.IsAllDay,
 		})
@@ -445,7 +446,7 @@ func (p *Plugin) notifyTerminalStatus(t *taskmodel.Task, status, actorID string)
 	if p.notifier == nil || t == nil {
 		return
 	}
-	summary := notification.TaskSummary{ID: t.ID, Summary: t.Summary, Status: t.Status, DueAt: t.DueAt, IsAllDay: t.IsAllDay}
+	summary := notification.TaskSummary{ID: t.ID, Summary: t.Summary, Status: t.Status, Priority: t.Priority, DueAt: t.DueAt, IsAllDay: t.IsAllDay}
 	switch status {
 	case taskmodel.StatusDone:
 		p.notifier.NotifyCompleted(summary, actorID, t.CreatorID, t.AssigneeID)
@@ -565,7 +566,7 @@ func (p *Plugin) setAssignee(w http.ResponseWriter, r *http.Request) {
 	if p.notifier != nil {
 		p.notifier.NotifyAssigned(ev.NewAssigneeID, ev.CreatorID, notification.TaskSummary{
 			ID: updated.ID, Summary: updated.Summary,
-			Status: updated.Status, DueAt: updated.DueAt, IsAllDay: updated.IsAllDay,
+			Status: updated.Status, Priority: updated.Priority, DueAt: updated.DueAt, IsAllDay: updated.IsAllDay,
 		})
 	}
 	p.writeJSON(w, updated)
@@ -915,7 +916,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	// DM the task participants (creator + assignee), excluding the commenter.
 	if p.notifier != nil {
 		p.notifier.NotifyCommented(notification.TaskSummary{
-			ID: t.ID, Summary: t.Summary, Status: t.Status, DueAt: t.DueAt, IsAllDay: t.IsAllDay,
+			ID: t.ID, Summary: t.Summary, Status: t.Status, Priority: t.Priority, DueAt: t.DueAt, IsAllDay: t.IsAllDay,
 			CommentPreview: notification.TruncateForPreview(created.Message, notification.PreviewMaxRunes),
 		}, ev.AuthorID, ev.CreatorID, ev.AssigneeID)
 	}

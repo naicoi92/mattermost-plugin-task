@@ -138,6 +138,9 @@ type TaskSummary struct {
 	DueAt *int64
 	// IsAllDay marks the due as date-only for formatting.
 	IsAllDay bool
+	// Priority is the task priority (standard/important/urgent), rendered as a
+	// suffix clause in the DM so non-standard priorities stand out.
+	Priority string
 	// CommentPreview is the plain-text preview of a comment's content, used only
 	// by the commented event. Empty string omits the preview clause.
 	CommentPreview string
@@ -252,6 +255,20 @@ func (n *Notifier) statusLabel(locale, status string) string {
 	return "**" + n.translator.T(locale, "task.status."+status) + "**"
 }
 
+// priorityLabel returns the localized priority label with an emoji prefix that
+// reflects urgency (important = ⚠, urgent = 🚨, standard = none). Empty when the
+// status is standard or unset, so the clause is omitted for low-priority tasks.
+func (n *Notifier) priorityLabel(locale, priority string) string {
+	if priority == "" || priority == "standard" {
+		return ""
+	}
+	emoji := "⚠"
+	if priority == "urgent" {
+		emoji = "🚨"
+	}
+	return emoji + " " + n.translator.T(locale, "task.priority."+priority)
+}
+
 // renderMessage composes a localized notification body: the core template,
 // followed by the optional due clause (when DueAt != nil) and the optional
 // comment-preview clause (when preview != "", commented event only). Trailing
@@ -308,6 +325,9 @@ func dueBandLocal(dueMs, nowMs int64, status string) string {
 
 func (n *Notifier) renderMessage(locale, coreKey string, coreArgs []any, task TaskSummary, preview string) string {
 	msg := n.bandEmoji(coreKey, task) + n.translator.T(locale, coreKey, coreArgs...)
+	if p := n.priorityLabel(locale, task.Priority); p != "" {
+		msg += " · " + p
+	}
 	if task.DueAt != nil {
 		msg += n.translator.T(locale, "notification.due.suffix", formatDue(locale, *task.DueAt, task.IsAllDay))
 	}
