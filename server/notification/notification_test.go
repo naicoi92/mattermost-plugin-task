@@ -164,9 +164,10 @@ func TestNotifyAssigned_DMsAssigneeNotCreator(t *testing.T) {
 	// Actor shown by display name (nickname "Alice"), NOT @-mentioned.
 	assert.Contains(t, msg, "Alice")
 	assert.NotContains(t, msg, "@user_creator")
-	// Short id + status label present.
-	assert.Contains(t, msg, "01HXYZAS")
-	assert.Contains(t, msg, "vi:task.status.todo")
+	// Status label present (now wrapped in ** ** for bold).
+	assert.Contains(t, msg, "**vi:task.status.todo**")
+	// Short id is no longer rendered (removed per product decision).
+	assert.NotContains(t, msg, "01HXYZAS")
 }
 
 func TestNotifyAssigned_ClickableTaskNameWithSiteURL(t *testing.T) {
@@ -441,12 +442,6 @@ func TestDisplayName_NoAtPrefix(t *testing.T) {
 }
 
 // --- helper unit tests ---
-
-func TestShortID(t *testing.T) {
-	assert.Equal(t, "01HXYZ01", shortID("01HXYZ0123456789ABCDEF"))
-	assert.Equal(t, "short", shortID("short")) // < 8 chars → whole id
-	assert.Equal(t, "", shortID(""))
-}
 
 func TestOverdueDays(t *testing.T) {
 	const day = 24 * 60 * 60 * 1000

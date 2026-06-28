@@ -45,11 +45,6 @@ type Translator interface {
 // defaultLocale is used when a recipient has no locale preference.
 const defaultLocale = "en"
 
-// shortIDLen is the number of leading ULID characters shown as a short task
-// reference. ULIDs carry a millisecond timestamp prefix, so 8 chars stay unique
-// in practice (collision only within the same millisecond).
-const shortIDLen = 8
-
 // PreviewMaxRunes is the maximum length (in runes) of a comment preview shown
 // in a commented notification before truncation.
 const PreviewMaxRunes = 100
@@ -146,14 +141,6 @@ type TaskSummary struct {
 	// CommentPreview is the plain-text preview of a comment's content, used only
 	// by the commented event. Empty string omits the preview clause.
 	CommentPreview string
-}
-
-// shortID returns the leading characters of the task id as a short reference.
-func shortID(id string) string {
-	if utf8.RuneCountInString(id) >= shortIDLen {
-		return id[:shortIDLen]
-	}
-	return id
 }
 
 // renderTaskNameLink returns the task summary as a markdown link to the plugin
@@ -255,13 +242,14 @@ func TruncateForPreview(content string, max int) string {
 	return string([]rune(content)[:max]) + "…"
 }
 
-// statusLabel returns the localized label for a task status, or "" when the
-// status is empty (some events omit status entirely).
+// statusLabel returns the localized label for a task status wrapped in
+// markdown bold (**), or "" when the status is empty (some events omit status
+// entirely). The bold makes the status stand out in the DM body.
 func (n *Notifier) statusLabel(locale, status string) string {
 	if status == "" {
 		return ""
 	}
-	return n.translator.T(locale, "task.status."+status)
+	return "**" + n.translator.T(locale, "task.status."+status) + "**"
 }
 
 // renderMessage composes a localized notification body: the core template,
@@ -341,7 +329,6 @@ func (n *Notifier) NotifyAssigned(assigneeID, actorID string, task TaskSummary) 
 	msg := n.renderMessage(locale, "notification.assigned", []any{
 		n.displayName(actorID),
 		n.renderTaskNameLink(task.ID, task.Summary),
-		shortID(task.ID),
 		n.statusLabel(locale, task.Status),
 	}, task, "")
 	n.postDM(assigneeID, msg)
@@ -357,7 +344,6 @@ func (n *Notifier) NotifyCompleted(task TaskSummary, actorID, creatorID, assigne
 		locale := n.localeFor(recipient)
 		msg := n.renderMessage(locale, "notification.completed", []any{
 			n.renderTaskNameLink(task.ID, task.Summary),
-			shortID(task.ID),
 			actor,
 		}, task, "")
 		n.postDM(recipient, msg)
@@ -372,7 +358,6 @@ func (n *Notifier) NotifyCancelled(task TaskSummary, actorID, creatorID, assigne
 		locale := n.localeFor(recipient)
 		msg := n.renderMessage(locale, "notification.cancelled", []any{
 			n.renderTaskNameLink(task.ID, task.Summary),
-			shortID(task.ID),
 			actor,
 		}, task, "")
 		n.postDM(recipient, msg)
@@ -389,7 +374,6 @@ func (n *Notifier) NotifyCommented(task TaskSummary, actorID, creatorID, assigne
 		msg := n.renderMessage(locale, "notification.commented", []any{
 			actor,
 			n.renderTaskNameLink(task.ID, task.Summary),
-			shortID(task.ID),
 			n.statusLabel(locale, task.Status),
 		}, task, task.CommentPreview)
 		n.postDM(recipient, msg)
@@ -408,7 +392,6 @@ func (n *Notifier) NotifyReminder(assigneeID string, task TaskSummary) error {
 	locale := n.localeFor(assigneeID)
 	msg := n.renderMessage(locale, "notification.reminder", []any{
 		n.renderTaskNameLink(task.ID, task.Summary),
-		shortID(task.ID),
 		n.statusLabel(locale, task.Status),
 	}, task, "")
 	channel, err := n.api.GetDirectChannel(assigneeID, n.botUserID)
@@ -446,7 +429,6 @@ func (n *Notifier) NotifyOverdue(task TaskSummary, nowMs int64, creatorID, assig
 		}
 		msg := strings.TrimSpace(n.translator.T(locale, "notification.overdue",
 			n.renderTaskNameLink(task.ID, task.Summary),
-			shortID(task.ID),
 			n.statusLabel(locale, task.Status),
 			dueStr,
 			n.formatOverdueDuration(locale, nowMs, derefInt64(task.DueAt, nowMs)),
@@ -474,7 +456,6 @@ func (n *Notifier) NotifyDueSoon(assigneeID string, task TaskSummary) {
 	msg := strings.TrimSpace(n.bandEmoji("notification.due_soon", task) +
 		n.translator.T(locale, "notification.due_soon",
 			n.renderTaskNameLink(task.ID, task.Summary),
-			shortID(task.ID),
 			n.statusLabel(locale, task.Status),
 			dueStr,
 		))
