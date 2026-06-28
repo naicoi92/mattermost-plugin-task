@@ -137,7 +137,11 @@ func TestNotifyAssigned_EmojiPrefixByBand(t *testing.T) {
 	}
 }
 
-func ptrInt64(v int64) *int64 { return &v }
+func ptrInt64(v int64) *int64 {
+	p := new(int64)
+	*p = v
+	return p
+}
 
 func TestNotifyAssigned_DMsAssigneeNotCreator(t *testing.T) {
 	api := &fakeAPI{

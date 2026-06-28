@@ -134,4 +134,8 @@ func TestMarkDueSoonSent(t *testing.T) {
 	require.Equal(t, stamp, *after.LastDueSoonSentAt)
 }
 
-func ptrInt64Row(v int64) *int64 { return &v }
+func ptrInt64Row(v int64) *int64 {
+	p := new(int64)
+	*p = v
+	return p
+}
