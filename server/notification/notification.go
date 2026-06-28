@@ -273,58 +273,11 @@ func (n *Notifier) priorityLabel(locale, priority string) string {
 // followed by the optional due clause (when DueAt != nil) and the optional
 // comment-preview clause (when preview != "", commented event only). Trailing
 // whitespace is trimmed so omitted clauses leave no dangling separator.
-// bandEmoji prefixes a DM message with a warning/danger emoji based on the
-// task's due band, so a DM-only reader gets the same urgency cue as the card /
-// sidebar (which tint via CSS). Muted band → no prefix. Overdue template
-// already carries 🔴 in its own wording, so this is skipped when coreKey is the
-// overdue key (avoid double emoji).
-func (n *Notifier) bandEmoji(coreKey string, task TaskSummary) string {
-	if coreKey == "notification.overdue" {
-		return ""
-	}
-	dueMs := int64(0)
-	if task.DueAt != nil {
-		dueMs = *task.DueAt
-	}
-	switch dueBandLocal(dueMs, n.nowMs(), task.Status) {
-	case "danger":
-		return "🔴 "
-	case "warning":
-		return "⚠ "
-	default:
-		return ""
-	}
-}
-
-// dueBandLocal mirrors server/due_band.go's dueBand so this package stays
-// self-contained (notification is a separate package; importing main would
-// create a cycle). Thresholds MUST stay in sync with the main-package helper
-// (change due-color-and-scheduled-notify, design D1).
-func dueBandLocal(dueMs, nowMs int64, status string) string {
-	if dueMs == 0 {
-		return "muted"
-	}
-	if status == "done" || status == "cancelled" {
-		return "muted"
-	}
-	const (
-		msPerHour = int64(60 * 60 * 1000)
-		dangerMs  = 24 * msPerHour
-		warningMs = 72 * msPerHour
-	)
-	delta := dueMs - nowMs
-	switch {
-	case delta < dangerMs:
-		return "danger"
-	case delta <= warningMs:
-		return "warning"
-	default:
-		return "muted"
-	}
-}
-
 func (n *Notifier) renderMessage(locale, coreKey string, coreArgs []any, task TaskSummary, preview string) string {
-	msg := n.bandEmoji(coreKey, task) + n.translator.T(locale, coreKey, coreArgs...)
+	// Each template now carries its own verb emoji (👤/✅/💬/⏰/🔴), so we no
+	// longer prepend a band emoji — it duplicated the leading emoji and looked
+	// cluttered. Band urgency is still conveyed: overdue uses 🔴, due_soon uses ⏰.
+	msg := n.translator.T(locale, coreKey, coreArgs...)
 	if p := n.priorityLabel(locale, task.Priority); p != "" {
 		msg += " · " + p
 	}
@@ -471,14 +424,12 @@ func (n *Notifier) NotifyDueSoon(assigneeID string, task TaskSummary) {
 	if task.DueAt != nil {
 		dueStr = formatDue(locale, *task.DueAt, task.IsAllDay)
 	}
-	// bandEmoji prefixes 🔴 (due-soon is <24h = danger band). The template itself
-	// carries no emoji so there is no duplication.
-	msg := strings.TrimSpace(n.bandEmoji("notification.due_soon", task) +
-		n.translator.T(locale, "notification.due_soon",
-			n.renderTaskNameLink(task.ID, task.Summary),
-			n.statusLabel(locale, task.Status),
-			dueStr,
-		))
+	// Template already carries ⏰ (due_soon verb emoji); no band prefix.
+	msg := strings.TrimSpace(n.translator.T(locale, "notification.due_soon",
+		n.renderTaskNameLink(task.ID, task.Summary),
+		n.statusLabel(locale, task.Status),
+		dueStr,
+	))
 	n.postDM(assigneeID, msg)
 }
 

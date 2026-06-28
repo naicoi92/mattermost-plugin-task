@@ -103,44 +103,21 @@ func newTestNotifierAtTime(api API, nowMs int64) *Notifier {
 	return n
 }
 
-func TestNotifyAssigned_EmojiPrefixByBand(t *testing.T) {
-	now := int64(1_700_000_000_000)
-	const hour = int64(60 * 60 * 1000)
-
-	cases := []struct {
-		name   string
-		dueAt  *int64
-		status string
-		want   string // expected emoji prefix at start of message
-	}{
-		{"warning band (48h) → ⚠", ptrInt64(now + (48 * hour)), "todo", "⚠ "},
-		{"danger band (12h) → 🔴", ptrInt64(now + (12 * hour)), "todo", "🔴 "},
-		{"overdue → 🔴 (danger)", ptrInt64(now - (5 * hour)), "todo", "🔴 "},
-		{"muted band (>72h) → no prefix", ptrInt64(now + (73 * hour)), "todo", ""},
-		{"no due → no prefix", nil, "todo", ""},
-		{"terminal done → no prefix even if overdue", ptrInt64(now - hour), "done", ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			api := &fakeAPI{users: map[string]*model.User{
-				"a": userWithLocale("a", "vi"),
-				"c": userNamed("c", "Alice"),
-			}}
-			n := newTestNotifierAtTime(api, now)
-			n.NotifyAssigned("a", "c", TaskSummary{
-				ID: "01HXYZTASK0001", Summary: "x", Status: c.status, DueAt: c.dueAt,
-			})
-			require.Len(t, api.posts, 1)
-			assert.True(t, strings.HasPrefix(api.posts[0].message, c.want),
-				"message %q should start with %q", api.posts[0].message, c.want)
-		})
-	}
-}
-
-func ptrInt64(v int64) *int64 {
-	p := new(int64)
-	*p = v
-	return p
+func TestNotifyAssigned_UsesAssignedTemplate(t *testing.T) {
+	// fakeTranslator returns locale:key:args without rendering the template, so
+	// the 👤 emoji baked into the template isn't visible here. Assert the key +
+	// args order instead; the real i18n bundle renders the emoji.
+	api := &fakeAPI{users: map[string]*model.User{
+		"a": userWithLocale("a", "vi"),
+		"c": userNamed("c", "Alice"),
+	}}
+	n := newTestNotifier(api)
+	n.NotifyAssigned("a", "c", TaskSummary{
+		ID: "01HXYZTASK0001", Summary: "x", Status: "todo",
+	})
+	require.Len(t, api.posts, 1)
+	assert.Contains(t, api.posts[0].message, "vi:notification.assigned:")
+	assert.Contains(t, api.posts[0].message, "**vi:task.status.todo**")
 }
 
 func TestNotifyAssigned_DMsAssigneeNotCreator(t *testing.T) {
@@ -371,10 +348,11 @@ func TestNotifyDueSoon_DMsOnlyAssignee(t *testing.T) {
 	require.Len(t, api.posts, 1)
 	assert.Contains(t, api.posts[0].channelID, "assignee")
 	msg := api.posts[0].message
-	// Danger band (<24h) → 🔴 prefix.
-	assert.True(t, strings.HasPrefix(msg, "🔴 "))
+	// fakeTranslator returns locale:key:args without rendering the template,
+	// so the ⏰ emoji baked into the template isn't visible here — assert the
+	// key + status label instead.
 	assert.Contains(t, msg, "vi:notification.due_soon:")
-	assert.Contains(t, msg, "vi:task.status.todo")
+	assert.Contains(t, msg, "**vi:task.status.todo**")
 }
 
 func TestNotifyDueSoon_EmptyAssigneeNoop(t *testing.T) {
