@@ -30,7 +30,10 @@ import formatDueRelative from 'components/shared/format_due_relative';
 import {priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
 import TaskCheck from 'components/shared/task_check';
-import {isOverdue, truncateDescription} from 'components/task_sidebar/quick_list';
+import {
+    isOverdue,
+    truncateDescription,
+} from 'components/task_sidebar/quick_list';
 import {useResolvedUser} from 'components/user_picker/use_resolved_user';
 
 import type {Task} from 'types/tasks';
@@ -129,7 +132,12 @@ export default function TaskPostCard({
     // NOT clickable — clicks on it fall through to the host's default post
     // behaviour (open the thread), mirroring how a plain text post behaves. Only
     // the card below opens Task Details.
-    const caption = task.assignee_id && task.assignee_id !== task.creator_id ? t('webapp.task.post.caption.assigned', creatorLabel || task.creator_id, assigneeLabel || task.assignee_id) : t('webapp.task.post.caption.created', creatorLabel || task.creator_id);
+    const caption =
+            task.assignee_id && task.assignee_id !== task.creator_id ? t(
+                'webapp.task.post.caption.assigned',
+                creatorLabel || task.creator_id,
+                assigneeLabel || task.assignee_id,
+            ) : t('webapp.task.post.caption.created', creatorLabel || task.creator_id);
 
     // toggleDone flips the checkbox: open → done, terminal → in_progress.
     const toggleDone = async (e: React.MouseEvent) => {
@@ -214,7 +222,9 @@ export default function TaskPostCard({
                                 })}
                             </span>
                         ) : (
-                            <span className='task-post-card__due task-post-card__due--none'>{'—'}</span>
+                            <span className='task-post-card__due task-post-card__due--none'>
+                                {'—'}
+                            </span>
                         )}
                         {task.assignee_id && (
                             <span className='task-post-card__assignee'>

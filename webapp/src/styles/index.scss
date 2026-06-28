@@ -2034,10 +2034,26 @@
         font-size: 11px;
         color: var(--task-muted);
 
+        &--muted {
+            // default muted color; no extra styling
+        }
+
         &--none {
             opacity: 0.4;
         }
 
+        &--warning {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        &--danger {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
+        // Back-compat aliases for the old band names (kept until callers
+        // migrate to dueBand output).
         &--soon {
             color: var(--task-warning);
             font-weight: 600;
