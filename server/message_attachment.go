@@ -264,12 +264,17 @@ func cardTitle(t *taskmodel.Task) string {
 	}
 }
 
-// cardColor returns the attachment color: red for overdue open tasks, else the
-// status color.
+// cardColor returns the attachment color by due band: red for danger (<24h or
+// overdue open), amber for warning (24h..72h open), else the status color.
+// Terminal tasks fall through to their status color (done = green, cancelled
+// = grey) regardless of due.
 func cardColor(t *taskmodel.Task, nowMs int64) string {
-	if t.DueAt != nil && *t.DueAt < nowMs &&
-		(t.Status == taskmodel.StatusTodo || t.Status == taskmodel.StatusInProgress) {
-		return "#D92D20" // red, overdue
+	dueMs := int64(0)
+	if t.DueAt != nil {
+		dueMs = *t.DueAt
+	}
+	if hex, ok := bandHex[dueBand(dueMs, nowMs, t.Status)]; ok {
+		return hex
 	}
 	if c, ok := statusColors[t.Status]; ok {
 		return c

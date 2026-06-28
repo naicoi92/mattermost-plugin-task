@@ -49,6 +49,16 @@ type TaskRow struct {
 	// UpdatedAt is the last-modification timestamp in ms UTC, bumped on every
 	// transition so the WebSocket sequence advances monotonically.
 	UpdatedAt int64 `json:"updated_at" db:"updated_at"`
+	// LastOverdueSentAt is stamped with now-ms (UTC) each time the overdue
+	// notification scheduler sends a DM for this task. The job skips any task
+	// whose stamp already falls within the current UTC day, so a task gets at
+	// most one overdue DM per calendar day. NULL means "never sent".
+	LastOverdueSentAt *int64 `json:"last_overdue_sent_at,omitempty" db:"last_overdue_sent_at"`
+	// LastDueSoonSentAt is stamped with now-ms (UTC) each time the 8h-GMT+7
+	// due-soon scheduler sends a DM for this task (deadline within 24h, open).
+	// Dedupe mirror of LastOverdueSentAt, separate because due-soon and
+	// overdue are independent notifications. NULL means "never sent".
+	LastDueSoonSentAt *int64 `json:"last_due_soon_sent_at,omitempty" db:"last_due_soon_sent_at"`
 }
 
 // Task is the task entity returned to REST/WS consumers. It embeds the core

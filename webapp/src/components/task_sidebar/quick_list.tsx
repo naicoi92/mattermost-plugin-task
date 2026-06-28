@@ -18,6 +18,7 @@ import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {useDispatch} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
+import {dueBand} from 'components/shared/due_band';
 import formatDueRelative from 'components/shared/format_due_relative';
 import {priorityLabel} from 'components/shared/priority_pill';
 import StatusPill from 'components/shared/status_pill';
@@ -202,7 +203,9 @@ export default function QuickList({
 
     // Client-side search filter over the loaded page.
     const term = search.trim().toLowerCase();
-    const visible = term ? tasks.filter((x) => x.summary.toLowerCase().includes(term)) : tasks;
+    const visible = term ?
+        tasks.filter((x) => x.summary.toLowerCase().includes(term)) :
+        tasks;
 
     // Resolve assignee ids → "@username" labels for the avatar pills.
     const assigneeLabels = useResolvedUsers(
@@ -436,10 +439,7 @@ export function isOverdue(task: Task): boolean {
     if (!task.due) {
         return false;
     }
-    if (task.status === 'done' || task.status === 'cancelled') {
-        return false;
-    }
-    return task.due < Date.now();
+    return dueBand(task.due, Date.now(), task.status) === 'danger';
 }
 
 // isDueSoon reports whether the task is due within the current local day and
@@ -448,17 +448,24 @@ export function isDueSoon(task: Task): boolean {
     if (!task.due) {
         return false;
     }
-    if (task.status === 'done' || task.status === 'cancelled') {
+    return dueBand(task.due, Date.now(), task.status) === 'warning';
+}
+
+// isDueToday reports whether the task falls within the current local calendar
+// day (open or terminal). Used by the Quick List 'today' badge so its count
+// matches the `due:today` filter (CodeRabbit review: it must not reuse the
+// broader isDueSoon warning band, which spans 3 days).
+export function isDueToday(task: Task): boolean {
+    if (!task.due) {
         return false;
     }
     const now = new Date();
-    const start = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-    ).getTime();
-    const end = start + (24 * 60 * 60 * 1000);
-    return task.due >= start && task.due < end;
+    const due = new Date(task.due);
+    return (
+        due.getFullYear() === now.getFullYear() &&
+		due.getMonth() === now.getMonth() &&
+		due.getDate() === now.getDate()
+    );
 }
 
 // GroupedTask is one bucket in the grouped list.
@@ -527,7 +534,10 @@ export function countByTab(
     };
     return {
         all: make(tasks.length),
-        today: make(count((x) => isDueSoon(x))),
+
+        // 'today' badge must match the `due:today` filter (due within the local
+        // calendar day), not the broader isDueSoon warning band (3 days).
+        today: make(count((x) => isDueToday(x))),
         todo: make(count((x) => x.status === 'todo')),
         in_progress: make(count((x) => x.status === 'in_progress')),
         done: make(count((x) => x.status === 'done')),

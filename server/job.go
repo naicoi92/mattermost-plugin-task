@@ -53,6 +53,98 @@ func (p *Plugin) runReminderJob() {
 	}
 }
 
+// runScheduledNotifyJob fires the daily overdue + due-soon notifications at
+// assignee of past-due, non-terminal tasks. It runs once per UTC day at most per
+// task: a task whose last_overdue_sent_at already falls within the current UTC
+// day is skipped, so a scheduler restart mid-day never double-DMs. Like the
+// reminder job it is best-effort — a delivery failure is logged and retried
+// naturally the next day (change notification-overdue-and-context, design D8).
+// gmt7 is the Asia/Bangkok timezone (UTC+7) used by the scheduled notify job.
+// Falls back to a fixed zone if the host lacks tzdata (some minimal images).
+var gmt7 = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Bangkok")
+	if err != nil {
+		return time.FixedZone("ICT", 7*3600)
+	}
+	return loc
+}()
+
+// nextRunAt8hGMT7 returns the next 08:00 Asia/Bangkok instant strictly after
+// now. If now is before 08:00 today, that's today; otherwise it's tomorrow.
+// The scheduled notify job (overdue + due-soon) fires once at this time each
+// day (change due-color-and-scheduled-notify, design D5).
+func nextRunAt8hGMT7(now time.Time) time.Time {
+	g := now.In(gmt7)
+	next := time.Date(g.Year(), g.Month(), g.Day(), 8, 0, 0, 0, gmt7)
+	if !next.After(g) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
+}
+
+// runScheduledNotifyJob fires the daily overdue + due-soon notifications at
+// 08:00 GMT+7. It scans both sets in one run and dedupes each per GMT+7 day via
+// the last_*_sent_at columns (change due-color-and-scheduled-notify, design D5/D6).
+// (runOverdueJob alias removed — all callers now use runScheduledNotifyJob.)
+func (p *Plugin) runScheduledNotifyJob() {
+	if p.taskService == nil || p.notifier == nil {
+		return
+	}
+	now := time.Now()
+	nowMs := now.UnixMilli()
+	// Start-of-day in GMT+7: dedupe boundary so a task notified today (in GMT+7
+	// terms) is skipped even after a mid-day plugin restart.
+	g := now.In(gmt7)
+	startOfTodayGMT7 := time.Date(g.Year(), g.Month(), g.Day(), 0, 0, 0, 0, gmt7).UnixMilli()
+	const day = 24 * 60 * 60 * 1000 // ms
+
+	// 1) Overdue: due_at < now, non-terminal → DM creator + assignee. Atomic
+	// claim per GMT+7 day so two overlapping runners can't both send.
+	overdue, err := p.taskService.ListOverdueTasks(nowMs)
+	if err != nil {
+		p.API.LogError("Scheduled notify: overdue scan failed", "error", err)
+	} else {
+		for _, t := range overdue {
+			claimed, claimErr := p.taskService.ClaimOverdueSent(t.ID, nowMs, startOfTodayGMT7)
+			if claimErr != nil {
+				p.API.LogError("Scheduled notify: claim overdue failed",
+					"task_id", t.ID, "error", claimErr)
+				continue
+			}
+			if !claimed {
+				continue
+			}
+			p.notifier.NotifyOverdue(notification.TaskSummary{
+				ID: t.ID, Summary: t.Summary, Status: t.Status, Priority: t.Priority,
+				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
+			}, nowMs, t.CreatorID, t.AssigneeID)
+		}
+	}
+
+	// 2) Due-soon: now <= due_at < now+24h, non-terminal → DM assignee only.
+	// Atomic claim mirror of overdue.
+	dueSoon, err := p.taskService.ListDueSoonTasks(nowMs, nowMs+day)
+	if err != nil {
+		p.API.LogError("Scheduled notify: due-soon scan failed", "error", err)
+	} else {
+		for _, t := range dueSoon {
+			claimed, claimErr := p.taskService.ClaimDueSoonSent(t.ID, nowMs, startOfTodayGMT7)
+			if claimErr != nil {
+				p.API.LogError("Scheduled notify: claim due-soon failed",
+					"task_id", t.ID, "error", claimErr)
+				continue
+			}
+			if !claimed {
+				continue
+			}
+			p.notifier.NotifyDueSoon(t.AssigneeID, notification.TaskSummary{
+				ID: t.ID, Summary: t.Summary, Status: t.Status, Priority: t.Priority,
+				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
+			})
+		}
+	}
+}
+
 // fireReminderDM sends the reminder notification DM to the assignee and returns
 // an error when delivery failed (so the caller does NOT mark the reminder fired
 // and retries on the next tick). Prefers the localized notifier; falls back to a
@@ -63,6 +155,10 @@ func (p *Plugin) fireReminderDM(r taskmodel.DueReminder) error {
 		summary := notification.TaskSummary{ID: r.TaskID}
 		if t != nil {
 			summary.Summary = t.Summary
+			summary.Status = t.Status
+			summary.DueAt = t.DueAt
+			summary.IsAllDay = t.IsAllDay
+			summary.Priority = t.Priority
 		}
 		// Propagate the delivery error so the caller can retry instead of
 		// marking the reminder fired (which would silently lose it).

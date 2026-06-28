@@ -62,6 +62,7 @@ function recordingRegistry() {
         registerReducer: jest.fn(),
         registerTranslations: jest.fn(),
         registerPostDropdownMenuAction: jest.fn(),
+        registerCustomRoute: jest.fn(),
     };
 }
 
@@ -73,12 +74,17 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         await plugin.initialize(registry as never, store as never);
 
         // The handler the plugin registered for "task_updated".
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: Record<string, unknown>},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: { data: Record<string, unknown> }) => void;
 
         // Simulate a server task_updated event with a fresh task.
-        handler({data: {task_id: 't1', seq: 10, task: {id: 't1', summary: 'buy milk', status: 'todo'}}});
+        handler({
+            data: {
+                task_id: 't1',
+                seq: 10,
+                task: {id: 't1', summary: 'buy milk', status: 'todo'},
+            },
+        });
 
         const slice = store.getState()[PLUGIN_KEY];
         expect(slice.tasks.t1).toBeDefined();
@@ -89,15 +95,18 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         const store = buildStore();
         const registry = recordingRegistry();
         await new Plugin().initialize(registry as never, store as never);
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: Record<string, unknown>},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: { data: Record<string, unknown> }) => void;
 
         // Newer event first.
-        handler({data: {task_id: 't1', seq: 50, task: {id: 't1', summary: 'fresh'}}});
+        handler({
+            data: {task_id: 't1', seq: 50, task: {id: 't1', summary: 'fresh'}},
+        });
 
         // Older event arrives late — must be dropped.
-        handler({data: {task_id: 't1', seq: 20, task: {id: 't1', summary: 'stale'}}});
+        handler({
+            data: {task_id: 't1', seq: 20, task: {id: 't1', summary: 'stale'}},
+        });
 
         const slice = store.getState()[PLUGIN_KEY];
         expect(slice.tasks.t1.summary).toBe('fresh');
@@ -107,12 +116,13 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         const store = buildStore();
         const registry = recordingRegistry();
         await new Plugin().initialize(registry as never, store as never);
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: Record<string, unknown>},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: { data: Record<string, unknown> }) => void;
 
         // Create then delete.
-        handler({data: {task_id: 't1', seq: 1, task: {id: 't1', summary: 'x'}}});
+        handler({
+            data: {task_id: 't1', seq: 1, task: {id: 't1', summary: 'x'}},
+        });
         handler({data: {task_id: 't1', seq: 2}}); // delete (task_id, no task body)
 
         const slice = store.getState()[PLUGIN_KEY];
@@ -123,15 +133,24 @@ describe('Phase 3 integration: WebSocket → reducer cache', () => {
         const store = buildStore();
         const registry = recordingRegistry();
         await new Plugin().initialize(registry as never, store as never);
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: Record<string, unknown>},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: { data: Record<string, unknown> }) => void;
 
         // Select the task (as the Quick List does on click).
-        store.dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: 't1', task: {id: 't1', summary: 'old'}});
+        store.dispatch({
+            type: ACTION_TYPES.SELECT_TASK,
+            taskID: 't1',
+            task: {id: 't1', summary: 'old'},
+        });
 
         // A WS upsert for the same task updates the selected detail.
-        handler({data: {task_id: 't1', seq: 5, task: {id: 't1', summary: 'new', status: 'done'}}});
+        handler({
+            data: {
+                task_id: 't1',
+                seq: 5,
+                task: {id: 't1', summary: 'new', status: 'done'},
+            },
+        });
 
         const slice = store.getState()[PLUGIN_KEY];
         expect(slice.selectedTaskID).toBe('t1');

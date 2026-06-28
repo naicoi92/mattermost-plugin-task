@@ -89,34 +89,75 @@ describe('isOverdue', () => {
         expect(isOverdue(makeTask({due: undefined}))).toBe(false);
     });
 
-    test('a future due date on an open task is not overdue', () => {
-        expect(isOverdue(makeTask({due: Date.now() + 10000, status: 'todo'}))).toBe(false);
+    test('a due date >24h away on an open task is not overdue (danger band)', () => {
+        // isOverdue now means "danger band" (due within 24h OR past).
+        // A due 25h away is still warning band, not danger.
+        expect(
+            isOverdue(
+                makeTask({due: Date.now() + ((25 * 60 * 60) * 1000), status: 'todo'}),
+            ),
+        ).toBe(false);
     });
 
     test('a past due date on an open task is overdue', () => {
-        expect(isOverdue(makeTask({due: Date.now() - 10000, status: 'todo'}))).toBe(true);
+        expect(
+            isOverdue(makeTask({due: Date.now() - 10000, status: 'todo'})),
+        ).toBe(true);
     });
 
     test('a past due date on a done task is not overdue', () => {
-        expect(isOverdue(makeTask({due: Date.now() - 10000, status: 'done'}))).toBe(false);
+        expect(
+            isOverdue(makeTask({due: Date.now() - 10000, status: 'done'})),
+        ).toBe(false);
     });
 
     test('a past due date on a cancelled task is not overdue', () => {
-        expect(isOverdue(makeTask({due: Date.now() - 10000, status: 'cancelled'}))).toBe(false);
+        expect(
+            isOverdue(makeTask({due: Date.now() - 10000, status: 'cancelled'})),
+        ).toBe(false);
     });
 });
 
 describe('groupTasks', () => {
     test('buckets by status + due window', () => {
-        const overdue = makeTask({id: '1', status: 'todo', due: Date.now() - 86400000});
-        const today = makeTask({id: '2', status: 'todo', due: Date.now() + 60_000});
-        const upcoming = makeTask({id: '3', status: 'todo', due: Date.now() + (30 * 86400000)});
+        const overdue = makeTask({
+            id: '1',
+            status: 'todo',
+            due: Date.now() - 86400000,
+        });
+        const today = makeTask({
+            id: '2',
+            status: 'todo',
+
+            // Anchor to local noon today so the bucket test never crosses a
+            // day boundary when run near midnight (CodeRabbit review).
+            due: (() => {
+                const n = new Date();
+                return new Date(
+                    n.getFullYear(),
+                    n.getMonth(),
+                    n.getDate(),
+                    12,
+                    0,
+                    0,
+                ).getTime();
+            })(),
+        });
+        const upcoming = makeTask({
+            id: '3',
+            status: 'todo',
+            due: Date.now() + (30 * 86400000),
+        });
         const done = makeTask({id: '4', status: 'done'});
         const cancelled = makeTask({id: '5', status: 'cancelled'});
         const groups = groupTasks([overdue, today, upcoming, done, cancelled]);
 
         // Three non-empty buckets in canonical order.
-        expect(groups.map((g) => g.key)).toEqual(['attention', 'upcoming', 'completed']);
+        expect(groups.map((g) => g.key)).toEqual([
+            'attention',
+            'upcoming',
+            'completed',
+        ]);
         expect(groups[0].items.map((t) => t.id).sort()).toEqual(['1', '2']);
         expect(groups[1].items.map((t) => t.id)).toEqual(['3']);
         expect(groups[2].items.map((t) => t.id).sort()).toEqual(['4', '5']);
@@ -184,11 +225,14 @@ describe('truncateDescription', () => {
     });
 
     test('whitespace runs (including newlines) collapse to single spaces', () => {
-        expect(truncateDescription('line one\n\nline two\ttabbed')).toBe('line one line two tabbed');
+        expect(truncateDescription('line one\n\nline two\ttabbed')).toBe(
+            'line one line two tabbed',
+        );
     });
 
     test('text over the limit is cut at a word boundary and suffixed with ellipsis', () => {
-        const text = 'This is a fairly long description that definitely exceeds the one hundred character limit we set for the preview row';
+        const text =
+			'This is a fairly long description that definitely exceeds the one hundred character limit we set for the preview row';
         const out = truncateDescription(text);
         expect(out.length).toBeLessThan(text.length);
         expect(out.endsWith('…')).toBe(true);

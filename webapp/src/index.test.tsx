@@ -28,7 +28,12 @@ jest.mock('i18n_utils', () => ({
 // moduleNameMapper in package.json so importing it (OverlayTrigger/Tooltip)
 // works under Jest without a real install.
 
-import Plugin, {NewTaskComposerButton, openNewTaskFromMessage, resolvePost, splitMessageForTask} from 'index';
+import Plugin, {
+    NewTaskComposerButton,
+    openNewTaskFromMessage,
+    resolvePost,
+    splitMessageForTask,
+} from 'index';
 import {ACTION_TYPES} from 'reducer';
 import type {Store} from 'redux';
 
@@ -36,7 +41,7 @@ import type {GlobalState} from '@mattermost/types/store';
 
 // Per-test dispatch + state shared with the react-redux / i18n_utils mocks
 // above. Reset at the top of each New Task icon test.
-let mockDispatch: (a: {type: string}) => void;
+let mockDispatch: (a: { type: string }) => void;
 let mockState: unknown;
 
 // A minimal store whose dispatch records every action, used to assert the
@@ -44,9 +49,9 @@ let mockState: unknown;
 // `state` is returned by getState (defaults to empty) so post-dropdown tests can
 // seed the host post entities.
 function fakeStore(state: unknown = {}) {
-    const actions: Array<{type: string}> = [];
+    const actions: Array<{ type: string }> = [];
     const store = {
-        dispatch: jest.fn((a: {type: string}) => {
+        dispatch: jest.fn((a: { type: string }) => {
             actions.push(a);
         }),
         getState: jest.fn(() => state),
@@ -75,6 +80,7 @@ function fakeRegistry() {
         registerReducer: jest.fn(),
         registerTranslations: jest.fn(),
         registerPostDropdownMenuAction: jest.fn(),
+        registerCustomRoute: jest.fn(),
     };
 }
 
@@ -87,7 +93,8 @@ describe('Plugin.initialize registrations (#27)', () => {
 
         // RHS component with a title.
         expect(registry.registerRightHandSidebarComponent).toHaveBeenCalledTimes(1);
-        const rhsArgs = registry.registerRightHandSidebarComponent.mock.calls[0] as unknown[];
+        const rhsArgs = registry.registerRightHandSidebarComponent.mock.
+            calls[0] as unknown[];
         expect(typeof rhsArgs[0]).toBe('function'); // TaskSidebar component
         expect(rhsArgs[1]).toBe('Tasks');
 
@@ -95,7 +102,8 @@ describe('Plugin.initialize registrations (#27)', () => {
         // registerChannelHeaderButtonAction renders in the ChannelHeaderPlug
         // slot, which the host also dispatches to MobileChannelHeaderButton.
         expect(registry.registerChannelHeaderButtonAction).toHaveBeenCalledTimes(1);
-        const tasksArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
+        const tasksArgs = registry.registerChannelHeaderButtonAction.mock.
+            calls[0] as unknown[];
         expect(tasksArgs[2]).toBe('Tasks');
         expect(tasksArgs[3]).toBe('Mở danh sách task');
 
@@ -104,7 +112,8 @@ describe('Plugin.initialize registrations (#27)', () => {
         // additionalControls toolbar, next to the attachment/emoji buttons.
         // Desktop only; mobile uses /task new.
         expect(registry.registerPostEditorActionComponent).toHaveBeenCalledTimes(1);
-        const composerArgs = registry.registerPostEditorActionComponent.mock.calls[0] as unknown[];
+        const composerArgs = registry.registerPostEditorActionComponent.mock.
+            calls[0] as unknown[];
         expect(typeof composerArgs[0]).toBe('function'); // NewTaskComposerButton component
 
         // Two root components: Kanban modal + New Task dialog.
@@ -122,11 +131,14 @@ describe('Plugin.initialize registrations (#27)', () => {
 
         // Translations.
         expect(registry.registerTranslations).toHaveBeenCalledTimes(1);
-        expect(typeof registry.registerTranslations.mock.calls[0][0]).toBe('function');
+        expect(typeof registry.registerTranslations.mock.calls[0][0]).toBe(
+            'function',
+        );
 
         // Post dropdown action "Tạo task".
         expect(registry.registerPostDropdownMenuAction).toHaveBeenCalledTimes(1);
-        const dropArgs = registry.registerPostDropdownMenuAction.mock.calls[0] as unknown[];
+        const dropArgs = registry.registerPostDropdownMenuAction.mock.
+            calls[0] as unknown[];
         expect(dropArgs[0]).toBe('Tạo task');
         expect(typeof dropArgs[1]).toBe('function'); // action
         expect(typeof dropArgs[2]).toBe('function'); // filter
@@ -138,7 +150,8 @@ describe('Plugin.initialize registrations (#27)', () => {
         const plugin = new Plugin();
         await plugin.initialize(registry as never, store);
 
-        const headerArgs = registry.registerChannelHeaderButtonAction.mock.calls[0] as unknown[];
+        const headerArgs = registry.registerChannelHeaderButtonAction.mock.
+            calls[0] as unknown[];
         const buttonAction = headerArgs[1] as () => void;
         buttonAction();
 
@@ -147,8 +160,8 @@ describe('Plugin.initialize registrations (#27)', () => {
     });
 
     test('NewTaskComposerButton dispatches OPEN_NEW_TASK_DIALOG with the draft channel id on click (#107)', () => {
-        const actions: Array<{type: string}> = [];
-        mockDispatch = (a: {type: string}) => {
+        const actions: Array<{ type: string }> = [];
+        mockDispatch = (a: { type: string }) => {
             actions.push(a);
         };
         mockState = {};
@@ -158,7 +171,9 @@ describe('Plugin.initialize registrations (#27)', () => {
         // component wraps the <button> in an OverlayTrigger; the react-bootstrap
         // mock passes children through, so the button is reachable as the
         // OverlayTrigger element's `children` prop.
-        const button = buttonInside(NewTaskComposerButton({draft: {channelId: 'ch123'}}));
+        const button = buttonInside(
+            NewTaskComposerButton({draft: {channelId: 'ch123'}}),
+        );
         button.props.onClick();
 
         expect(actions).toContainEqual({
@@ -168,8 +183,8 @@ describe('Plugin.initialize registrations (#27)', () => {
     });
 
     test('NewTaskComposerButton is nil-safe when no draft/channel is passed', () => {
-        const actions: Array<{type: string}> = [];
-        mockDispatch = (a: {type: string}) => {
+        const actions: Array<{ type: string }> = [];
+        mockDispatch = (a: { type: string }) => {
             actions.push(a);
         };
         mockState = {};
@@ -187,8 +202,10 @@ describe('Plugin.initialize registrations (#27)', () => {
 // buttonInside digs the <button> out of the OverlayTrigger wrapper the
 // react-bootstrap mock renders. The mock passes `children` through unchanged,
 // so the OverlayTrigger element's props.children is the <button> element.
-function buttonInside(element: unknown): {props: {onClick: () => void}} {
-    const props = (element as {props: {children: {props: {onClick: () => void}}}}).props;
+function buttonInside(element: unknown): { props: { onClick: () => void } } {
+    const props = (
+        element as { props: { children: { props: { onClick: () => void } } } }
+    ).props;
     return props.children;
 }
 
@@ -197,12 +214,18 @@ describe('openNewTaskFromMessage', () => {
     // Mattermost stores posts.
     function stateWithPost(postId: string, message: string, channelID: string) {
         return {
-            entities: {posts: {posts: {[postId]: {message, channel_id: channelID}}}},
+            entities: {
+                posts: {posts: {[postId]: {message, channel_id: channelID}}},
+            },
         };
     }
 
     test('opens the New Task dialog with prefilled summary/description from the resolved post', () => {
-        const state = stateWithPost('p1', 'Fix the bug\nDetails here\nMore detail', 'ch1');
+        const state = stateWithPost(
+            'p1',
+            'Fix the bug\nDetails here\nMore detail',
+            'ch1',
+        );
         const {store, actions} = fakeStore(state);
         openNewTaskFromMessage(store, 'p1');
         expect(actions).toContainEqual({
@@ -250,12 +273,21 @@ describe('openNewTaskFromMessage', () => {
 
 describe('resolvePost', () => {
     test('reads a post from state.entities.posts.posts', () => {
-        const state = {entities: {posts: {posts: {p1: {message: 'hi', channel_id: 'c1'}}}}};
-        expect(resolvePost(state, 'p1')).toEqual({message: 'hi', channel_id: 'c1'});
+        const state = {
+            entities: {
+                posts: {posts: {p1: {message: 'hi', channel_id: 'c1'}}},
+            },
+        };
+        expect(resolvePost(state, 'p1')).toEqual({
+            message: 'hi',
+            channel_id: 'c1',
+        });
     });
 
     test('returns undefined for a missing post', () => {
-        expect(resolvePost({entities: {posts: {posts: {}}}}, 'p1')).toBeUndefined();
+        expect(
+            resolvePost({entities: {posts: {posts: {}}}}, 'p1'),
+        ).toBeUndefined();
     });
 
     test('returns undefined when the entities shape is absent', () => {
@@ -333,9 +365,10 @@ describe('WebSocket task_updated handler', () => {
         const plugin = new Plugin();
         await plugin.initialize(registry as never, store);
 
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: {task_id?: string; task?: Record<string, unknown>}},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: {
+            data: { task_id?: string; task?: Record<string, unknown> };
+        }) => void;
         handler({data: {task_id: '1', task: {id: '1', summary: 'hi'}}});
 
         expect(actions).toContainEqual({
@@ -350,12 +383,17 @@ describe('WebSocket task_updated handler', () => {
         const plugin = new Plugin();
         await plugin.initialize(registry as never, store);
 
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: {task_id?: string; task?: Record<string, unknown>; seq?: number}},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: {
+            data: { task_id?: string; task?: Record<string, unknown>; seq?: number };
+        }) => void;
         handler({data: {task_id: '1', seq: 7}});
 
-        expect(actions).toContainEqual({type: ACTION_TYPES.DELETE_TASK, taskID: '1', seq: 7});
+        expect(actions).toContainEqual({
+            type: ACTION_TYPES.DELETE_TASK,
+            taskID: '1',
+            seq: 7,
+        });
     });
 
     test('forwards seq on an upsert so the reducer can drop stale events', async () => {
@@ -364,10 +402,13 @@ describe('WebSocket task_updated handler', () => {
         const plugin = new Plugin();
         await plugin.initialize(registry as never, store);
 
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: {task_id?: string; task?: Record<string, unknown>; seq?: number}},
-        ) => void;
-        handler({data: {task_id: '1', task: {id: '1', summary: 'hi'}, seq: 42}});
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: {
+            data: { task_id?: string; task?: Record<string, unknown>; seq?: number };
+        }) => void;
+        handler({
+            data: {task_id: '1', task: {id: '1', summary: 'hi'}, seq: 42},
+        });
 
         expect(actions).toContainEqual({
             type: ACTION_TYPES.UPSERT_TASK,
@@ -382,12 +423,19 @@ describe('WebSocket task_updated handler', () => {
         const plugin = new Plugin();
         await plugin.initialize(registry as never, store);
 
-        const handler = registry.registerWebSocketEventHandler.mock.calls[0][1] as (
-            msg: {data: {task_id?: string; task?: Record<string, unknown>; seq?: number}},
-        ) => void;
+        const handler = registry.registerWebSocketEventHandler.mock.
+            calls[0][1] as (msg: {
+            data: { task_id?: string; task?: Record<string, unknown>; seq?: number };
+        }) => void;
         handler({data: {}});
 
         // No task mutation actions should have been dispatched.
-        expect(actions.find((a) => a.type === ACTION_TYPES.UPSERT_TASK || a.type === ACTION_TYPES.DELETE_TASK)).toBeUndefined();
+        expect(
+            actions.find(
+                (a) =>
+                    a.type === ACTION_TYPES.UPSERT_TASK ||
+					a.type === ACTION_TYPES.DELETE_TASK,
+            ),
+        ).toBeUndefined();
     });
 });

@@ -1985,6 +1985,17 @@
         text-decoration: line-through;
     }
 
+    // Description preview: single line, muted (mirrors quick-list__item-description).
+    &__description {
+        margin-top: 3px;
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--task-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
     &__meta {
         display: flex;
         flex-wrap: wrap;
@@ -2001,6 +2012,16 @@
         color: var(--task-muted);
         font-weight: 500;
 
+        &--important {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        &--urgent {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
         .task-priority-dot--standard-dot {
             background: var(--task-meta);
         }
@@ -2012,6 +2033,31 @@
         gap: 3px;
         font-size: 11px;
         color: var(--task-muted);
+
+        &--muted {
+            // default muted color; no extra styling
+        }
+
+        &--none {
+            opacity: 0.4;
+        }
+
+        &--warning {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
+
+        &--danger {
+            color: var(--task-danger);
+            font-weight: 600;
+        }
+
+        // Back-compat aliases for the old band names (kept until callers
+        // migrate to dueBand output).
+        &--soon {
+            color: var(--task-warning);
+            font-weight: 600;
+        }
 
         &--overdue {
             color: var(--task-danger);

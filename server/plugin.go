@@ -20,6 +20,10 @@ import (
 	"github.com/naicoi92/mattermost-plugin-task/server/task"
 )
 
+// pluginID is the plugin's manifest id, used to build the
+// /plug/<plugin-id>/task/<id> deep-link so DM task names are clickable.
+const pluginID = "com.mattermost.plugin-task"
+
 // Plugin implements the interface expected by the Mattermost server to communicate between the server and plugin processes.
 type Plugin struct {
 	plugin.MattermostPlugin
@@ -56,6 +60,13 @@ type Plugin struct {
 	reminderCancel context.CancelFunc
 	reminderWG     sync.WaitGroup
 
+	// overdueCtx/overdueCancel/WG control the daily overdue-notification
+	// ticker (mirrors the reminder ticker; avoids cluster.Schedule KV
+	// instability). See runOverdueJob.
+	overdueCtx    context.Context
+	overdueCancel context.CancelFunc
+	overdueWG     sync.WaitGroup
+
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
 
@@ -79,7 +90,7 @@ func (p *Plugin) OnActivate() error {
 		return errors.Wrap(err, "failed to load i18n bundle")
 	}
 	p.i18n = i18nBundle
-	p.notifier = notification.New(notifierAPI{api: p.API}, i18nBundle, p.botUserID)
+	p.notifier = notification.New(notifierAPI{api: p.API}, i18nBundle, p.botUserID, p.getSiteURL(), pluginID)
 
 	// Wire the relational store: acquire the server's master DB, build the
 	// dialect-aware SQLStore, and run migrations under a cluster mutex so only
@@ -135,6 +146,29 @@ func (p *Plugin) OnActivate() error {
 		}
 	})
 
+	// Overdue notification scheduler: a single-node 24h ticker that scans for
+	// past-due non-terminal tasks and DMs their creator + assignee once per UTC
+	// day (dedupe via last_overdue_sent_at). The first run fires immediately on
+	// activate so tasks already overdue before activation are caught up without
+	// waiting a full day (change notification-overdue-and-context, design D8).
+	p.overdueCtx, p.overdueCancel = context.WithCancel(context.Background())
+	p.overdueWG.Go(func() {
+		// Catch-up: if the job hasn't run yet today (in GMT+7 terms), fire once
+		// immediately on activate so tasks overdue/due-soon before activation are
+		// caught up. The last_*_sent_at columns guard against duplicates if it
+		// actually already ran today.
+		p.runScheduledNotifyJob()
+		for {
+			next := nextRunAt8hGMT7(time.Now())
+			select {
+			case <-time.After(time.Until(next)):
+				p.runScheduledNotifyJob()
+			case <-p.overdueCtx.Done():
+				return
+			}
+		}
+	})
+
 	return nil
 }
 
@@ -161,6 +195,10 @@ func (p *Plugin) OnDeactivate() error {
 		p.reminderCancel()
 	}
 	p.reminderWG.Wait()
+	if p.overdueCancel != nil {
+		p.overdueCancel()
+	}
+	p.overdueWG.Wait()
 	return nil
 }
 
