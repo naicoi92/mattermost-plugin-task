@@ -94,7 +94,7 @@ describe('isOverdue', () => {
         // A due 25h away is still warning band, not danger.
         expect(
             isOverdue(
-                makeTask({due: Date.now() + (((25 * 60) * 60) * 1000), status: 'todo'}),
+                makeTask({due: Date.now() + ((25 * 60 * 60) * 1000), status: 'todo'}),
             ),
         ).toBe(false);
     });
@@ -133,7 +133,14 @@ describe('groupTasks', () => {
             // day boundary when run near midnight (CodeRabbit review).
             due: (() => {
                 const n = new Date();
-                return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 12, 0, 0).getTime();
+                return new Date(
+                    n.getFullYear(),
+                    n.getMonth(),
+                    n.getDate(),
+                    12,
+                    0,
+                    0,
+                ).getTime();
             })(),
         });
         const upcoming = makeTask({
