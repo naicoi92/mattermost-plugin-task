@@ -1229,13 +1229,13 @@ func snapshotTaskJSON(row *model.TaskRow) string {
 	return string(b)
 }
 
-// Scope enumerates the list result scopes. Under the all-channel model
-// only channel is supported: tasks are always listed by their home
-// channel id (team channel, DM, or self-DM).
+// Scope enumerates the list result scopes. channel lists tasks of a single
+// channel; mine lists tasks assigned to a user across all channels.
 type Scope string
 
 const (
 	ScopeChannel Scope = Scope(store.ScopeChannel)
+	ScopeMine    Scope = Scope(store.ScopeMine)
 )
 
 // ListQuery is the filtered/paginated list request. It mirrors store.ListQuery;
@@ -1243,6 +1243,7 @@ const (
 type ListQuery struct {
 	Scope         Scope
 	ChannelID     string // required for ScopeChannel
+	UserID        string // required for ScopeMine (the assignee to filter by)
 	Status        string // optional: "", todo, in_progress, done, cancelled
 	Priority      string // optional: "", standard, important, urgent
 	DueAt         string // optional: "", overdue, today, week
@@ -1267,6 +1268,7 @@ func (s *Service) List(q ListQuery) ([]*model.Task, error) {
 	page, err := s.store.ListTasks(ctx, store.ListQuery{
 		Scope:         store.Scope(q.Scope),
 		ChannelID:     q.ChannelID,
+		UserID:        q.UserID,
 		Status:        q.Status,
 		Priority:      q.Priority,
 		Due:           mapDueFilter(q.DueAt),

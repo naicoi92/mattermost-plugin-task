@@ -101,11 +101,12 @@ export interface TaskEvent {
     created_at: number;
 }
 
-// ListScope enumerates the Quick List result scopes, matching task.Scope. Two
-// scopes: channel (tasks of a channel) and direct (tasks shared between two
-// DM users). The earlier mine/all scopes were removed with the slash-command
-// and mobile-dialog paths.
-export type ListScope = 'channel' | 'direct';
+// ListScope enumerates the Quick List result scopes, matching task.Scope:
+// channel (tasks of a channel) and mine (tasks assigned to the current user
+// across all channels). The earlier mine/all scopes were removed with the
+// slash-command and mobile-dialog paths; mine was re-added for the My Tasks
+// Quick List toggle.
+export type ListScope = 'channel' | 'mine';
 
 // ListTasksParams is the query-string shape for GET /tasks. It mirrors the
 // server's task.ListQuery (server/task/service.go) minus the server-only

@@ -47,6 +47,11 @@ const (
 	// ScopeChannel lists tasks scoped to a channel. ChannelID must be set on
 	// the ListQuery.
 	ScopeChannel Scope = "channel"
+	// ScopeMine lists tasks assigned to a specific user across all channels.
+	// UserID must be set on the ListQuery; ChannelID is ignored. Implemented as
+	// an EXISTS subquery on members (role='assignee') so it uses
+	// members_user_idx and avoids JOIN row multiplication.
+	ScopeMine Scope = "mine"
 )
 
 // DueFilter narrows ListTasks results by due-date bucket. Each value maps to
@@ -76,6 +81,9 @@ type ListQuery struct {
 	Scope Scope
 	// ChannelID is required.
 	ChannelID string
+	// UserID is required for ScopeMine (the assignee to filter by); ignored
+	// for ScopeChannel. It matches the assignee edge in the members table.
+	UserID string
 	// Status, when non-empty, restricts to that status value (todo/in_progress/
 	// done/cancelled). Empty means "any status".
 	Status string
