@@ -7,7 +7,7 @@
 // thresholds in sync with server/due_band.go (change due-color-and-scheduled-
 // notify, design D1).
 
-export type Band = "muted" | "warning" | "danger";
+export type Band = 'muted' | 'warning' | 'danger';
 
 // A task is:
 //   - muted   when due is more than WARNING_HOURS (72h) away, OR terminal, OR has no due
@@ -20,7 +20,7 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 const DANGER_MS = DANGER_HOURS * MS_PER_HOUR;
 const WARNING_MS = WARNING_HOURS * MS_PER_HOUR;
 
-const TERMINAL_STATUSES = new Set(["done", "cancelled"]);
+const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 
 // dueBand returns the proximity band for a task's due date.
 //   - dueMs falsy (0/undefined) → muted (no due date)
@@ -28,22 +28,22 @@ const TERMINAL_STATUSES = new Set(["done", "cancelled"]);
 //   - delta = dueMs - nowMs; danger when delta < DANGER_MS, warning when
 //     delta <= WARNING_MS, otherwise muted. Overdue (delta < 0) → danger.
 export function dueBand(
-	dueMs: number | undefined | null,
-	nowMs: number,
-	status: string,
+    dueMs: number | undefined | null,
+    nowMs: number,
+    status: string,
 ): Band {
-	if (!dueMs) {
-		return "muted";
-	}
-	if (TERMINAL_STATUSES.has(status)) {
-		return "muted";
-	}
-	const delta = dueMs - nowMs;
-	if (delta < DANGER_MS) {
-		return "danger";
-	}
-	if (delta <= WARNING_MS) {
-		return "warning";
-	}
-	return "muted";
+    if (!dueMs) {
+        return 'muted';
+    }
+    if (TERMINAL_STATUSES.has(status)) {
+        return 'muted';
+    }
+    const delta = dueMs - nowMs;
+    if (delta < DANGER_MS) {
+        return 'danger';
+    }
+    if (delta <= WARNING_MS) {
+        return 'warning';
+    }
+    return 'muted';
 }

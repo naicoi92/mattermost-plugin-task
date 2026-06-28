@@ -46,15 +46,12 @@ export default function TaskDeepLink() {
             rhsOpener();
         }
 
-        // Send the user back to where they opened the link from (typically the
-        // DM). With no previous entry (pasted URL) goBack is a no-op, so replace
-        // the deep-link entry with the landing page instead of pushing (push
-        // would leave /task/:id in the stack and Back would reopen it).
-        if (history.length > 1) {
-            history.goBack();
-        } else {
-            history.replace('/');
-        }
+        // The click path (capture-phase listener in index.tsx) already handles
+        // the common case without navigation. This route is only reached when
+        // the URL is pasted/opened directly, so always replace it with the home
+        // page rather than guessing via history.length (which could goBack to an
+        // unrelated external page in an already-used tab).
+        history.replace('/');
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
 

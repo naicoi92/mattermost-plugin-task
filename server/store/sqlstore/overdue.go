@@ -65,8 +65,13 @@ func (s *SQLStore) ClaimOverdueSent(ctx context.Context, taskID string, ms, clai
 	}
 	if rows == 0 {
 		// Either the task doesn't exist OR another runner already claimed it.
-		if _, err := s.GetTask(ctx, taskID); err != nil {
-			return false, store.ErrTaskNotFound
+		// Distinguish: a genuine GetTask error must propagate (not be masked as
+		// not-found), only ErrTaskNotFound maps to the lost-race-or-missing case.
+		if _, lookupErr := s.GetTask(ctx, taskID); lookupErr != nil {
+			if errors.Is(lookupErr, store.ErrTaskNotFound) {
+				return false, store.ErrTaskNotFound
+			}
+			return false, fmt.Errorf("claim overdue sent %s: lookup: %w", taskID, lookupErr)
 		}
 		return false, nil
 	}
@@ -166,8 +171,11 @@ func (s *SQLStore) ClaimDueSoonSent(ctx context.Context, taskID string, ms, clai
 		return false, fmt.Errorf("claim due-soon sent %s: rows affected: %w", taskID, err)
 	}
 	if rows == 0 {
-		if _, err := s.GetTask(ctx, taskID); err != nil {
-			return false, store.ErrTaskNotFound
+		if _, lookupErr := s.GetTask(ctx, taskID); lookupErr != nil {
+			if errors.Is(lookupErr, store.ErrTaskNotFound) {
+				return false, store.ErrTaskNotFound
+			}
+			return false, fmt.Errorf("claim due-soon sent %s: lookup: %w", taskID, lookupErr)
 		}
 		return false, nil
 	}

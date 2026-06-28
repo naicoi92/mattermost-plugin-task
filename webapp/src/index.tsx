@@ -182,9 +182,15 @@ export default class Plugin {
                 const linkEl = target.closest('a') as HTMLAnchorElement | null;
                 if (linkEl) {
                     const href = linkEl.getAttribute('href') || '';
-                    const m = href.match(
-                        /\/plug\/com\.mattermost\.plugin-task\/task\/([A-Za-z0-9]+)/,
+
+                    // Derive the plugin id from the manifest (same source the
+                    // server uses to build the deep-link) rather than hard-
+                    // coding it, so interception keeps working if the id changes.
+                    const escapedId = manifest.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const deepLinkRe = new RegExp(
+                        `/plug/${escapedId}/task/([A-Za-z0-9]+)`,
                     );
+                    const m = href.match(deepLinkRe);
                     if (m) {
                         e.preventDefault();
                         e.stopImmediatePropagation();

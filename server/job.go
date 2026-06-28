@@ -53,7 +53,7 @@ func (p *Plugin) runReminderJob() {
 	}
 }
 
-// runOverdueJob is the daily-scheduled entry point that notifies the creator and
+// runScheduledNotifyJob fires the daily overdue + due-soon notifications at
 // assignee of past-due, non-terminal tasks. It runs once per UTC day at most per
 // task: a task whose last_overdue_sent_at already falls within the current UTC
 // day is skipped, so a scheduler restart mid-day never double-DMs. Like the
@@ -85,6 +85,7 @@ func nextRunAt8hGMT7(now time.Time) time.Time {
 // runScheduledNotifyJob fires the daily overdue + due-soon notifications at
 // 08:00 GMT+7. It scans both sets in one run and dedupes each per GMT+7 day via
 // the last_*_sent_at columns (change due-color-and-scheduled-notify, design D5/D6).
+// (runOverdueJob alias removed — all callers now use runScheduledNotifyJob.)
 func (p *Plugin) runScheduledNotifyJob() {
 	if p.taskService == nil || p.notifier == nil {
 		return
@@ -104,10 +105,10 @@ func (p *Plugin) runScheduledNotifyJob() {
 		p.API.LogError("Scheduled notify: overdue scan failed", "error", err)
 	} else {
 		for _, t := range overdue {
-			claimed, err := p.taskService.ClaimOverdueSent(t.ID, nowMs, startOfTodayGMT7)
-			if err != nil {
+			claimed, claimErr := p.taskService.ClaimOverdueSent(t.ID, nowMs, startOfTodayGMT7)
+			if claimErr != nil {
 				p.API.LogError("Scheduled notify: claim overdue failed",
-					"task_id", t.ID, "error", err)
+					"task_id", t.ID, "error", claimErr)
 				continue
 			}
 			if !claimed {
@@ -127,27 +128,22 @@ func (p *Plugin) runScheduledNotifyJob() {
 		p.API.LogError("Scheduled notify: due-soon scan failed", "error", err)
 	} else {
 		for _, t := range dueSoon {
-			claimed, err := p.taskService.ClaimDueSoonSent(t.ID, nowMs, startOfTodayGMT7)
-			if err != nil {
+			claimed, claimErr := p.taskService.ClaimDueSoonSent(t.ID, nowMs, startOfTodayGMT7)
+			if claimErr != nil {
 				p.API.LogError("Scheduled notify: claim due-soon failed",
-					"task_id", t.ID, "error", err)
+					"task_id", t.ID, "error", claimErr)
 				continue
 			}
 			if !claimed {
 				continue
 			}
-    			p.notifier.NotifyDueSoon(t.AssigneeID, notification.TaskSummary{
-    				ID: t.ID, Summary: t.Summary, Status: t.Status,
-    				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
-    			})
-    		}
-    	}
+			p.notifier.NotifyDueSoon(t.AssigneeID, notification.TaskSummary{
+				ID: t.ID, Summary: t.Summary, Status: t.Status,
+				DueAt: t.DueAt, IsAllDay: t.IsAllDay,
+			})
+		}
+	}
 }
-
-// runOverdueJob is kept as a thin alias for backward compatibility with any
-// caller wiring that still references the old name during the rollout; the real
-// work moved to runScheduledNotifyJob.
-func (p *Plugin) runOverdueJob() { p.runScheduledNotifyJob() }
 
 // fireReminderDM sends the reminder notification DM to the assignee and returns
 // an error when delivery failed (so the caller does NOT mark the reminder fired

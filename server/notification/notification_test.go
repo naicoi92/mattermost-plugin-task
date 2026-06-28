@@ -201,8 +201,11 @@ func TestNotifyAssigned_IncludesSelfAssign(t *testing.T) {
 }
 
 func TestNotifyAssigned_EmptyAssigneeNoop(t *testing.T) {
-	n := newTestNotifier(&fakeAPI{})
+	api := &fakeAPI{}
+	n := newTestNotifier(api)
 	n.NotifyAssigned("", "creator", TaskSummary{})
+	// No DM must be sent for an empty assignee.
+	assert.Empty(t, api.posts)
 }
 
 func TestNotifyAssigned_OmitsDueClauseWhenNoDue(t *testing.T) {

@@ -228,13 +228,14 @@ var markdownLinkRe = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 // labels resolve to their text and the common emphasis markers are dropped.
 func stripMarkdown(s string) string {
 	s = markdownLinkRe.ReplaceAllString(s, "$1")
+	// Drop only emphasis/inline-code markers so a preview stays readable.
+	// Heading (#) and blockquote (>) are NOT stripped: they're legal comment
+	// content and dropping them would mangle the preview (CodeRabbit review).
 	r := strings.NewReplacer(
 		"*", "",
 		"_", "",
 		"~", "",
 		"`", "",
-		"#", "",
-		">", "",
 	)
 	return r.Replace(s)
 }

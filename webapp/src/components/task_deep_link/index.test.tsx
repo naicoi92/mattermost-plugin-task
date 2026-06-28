@@ -51,9 +51,8 @@ describe('components/task_deep_link', () => {
         setTaskDeepLinkRhsOpener(rhsOpener);
     });
 
-    test('dispatches SELECT_TASK, opens RHS, and goes back on mount', async () => {
+    test('dispatches SELECT_TASK, opens RHS, and replaces the route with /', async () => {
         mockParams = {id: '01HXYZTASK0001'};
-        mockHistoryLength = 2;
 
         await act(async () => {
             TestRenderer.create(<TaskDeepLink/>);
@@ -65,19 +64,8 @@ describe('components/task_deep_link', () => {
         });
         expect(rhsOpener).toHaveBeenCalledTimes(1);
 
-        // Previous history exists → go back, not push.
-        expect(mockGoBack).toHaveBeenCalledTimes(1);
-        expect(mockPush).not.toHaveBeenCalled();
-    });
-
-    test('falls back to "/" when there is no previous history (pasted URL)', async () => {
-        mockParams = {id: '01HXYZTASK0001'};
-        mockHistoryLength = 1; // no entry before this one
-
-        await act(async () => {
-            TestRenderer.create(<TaskDeepLink/>);
-        });
-
+        // Always replace('/') — never goBack, which could land on an unrelated
+        // page when the deep link was pasted into an already-used tab.
         expect(mockReplace).toHaveBeenCalledWith('/');
         expect(mockGoBack).not.toHaveBeenCalled();
     });
