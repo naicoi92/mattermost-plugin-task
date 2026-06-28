@@ -37,6 +37,42 @@ func (s *SQLStore) ListOverdueTasks(ctx context.Context, nowMs int64) ([]model.T
 // overdue job can dedupe: a task already stamped within the current UTC day is
 // skipped on the next scan. Returns store.ErrTaskNotFound when no row matches
 // the id (design D2).
+// ClaimOverdueSent atomically stamps last_overdue_sent_at = ms ONLY IF the row's
+// current stamp is older than claimAfterMs (or NULL). Returns (claimed, err):
+// claimed=true means this caller won the race and should send the DM; claimed=false
+// means another runner already claimed the task for this dedupe window.
+// This moves the "not sent today" check into the write path so two plugin
+// instances can't both read a stale stamp and both send a DM (CodeRabbit review).
+func (s *SQLStore) ClaimOverdueSent(ctx context.Context, taskID string, ms, claimAfterMs int64) (bool, error) {
+	if taskID == "" {
+		return false, errors.New("claim overdue sent: id is required")
+	}
+	res, err := s.builder().
+		Update(s.tableName(taskTableShort)).
+		Set("last_overdue_sent_at", ms).
+		Where(sq.Eq{"id": taskID}).
+		Where(sq.Or{
+			sq.Lt{"last_overdue_sent_at": claimAfterMs},
+			sq.Eq{"last_overdue_sent_at": nil},
+		}).
+		ExecContext(ctx)
+	if err != nil {
+		return false, fmt.Errorf("claim overdue sent %s: %w", taskID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim overdue sent %s: rows affected: %w", taskID, err)
+	}
+	if rows == 0 {
+		// Either the task doesn't exist OR another runner already claimed it.
+		if _, err := s.GetTask(ctx, taskID); err != nil {
+			return false, store.ErrTaskNotFound
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
 func (s *SQLStore) MarkOverdueSent(ctx context.Context, taskID string, ms int64) error {
 	if taskID == "" {
 		return errors.New("mark overdue sent: id is required")

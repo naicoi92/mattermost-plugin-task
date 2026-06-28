@@ -15,10 +15,11 @@
 // accepted trade-off: the feature works (the task opens), the flash is cosmetic.
 // See change notification-overdue-and-context, design D9.
 
-import React, { useEffect } from "react";
-import { useDispatch } from "react-redux";
-import { useHistory, useParams } from "react-router-dom";
-import { ACTION_TYPES } from "reducer";
+import {useFormatMessage} from 'i18n_utils';
+import React, {useEffect} from 'react';
+import {useDispatch} from 'react-redux';
+import {useHistory, useParams} from 'react-router-dom';
+import {ACTION_TYPES} from 'reducer';
 
 // rhsOpener opens the plugin's Right-Hand Sidebar. It is captured during
 // initialize (index.tsx) and injected via setTaskDeepLinkRhsOpener, mirroring
@@ -26,50 +27,52 @@ import { ACTION_TYPES } from "reducer";
 // back into index.tsx.
 let rhsOpener: () => void = () => {};
 export function setTaskDeepLinkRhsOpener(opener: () => void) {
-	rhsOpener = opener;
+    rhsOpener = opener;
 }
 
 interface RouteParams {
-	id: string;
+    id: string;
 }
 
 export default function TaskDeepLink() {
-	const dispatch = useDispatch();
-	const history = useHistory();
-	const { id } = useParams<RouteParams>();
+    const dispatch = useDispatch();
+    const history = useHistory();
+    const t = useFormatMessage();
+    const {id} = useParams<RouteParams>();
 
-	useEffect(() => {
-		if (id) {
-			dispatch({ type: ACTION_TYPES.SELECT_TASK, taskID: id });
-			rhsOpener();
-		}
+    useEffect(() => {
+        if (id) {
+            dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id});
+            rhsOpener();
+        }
 
-		// Send the user back to where they opened the link from (typically the
-		// DM). With no previous entry (pasted URL) goBack is a no-op, so push
-		// to a sane landing page instead of leaving a blank route.
-		if (history.length > 1) {
-			history.goBack();
-		} else {
-			history.push("/");
-		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [id]);
+        // Send the user back to where they opened the link from (typically the
+        // DM). With no previous entry (pasted URL) goBack is a no-op, so replace
+        // the deep-link entry with the landing page instead of pushing (push
+        // would leave /task/:id in the stack and Back would reopen it).
+        if (history.length > 1) {
+            history.goBack();
+        } else {
+            history.replace('/');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id]);
 
-	// Render a centered loading placeholder instead of null so the brief
-	// moment between host navigation and goBack shows feedback (spinner) rather
-	// than a blank white page — reduces the flash's perceived severity (design
-	// D9, option B).
-	return (
-		<div
-			style={{
-				display: "flex",
-				alignItems: "center",
-				justifyContent: "center",
-				height: "100vh",
-				color: "var(--center-channel-color, #3f4354)",
-			}}
-		>
-			{"Đang mở task..."}
-		</div>
-	);
+    // Render a centered loading placeholder instead of null so the brief
+    // moment between host navigation and goBack shows feedback (spinner) rather
+    // than a blank white page — reduces the flash's perceived severity (design
+    // D9, option B).
+    return (
+        <div
+            style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100vh',
+                color: 'var(--center-channel-color, #3f4354)',
+            }}
+        >
+            {t('task.deep_link.opening')}
+        </div>
+    );
 }

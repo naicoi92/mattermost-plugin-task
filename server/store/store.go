@@ -167,6 +167,11 @@ type Store interface {
 	// daily overdue job can dedupe: a task already stamped within the current
 	// UTC day is skipped on the next scan.
 	MarkOverdueSent(ctx context.Context, taskID string, ms int64) error
+	// ClaimOverdueSent atomically stamps last_overdue_sent_at only if the current
+	// stamp is older than claimAfterMs (or NULL). Returns whether this caller won
+	// the race. Use this instead of MarkOverdueSent when multiple runners may
+	// overlap, so only one sends the DM per dedupe window.
+	ClaimOverdueSent(ctx context.Context, taskID string, ms, claimAfterMs int64) (bool, error)
 
 	// --- Members (M2-2) ---
 	AddMember(ctx context.Context, taskID, userID, role string) error

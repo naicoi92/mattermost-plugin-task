@@ -3,17 +3,28 @@
 ## Purpose
 
 Định nghĩa các yêu cầu styling/UI cho Task sidebar (Quick List, Task Detail, New Task) nhằm đồng bộ với thiết kế: token màu, bo góc, separator, checkbox custom, inline-trigger pattern.
-
 ## Requirements
-
 ### Requirement: Token màu amber phải khớp thiết kế
 
-`--task-warning` token trong `index.scss` SHALL có giá trị `#cf8900` (light theme) và `#e6a23c` (dark theme) — cam đậm, không phải `#ffb700` (vàng).
+`--task-warning` token trong `index.scss` SHALL có giá trị `#cf8900` (light theme) và
+`#e6a23c` (dark theme) — cam đậm, không phải `#ffb700` (vàng).
 
-#### Scenario: Due "soon" hiển thị cam đậm
+Threshold áp dụng class `--soon` (warning band) cho due chip SHALL theo band 3 ngày →
+1 ngày trước deadline (tức `24h ≤ dueAt - now ≤ 72h`), theo spec `task-due-coloring`.
+Class `--overdue` (danger band) SHALL áp dụng cho `dueAt - now < 24h` (kể cả chưa quá
+hạn nhưng <1 ngày) HOẶC `dueAt < now` (quá hạn) — danger band.
 
-- **WHEN** một task có due date trong hôm nay (due soon) và status open
-- **THEN** due chip hiển thị màu `--task-warning` = `#cf8900`, không phải vàng `#ffb700`
+#### Scenario: Due "soon" (3→1 ngày trước deadline) hiển thị cam đậm
+
+- **WHEN** một task open có `DueAt = now + 2 ngày` (trong khoảng 24h..72h)
+- **THEN** due chip hiển thị màu `--task-warning` = `#cf8900` + class `--soon`
+- **AND** KHÔNG áp dụng cho task >3 ngày trước deadline (muted)
+
+#### Scenario: Due <1 ngày trước deadline hiển thị đỏ (danger band)
+
+- **WHEN** một task open có `DueAt = now + 12 giờ` (<24h)
+- **THEN** due chip hiển thị màu `--task-danger` + class `--overdue` (danger band)
+- **AND** KHÔNG chỉ đỏ khi đã quá hạn — cả <1 ngày trước cũng đỏ
 
 #### Scenario: Priority important hiển thị cam đậm
 
@@ -153,3 +164,4 @@ Footer `.quick-list__footer` (chứa nút "New Task") SHALL pin ở bottom của
 
 - **WHEN** Quick List có nhiều task và user scroll danh sách
 - **THEN** nút "New Task" vẫn visible, pin ở bottom viewport, không bị cuộn đi theo các task row
+

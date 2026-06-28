@@ -157,7 +157,7 @@ func shortID(id string) string {
 // degradation instead of a broken link).
 func (n *Notifier) renderTaskNameLink(taskID, summary string) string {
 	if n.siteURL == "" || n.pluginID == "" {
-		return summary
+		return escapeMarkdown(summary)
 	}
 	permalink := n.siteURL + "/plug/" + n.pluginID + "/task/" + taskID
 	return fmt.Sprintf("[%s](%s)", escapeMarkdown(summary), permalink)
@@ -202,9 +202,17 @@ func overdueDays(nowMs, dueMs int64) int {
 	return days
 }
 
-// formatOverdueDuration renders the localized "N days overdue" duration string.
+// formatOverdueDuration renders the localized "N days overdue" duration string,
+// using the singular form when exactly 1 day (English-only concern; Vietnamese
+// has no plural form so its singular key is absent and the plural key is reused).
 func (n *Notifier) formatOverdueDuration(locale string, nowMs, dueMs int64) string {
-	return n.translator.T(locale, "notification.overdue.duration", overdueDays(nowMs, dueMs))
+	days := overdueDays(nowMs, dueMs)
+	if days == 1 {
+		if s := n.translator.T(locale, "notification.overdue.duration.one"); s != "notification.overdue.duration.one" {
+			return s
+		}
+	}
+	return n.translator.T(locale, "notification.overdue.duration", days)
 }
 
 // markdownLinkRe matches an inline markdown link, capturing its label text so

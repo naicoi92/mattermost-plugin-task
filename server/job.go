@@ -70,13 +70,21 @@ func (p *Plugin) runOverdueJob() {
 		p.API.LogError("Overdue job failed to scan tasks", "error", err)
 		return
 	}
-	// Truncate to the start of the current UTC day: a task already stamped at
-	// or after this instant has been notified today and is skipped.
-	startOfToday := now.UTC().Truncate(24 * time.Hour).UnixMilli()
-	for _, t := range tasks {
-		if t.LastOverdueSentAt != nil && *t.LastOverdueSentAt >= startOfToday {
-			continue
-		}
+    	// Start of the current UTC day: the dedupe boundary. ClaimOverdueSent
+    	// atomically refuses to stamp a row whose stamp is already >= this, so
+    	// two overlapping runners can't both send a DM for the same task today.
+    	startOfToday := now.UTC().Truncate(24 * time.Hour).UnixMilli()
+    	for _, t := range tasks {
+    		// Atomic claim: only the winner sends the DM. Losers skip silently.
+    		claimed, err := p.taskService.ClaimOverdueSent(t.ID, nowMs, startOfToday)
+    		if err != nil {
+    			p.API.LogError("Overdue job failed to claim",
+    				"task_id", t.ID, "error", err)
+    			continue
+    		}
+    		if !claimed {
+    			continue // another runner already notified today
+    		}
 		p.notifier.NotifyOverdue(notification.TaskSummary{
 			ID:       t.ID,
 			Summary:  t.Summary,
@@ -84,12 +92,6 @@ func (p *Plugin) runOverdueJob() {
 			DueAt:    t.DueAt,
 			IsAllDay: t.IsAllDay,
 		}, nowMs, t.CreatorID, t.AssigneeID)
-		// Stamp best-effort: if the UPDATE fails we log and move on; the task
-		// may get a duplicate DM today on a re-scan, but data stays consistent.
-		if err := p.taskService.MarkOverdueSent(t.ID); err != nil {
-			p.API.LogError("Overdue job failed to mark sent",
-				"task_id", t.ID, "error", err)
-		}
 	}
 }
 

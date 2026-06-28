@@ -75,6 +75,7 @@
   "webapp.task.assignee.placeholder": "Chọn người làm",
   "webapp.task.load_more": "Tải thêm",
   "webapp.task.status.todo": "Cần làm",
+  "task.deep_link.opening": "Đang mở task...",
   "webapp.task.status.in_progress": "Đang làm",
   "webapp.task.status.done": "Đã xong",
   "webapp.task.status.cancelled": "Đã hủy",

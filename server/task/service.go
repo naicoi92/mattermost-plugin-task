@@ -820,7 +820,10 @@ func (s *Service) ListOverdueTasks(nowMs int64) ([]*model.Task, error) {
 	}
 	out := make([]*model.Task, 0, len(rows))
 	for i := range rows {
-		t, err := s.assembleTask(ctx, &rows[i])
+		// Lightweight: the notifier only needs creator + assignee, so skip the
+		// reminder/subtask/comment hydration that the full assembleTask does
+		// (CodeRabbit review — avoids N*3 extra queries on the daily scan).
+		t, err := s.assembleTaskForNotify(ctx, &rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -829,14 +832,45 @@ func (s *Service) ListOverdueTasks(nowMs int64) ([]*model.Task, error) {
 	return out, nil
 }
 
+// assembleTaskForNotify hydrates only the creator + assignee ids — the fields the
+// notification jobs consume. It skips reminder/subtask/comment aggregates that
+// assembleTask loads, so the daily overdue + due-soon scans stay cheap.
+func (s *Service) assembleTaskForNotify(ctx context.Context, row *model.TaskRow) (*model.Task, error) {
+	t := &model.Task{TaskRow: *row}
+	if creator, err := s.store.GetMemberByRole(ctx, row.ID, model.MemberRoleCreator); err == nil {
+		t.CreatorID = creator
+	} else if !errors.Is(err, store.ErrMemberNotFound) {
+		return nil, errors.Wrap(err, "assemble task for notify: creator")
+	}
+	if assignee, err := s.store.GetMemberByRole(ctx, row.ID, model.MemberRoleAssignee); err == nil {
+		t.AssigneeID = assignee
+	} else if !errors.Is(err, store.ErrMemberNotFound) {
+		return nil, errors.Wrap(err, "assemble task for notify: assignee")
+	}
+	return t, nil
+}
+
 // MarkOverdueSent stamps last_overdue_sent_at = now (UTC ms) on a task so the
 // daily overdue job can dedupe a task already notified within the current UTC
 // day. Thin wrapper: no audit event (unlike reminder-fired), because overdue is
 // a scheduler-side dedupe marker, not a user-visible lifecycle transition.
-func (s *Service) MarkOverdueSent(taskID string) error {
+// MarkOverdueSent stamps last_overdue_sent_at = stampedAt so the daily overdue
+// job can dedupe. The caller passes the SAME nowMs it used to decide the dedupe
+// window, so a DM sent at 23:59:59 and stamped at 00:00:01 doesn't shift the
+// task into the next UTC day (which would skip the next day's notification).
+func (s *Service) MarkOverdueSent(taskID string, stampedAt int64) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	return s.store.MarkOverdueSent(ctx, taskID, nowFunc())
+	return s.store.MarkOverdueSent(ctx, taskID, stampedAt)
+}
+
+// ClaimOverdueSent wraps the atomic store claim so the job can decide whether
+// to send the DM based on a race-free UPDATE. claimAfterMs is the start of the
+// current dedupe window (e.g. start-of-day UTC).
+func (s *Service) ClaimOverdueSent(taskID string, ms, claimAfterMs int64) (bool, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	return s.store.ClaimOverdueSent(ctx, taskID, ms, claimAfterMs)
 }
 
 // PatchInput is the partial-update payload. Only fields listed in UpdateFields

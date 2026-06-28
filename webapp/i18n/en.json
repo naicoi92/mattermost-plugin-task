@@ -75,6 +75,7 @@
   "webapp.task.assignee.placeholder": "Select assignee",
   "webapp.task.load_more": "Load more",
   "webapp.task.status.todo": "To Do",
+  "task.deep_link.opening": "Opening task...",
   "webapp.task.status.in_progress": "In Progress",
   "webapp.task.status.done": "Done",
   "webapp.task.status.cancelled": "Cancelled",
