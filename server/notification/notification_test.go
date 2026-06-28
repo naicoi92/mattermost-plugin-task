@@ -167,9 +167,9 @@ func TestNotifyAssigned_PlainNameWhenNoSiteURL(t *testing.T) {
 	n.NotifyAssigned("a", "x", TaskSummary{ID: "01HXYZTASK0001", Summary: "Fix [bug]", Status: "todo"})
 
 	require.Len(t, api.posts, 1)
-	// No markdown link; plain-text fallback escapes brackets so a title like
-	// "Fix [bug]" can't become a spurious link label in the DM body.
-	assert.Contains(t, api.posts[0].message, `Fix \[bug\]`)
+	// No markdown link; plain-text fallback wraps in literal brackets and
+	// escapes the title's own brackets so "Fix [bug]" can't become a link label.
+	assert.Contains(t, api.posts[0].message, `[ Fix \[bug\] ]`)
 	assert.NotContains(t, api.posts[0].message, "/plug/")
 }
 

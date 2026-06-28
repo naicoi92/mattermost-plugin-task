@@ -152,10 +152,15 @@ type TaskSummary struct {
 // degradation instead of a broken link).
 func (n *Notifier) renderTaskNameLink(taskID, summary string) string {
 	if n.siteURL == "" || n.pluginID == "" {
-		return escapeMarkdown(summary)
+		// No deep-link: return the summary wrapped in literal brackets so it
+		// still reads as a task reference in the DM body.
+		return "[ " + escapeMarkdown(summary) + " ]"
 	}
 	permalink := n.siteURL + "/plug/" + n.pluginID + "/task/" + taskID
-	return fmt.Sprintf("[%s](%s)", escapeMarkdown(summary), permalink)
+	// Wrap the markdown link in literal brackets (with inner spaces so the
+	// outer [ ] aren't parsed as part of the link label) — renders as
+	// "[ summary ]" where summary is clickable.
+	return fmt.Sprintf("[ [%s](%s) ]", escapeMarkdown(summary), permalink)
 }
 
 // escapeMarkdown escapes the bracket and paren characters that would otherwise
