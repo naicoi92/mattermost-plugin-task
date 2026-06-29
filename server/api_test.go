@@ -984,12 +984,14 @@ func TestCreateTask_InvalidPriorityRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestListTasks_InvalidScopeRejected verifies that an unknown/empty scope is
+// TestListTasks_InvalidScopeRejected verifies that an unknown scope is
 // rejected at the API boundary with 400 (not 500 from the store layer).
+// scope=mine is now valid (see TestListTasks_ScopeMine); scope=direct is the
+// canonical rejected example.
 func TestListTasks_InvalidScopeRejected(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	w := httptest.NewRecorder()
-	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine", "", "u1"))
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=direct", "", "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -998,6 +1000,74 @@ func TestListTasks_EmptyScopeRejected(t *testing.T) {
 	w := httptest.NewRecorder()
 	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks", "", "u1"))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestListTasks_ScopeMine verifies GET /tasks?scope=mine lists only tasks
+// assigned to the authenticated user across all channels, without a channel_id,
+// and composes with the status filter. The caller's user id is derived from the
+// Mattermost-User-ID header (no user_id query param).
+func TestListTasks_ScopeMine(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	// u-me is assigned one task in ch1 and one in ch2; u-other is assigned one
+	// in ch1. A task with no assignee must not surface.
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "mine-ch1", CreatorID: "u-me", AssigneeID: "u-me"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch2", Summary: "mine-ch2", CreatorID: "u-me", AssigneeID: "u-me"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "other", CreatorID: "u-me", AssigneeID: "u-other"})
+	createTaskViaService(t, p, task.CreateInput{ChannelID: "ch1", Summary: "no-assignee", CreatorID: "u-me"})
+
+	t.Run("returns only tasks assigned to caller across channels", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine", "", "u-me"))
+		require.Equal(t, http.StatusOK, w.Code)
+		var got []model.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		require.Len(t, got, 2)
+		summaries := []string{got[0].Summary, got[1].Summary}
+		assert.Contains(t, summaries, "mine-ch1")
+		assert.Contains(t, summaries, "mine-ch2")
+	})
+
+	t.Run("does not require channel_id", func(t *testing.T) {
+		// Explicitly no channel_id — must not 400.
+		w := httptest.NewRecorder()
+		p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine&limit=1", "", "u-me"))
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("status filter composes with mine scope", func(t *testing.T) {
+		// Mark mine-ch2 done via the status endpoint, then filter status=todo.
+		tasks := listAllTasksForTestAPI(t, p)
+		var ch2 model.Task
+		for _, tk := range tasks {
+			if tk.Summary == "mine-ch2" {
+				ch2 = tk
+			}
+		}
+		require.NotEmpty(t, ch2.ID)
+		wStatus := httptest.NewRecorder()
+		p.ServeHTTP(nil, wStatus, authedRequest(http.MethodPatch, "/api/v1/tasks/"+ch2.ID+"/status", `{"status":"done"}`, "u-me"))
+		require.Equal(t, http.StatusOK, wStatus.Code)
+
+		w := httptest.NewRecorder()
+		p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine&status=todo", "", "u-me"))
+		require.Equal(t, http.StatusOK, w.Code)
+		var got []model.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		require.Len(t, got, 1)
+		assert.Equal(t, "mine-ch1", got[0].Summary)
+	})
+}
+
+// listAllTasksForTestAPI returns all tasks via scope=mine for the test caller;
+// a helper for api tests that need a task id by attribute.
+func listAllTasksForTestAPI(t *testing.T, p *Plugin) []model.Task {
+	t.Helper()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodGet, "/api/v1/tasks?scope=mine&limit=100", "", "u-me"))
+	require.Equal(t, http.StatusOK, w.Code)
+	var got []model.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	return got
 }
 
 func TestHelloWorld_StillWorks(t *testing.T) {

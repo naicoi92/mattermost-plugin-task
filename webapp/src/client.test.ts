@@ -213,6 +213,20 @@ describe('listTasks query building', () => {
         await listTasks();
         expect(capturedUrl).toBe(`${PLUGIN_API_BASE_URL}/tasks`);
     });
+
+    test('scope=mine omits channel_id and includes scope', async () => {
+        let capturedUrl = '';
+        mockFetch((url) => {
+            capturedUrl = url;
+            return okResponse([]);
+        });
+
+        const {listTasks} = await importClient();
+        await listTasks({scope: 'mine', limit: 25});
+        expect(capturedUrl).toContain('scope=mine');
+        expect(capturedUrl).toContain('limit=25');
+        expect(capturedUrl).not.toContain('channel_id');
+    });
 });
 
 describe('method verbs', () => {

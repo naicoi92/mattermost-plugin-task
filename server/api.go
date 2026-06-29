@@ -235,11 +235,6 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 	scope := task.Scope(q.Get("scope"))
 	channelID := q.Get("channel_id")
 
-	if scope != task.ScopeChannel {
-		p.writeError(w, http.StatusBadRequest, "scope must be 'channel'")
-		return
-	}
-
 	query := task.ListQuery{
 		Scope:         scope,
 		ChannelID:     channelID,
@@ -250,10 +245,26 @@ func (p *Plugin) listTasks(w http.ResponseWriter, r *http.Request) {
 		Limit:         limit,
 	}
 
-	if query.ChannelID == "" {
-		p.writeError(w, http.StatusBadRequest, "channel_id is required")
+	switch scope {
+	case task.ScopeChannel:
+		// "This channel" — caller must name the channel and be a member of it.
+		if query.ChannelID == "" {
+			p.writeError(w, http.StatusBadRequest, "channel_id is required")
+			return
+		}
+	case task.ScopeMine:
+		// "My tasks" — filter by the authenticated user's assignee edge. The
+		// caller id comes from the session header; channel_id is ignored.
+		query.UserID = currentUserID(r)
+		if query.UserID == "" {
+			p.writeError(w, http.StatusUnauthorized, "authenticated user required")
+			return
+		}
+	default:
+		p.writeError(w, http.StatusBadRequest, "scope must be 'channel' or 'mine'")
 		return
 	}
+
 	if query.Status != "" && !taskmodel.IsValidStatus(query.Status) {
 		p.writeError(w, http.StatusBadRequest, "invalid status")
 		return

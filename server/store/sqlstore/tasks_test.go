@@ -232,6 +232,66 @@ func TestListTasks_ScopeChannelStatusAndPagination(t *testing.T) {
 	})
 }
 
+// TestListTasks_ScopeMine returns only tasks whose assignee edge in the
+// members table is the requested user. The tasks table has no assignee_id
+// column — assignee is a members edge (role='assignee'), so scope=mine filters
+// via an EXISTS subquery on members (index members_user_idx).
+func TestListTasks_ScopeMine(t *testing.T) {
+	s := tasksTestStore(t)
+	ctx := context.Background()
+	mustCreate(t, s, ctx, fixture("T1", "k1", withChannel("ch1")))
+	mustCreate(t, s, ctx, fixture("T2", "k2", withChannel("ch2")))
+	mustCreate(t, s, ctx, fixture("T3", "k3", withChannel("ch1")))
+	// Assignee edges: T1 and T2 -> u-me; T3 -> u-other; T1 -> u-me creator.
+	require.NoError(t, s.AddMember(ctx, "T1", "u-me", model.MemberRoleCreator))
+	require.NoError(t, s.AddMember(ctx, "T1", "u-me", model.MemberRoleAssignee))
+	require.NoError(t, s.AddMember(ctx, "T2", "u-me", model.MemberRoleAssignee))
+	require.NoError(t, s.AddMember(ctx, "T3", "u-other", model.MemberRoleAssignee))
+
+	t.Run("returns only tasks assigned to user", func(t *testing.T) {
+		page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u-me", Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 2, page.Total)
+		assert.False(t, page.HasMore)
+		require.Len(t, page.Items, 2)
+		// Ordered by order_key ASC: T1 (k1) before T2 (k2).
+		assert.Equal(t, "T1", page.Items[0].(*model.TaskRow).ID)
+		assert.Equal(t, "T2", page.Items[1].(*model.TaskRow).ID)
+	})
+
+	t.Run("does not require channel_id", func(t *testing.T) {
+		// Same query but channel_id intentionally empty — must still succeed.
+		page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u-me", ChannelID: "", Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 2, page.Total)
+	})
+
+	t.Run("user with no assignments gets empty page", func(t *testing.T) {
+		page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u-none", Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 0, page.Total)
+		assert.Empty(t, page.Items)
+	})
+
+	t.Run("creator edge alone does not match", func(t *testing.T) {
+		// A user who is only the creator (not assignee) must NOT see the task.
+		require.NoError(t, s.AddMember(ctx, "T3", "u-creator-only", model.MemberRoleCreator))
+		page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u-creator-only", Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 0, page.Total, "creator-only edge must not surface in scope=mine")
+	})
+
+	t.Run("status filter narrows within mine scope", func(t *testing.T) {
+		// Mark T1 done; filter status=todo should return only T2.
+		_, err := s.UpdateTask(ctx, model.TaskRow{ID: "T1", Status: model.StatusDone})
+		require.NoError(t, err)
+		page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u-me", Status: model.StatusTodo, Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 1, page.Total)
+		assert.Equal(t, "T2", page.Items[0].(*model.TaskRow).ID)
+	})
+}
+
 func TestListAllTasksForTest_Unfiltered(t *testing.T) {
 	s := tasksTestStore(t)
 	ctx := context.Background()
