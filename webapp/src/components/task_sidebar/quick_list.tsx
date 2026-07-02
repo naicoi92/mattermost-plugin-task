@@ -246,10 +246,6 @@ export default function QuickList({
                         {g.items.map((task) => {
                             const done =
 								task.status === 'done' || task.status === 'cancelled';
-
-                            // URGENT/IMPORTANT rows show full due + priority;
-                            // NORMAL/DONE rows render compact (less time focus).
-                            const compact = g.key === 'normal' || g.key === 'done';
                             return (
                                 <li
                                     key={task.id}
@@ -296,7 +292,7 @@ export default function QuickList({
                                                 </span>
                                             )}
                                             <span
-                                                className={`quick-list__item-meta ${compact ? 'quick-list__item-meta--compact' : ''}`}
+                                                className='quick-list__item-meta'
                                             >
                                                 <StatusPill status={task.status}/>
                                                 <span

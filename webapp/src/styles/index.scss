@@ -303,22 +303,6 @@
         }
     }
 
-    // Compact meta for low-time-focus groups (NORMAL/DONE): hide the
-    // priority pill and the due relative text, keeping only the status pill
-    // and a due icon so the row stays scannable without time noise.
-    &__item-meta--compact {
-            .quick-list__item-priority {
-                display: none;
-            }
-
-            .quick-list__item-due {
-                font-size: 0; // collapse the relative text, keep the icon
-
-                svg {
-                    font-size: 13px;
-                }
-            }
-        }
 
     &__error {
         margin: 0 12px;
