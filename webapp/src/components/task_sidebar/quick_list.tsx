@@ -142,9 +142,14 @@ export default function QuickList({
             setAfterOrderKey(list.length > 0 ? list[list.length - 1].order_key : '');
             setHasMore(list.length >= pageLimit);
         } catch (err) {
+            if (myRequest !== latestRequestRef.current) {
+                return;
+            }
             setError(messageFor(err));
         } finally {
-            setLoading(false);
+            if (myRequest === latestRequestRef.current) {
+                setLoading(false);
+            }
         }
     };
 
@@ -223,11 +228,13 @@ export default function QuickList({
                     </button>
                     <button
                         key='channel'
-                        className={`quick-list__scope-tab ${scope === 'channel' ? 'quick-list__scope-tab--active' : ''}`}
-                        onClick={() => setScope('channel')}
+                        className={`quick-list__scope-tab ${scope === 'channel' ? 'quick-list__scope-tab--active' : ''} ${channelID ? '' : 'quick-list__scope-tab--disabled'}`}
+                        onClick={() => channelID && setScope('channel')}
                         type='button'
                         role='tab'
                         aria-selected={scope === 'channel'}
+                        disabled={!channelID}
+                        title={channelID ? undefined : t('webapp.task.scope.channel_tasks')}
                     >
                         {t('webapp.task.scope.channel_tasks')}
                     </button>
@@ -291,9 +298,7 @@ export default function QuickList({
                                                     {truncateDescription(task.description.trim())}
                                                 </span>
                                             )}
-                                            <span
-                                                className='quick-list__item-meta'
-                                            >
+                                            <span className='quick-list__item-meta'>
                                                 <StatusPill status={task.status}/>
                                                 <span
                                                     className={`quick-list__item-priority quick-list__item-priority--${task.priority || 'standard'}`}

@@ -297,11 +297,24 @@
             color: var(--task-fg);
         }
 
-        &--active {
-            background: var(--task-accent-tint);
-            color: var(--task-accent);
+            &--active {
+                background: var(--task-accent-tint);
+                color: var(--task-accent);
+            }
+
+            &--disabled {
+                // Channel Tasks needs a context channel; when none is available
+                // the tab is non-interactive and dimmed so it can't trigger a
+                // scope=channel fetch without a channel_id.
+                opacity: 0.4;
+                cursor: not-allowed;
+
+                &:hover {
+                    background: transparent;
+                    color: var(--task-muted);
+                }
+            }
         }
-    }
 
 
     &__error {

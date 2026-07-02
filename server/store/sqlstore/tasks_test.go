@@ -283,7 +283,9 @@ func TestListTasks_ScopeMine(t *testing.T) {
 
 	t.Run("status filter narrows within mine scope", func(t *testing.T) {
 		// Mark T1 done; filter status=todo should return only T2.
-		_, err := s.UpdateTask(ctx, model.TaskRow{ID: "T1", Status: model.StatusDone})
+		// UpdateTask overwrites ALL columns (not just Status), so rebuild the
+		// full row from the original fixture to avoid zeroing summary/channel.
+		_, err := s.UpdateTask(ctx, fixture("T1", "k1", withChannel("ch1"), withStatus(model.StatusDone)))
 		require.NoError(t, err)
 		page, err := s.ListTasks(ctx, store.ListQuery{Scope: store.ScopeMine, UserID: "u-me", Status: model.StatusTodo, Limit: 10})
 		require.NoError(t, err)
