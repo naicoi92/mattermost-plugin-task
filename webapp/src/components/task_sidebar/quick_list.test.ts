@@ -1,16 +1,18 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// Unit tests for QuickList. Covers the pure helpers (buildParams, isOverdue,
-// groupTasks, countByTab, messageFor, truncateDescription) — the contract this
-// file pins down without a host Redux/intl provider harness.
+// Unit tests for QuickList. Covers the pure helpers (buildParams, classifyGroup,
+// isDueWithinDays, sortTasksByDue, buildGroups, isOverdue, messageFor,
+// truncateDescription) — the contract this file pins down without a host
+// Redux/intl provider harness.
 
 import {ClientError} from 'client';
 
 import {
+    buildGroups,
     buildParams,
-    countByTab,
-    groupTasks,
+    classifyGroup,
+    isDueWithinDays,
     isOverdue,
     messageFor,
     truncateDescription,
@@ -40,47 +42,302 @@ function makeTask(over: Partial<Task> = {}): Task {
     };
 }
 
+// startOfToday(ms) returns the local-midnight timestamp for the calendar day of
+// `ms`, so day-boundary tests never flake near midnight.
+function startOfToday(ms: number): number {
+    const d = new Date(ms);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HALF_DAY = Math.floor(DAY_MS / 2);
+
+// atDay returns the ms epoch `n` whole days after `base` (parenthesized so no
+// inline mixed operators). Callers add HALF_DAY / small offsets as plain sums
+// so due dates never land on a midnight boundary (keeps day-diff math stable).
+const atDay = (base: number, n: number): number => {
+    const shifted = n * DAY_MS;
+    return base + shifted;
+};
+
 describe('buildParams', () => {
-    test('channel mode (non-DM) sends scope=channel + channel_id', () => {
-        const p = buildParams('all', 'ch1', false, '');
-        expect(p.scope).toBe('channel');
-        expect(p.channel_id).toBe('ch1');
-        expect(p.partner_id).toBeUndefined();
+    test('scope=mine omits channel_id and sends scope=mine', () => {
+        const p = buildParams('mine', undefined, '');
+        expect(p.scope).toBe('mine');
+        expect(p.channel_id).toBeUndefined();
         expect(p.limit).toBe(25);
     });
 
-    test('direct mode (DM) now uses scope=channel + channel_id (all-channel model)', () => {
-        const p = buildParams('all', 'u-partner', true, '');
-        expect(p.scope).toBe('channel');
-        expect(p.channel_id).toBe('u-partner');
-        expect(p.partner_id).toBeUndefined();
-    });
-
-    test('channel mode without a channelID omits channel_id', () => {
-        const p = buildParams('all', undefined, false, '');
+    test('scope=mine ignores a supplied channelID', () => {
+        // mine spans all channels; channel_id must not leak into the request.
+        const p = buildParams('mine', 'ch1', '');
+        expect(p.scope).toBe('mine');
         expect(p.channel_id).toBeUndefined();
     });
 
-    test('todo tab sets status filter', () => {
-        const p = buildParams('todo', 'ch1', false, '');
-        expect(p.status).toBe('todo');
+    test('scope=channel sends scope=channel + channel_id', () => {
+        const p = buildParams('channel', 'ch1', '');
+        expect(p.scope).toBe('channel');
+        expect(p.channel_id).toBe('ch1');
     });
 
-    test('today tab sets due filter', () => {
-        const p = buildParams('today', 'ch1', false, '');
-        expect(p.due).toBe('today');
-        expect(p.status).toBeUndefined();
-    });
-
-    test('all tab sends neither status nor due', () => {
-        const p = buildParams('all', 'ch1', false, '');
-        expect(p.status).toBeUndefined();
-        expect(p.due).toBeUndefined();
+    test('scope=channel without a channelID omits channel_id', () => {
+        const p = buildParams('channel', undefined, '');
+        expect(p.channel_id).toBeUndefined();
     });
 
     test('after_order_key enables pagination', () => {
-        const p = buildParams('all', 'ch1', false, 'm0');
+        const p = buildParams('mine', undefined, 'm0');
         expect(p.after_order_key).toBe('m0');
+    });
+});
+
+describe('classifyGroup', () => {
+    // Anchor `now` to local noon today so "today" and "1-3 day" windows never
+    // cross a day boundary when the test runs near midnight.
+    const now = (() => {
+        const d = new Date();
+        return new Date(
+            d.getFullYear(),
+            d.getMonth(),
+            d.getDate(),
+            12,
+            0,
+            0,
+        ).getTime();
+    })();
+    const todayNoon = now;
+    const base = startOfToday(now);
+    const yesterday = todayNoon - DAY_MS;
+    const tomorrow = atDay(base, 1) + HALF_DAY;
+    const day2 = atDay(base, 2) + HALF_DAY;
+    const day5 = atDay(base, 5) + HALF_DAY;
+
+    test('urgent priority not yet due → URGENT', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'urgent', status: 'todo', due: day5}),
+                now,
+            ),
+        ).toBe('urgent');
+    });
+
+    test('overdue standard → URGENT', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'standard', status: 'todo', due: yesterday}),
+                now,
+            ),
+        ).toBe('urgent');
+    });
+
+    test('due today standard → URGENT', () => {
+        expect(
+            classifyGroup(
+                makeTask({
+                    priority: 'standard',
+                    status: 'in_progress',
+                    due: todayNoon,
+                }),
+                now,
+            ),
+        ).toBe('urgent');
+    });
+
+    test('important priority due far → IMPORTANT', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'important', status: 'todo', due: day5}),
+                now,
+            ),
+        ).toBe('important');
+    });
+
+    test('standard due in 1-3 days → IMPORTANT', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'standard', status: 'todo', due: day2}),
+                now,
+            ),
+        ).toBe('important');
+    });
+
+    test('standard due in 1 day → IMPORTANT', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'standard', status: 'todo', due: tomorrow}),
+                now,
+            ),
+        ).toBe('important');
+    });
+
+    test('standard due >3 days → NORMAL', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'standard', status: 'todo', due: day5}),
+                now,
+            ),
+        ).toBe('normal');
+    });
+
+    test('standard no due → NORMAL', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'standard', status: 'todo', due: undefined}),
+                now,
+            ),
+        ).toBe('normal');
+    });
+
+    test('done status → DONE regardless of priority/due', () => {
+        expect(
+            classifyGroup(
+                makeTask({status: 'done', priority: 'urgent', due: todayNoon}),
+                now,
+            ),
+        ).toBe('done');
+    });
+
+    test('cancelled status → DONE', () => {
+        expect(classifyGroup(makeTask({status: 'cancelled'}), now)).toBe('done');
+    });
+
+    test('overdue beats important priority → URGENT', () => {
+        expect(
+            classifyGroup(
+                makeTask({priority: 'important', status: 'todo', due: yesterday}),
+                now,
+            ),
+        ).toBe('urgent');
+    });
+});
+
+describe('isDueWithinDays', () => {
+    const now = (() => {
+        const d = new Date();
+        return new Date(
+            d.getFullYear(),
+            d.getMonth(),
+            d.getDate(),
+            12,
+            0,
+            0,
+        ).getTime();
+    })();
+    const base = startOfToday(now);
+
+    test('due tomorrow is within [1,3]', () => {
+        expect(
+            isDueWithinDays(makeTask({due: atDay(base, 1) + 1000}), now, 1, 3),
+        ).toBe(true);
+    });
+
+    test('due in 3 days is within [1,3]', () => {
+        expect(
+            isDueWithinDays(makeTask({due: atDay(base, 3) + 1000}), now, 1, 3),
+        ).toBe(true);
+    });
+
+    test('due today is NOT within [1,3]', () => {
+        expect(isDueWithinDays(makeTask({due: base + 1000}), now, 1, 3)).toBe(
+            false,
+        );
+    });
+
+    test('due in 5 days is NOT within [1,3]', () => {
+        expect(
+            isDueWithinDays(makeTask({due: atDay(base, 5) + 1000}), now, 1, 3),
+        ).toBe(false);
+    });
+
+    test('no due is not within any window', () => {
+        expect(isDueWithinDays(makeTask({due: undefined}), now, 1, 3)).toBe(
+            false,
+        );
+    });
+});
+
+describe('sortTasksByDue', () => {
+    const {sortTasksByDue} = require('components/task_sidebar/quick_list');
+
+    test('sorts ascending by due; no-due tasks go last', () => {
+        const a = makeTask({id: 'a', due: 300});
+        const b = makeTask({id: 'b', due: 100});
+        const c = makeTask({id: 'c', due: undefined});
+        const d = makeTask({id: 'd', due: 200});
+        const out = sortTasksByDue([a, b, c, d]);
+        expect(out.map((t: Task) => t.id)).toEqual(['b', 'd', 'a', 'c']);
+    });
+
+    test('stable: equal due preserves input order', () => {
+        const a = makeTask({id: 'a', due: 100, order_key: 'k1'});
+        const b = makeTask({id: 'b', due: 100, order_key: 'k2'});
+        const out = sortTasksByDue([a, b]);
+        expect(out.map((t: Task) => t.id)).toEqual(['a', 'b']);
+    });
+
+    test('all no-due preserves input order', () => {
+        const a = makeTask({id: 'a', due: undefined});
+        const b = makeTask({id: 'b', due: undefined});
+        const out = sortTasksByDue([a, b]);
+        expect(out.map((t: Task) => t.id)).toEqual(['a', 'b']);
+    });
+});
+
+describe('buildGroups', () => {
+    test('buckets into 4 canonical groups, sorted by due within each', () => {
+        const now = (() => {
+            const d = new Date();
+            return new Date(
+                d.getFullYear(),
+                d.getMonth(),
+                d.getDate(),
+                12,
+                0,
+                0,
+            ).getTime();
+        })();
+        const base = startOfToday(now);
+        const urgentFar = makeTask({
+            id: 'uf',
+            priority: 'urgent',
+            due: atDay(base, 10),
+        }); // urgent by priority
+        const urgentOver = makeTask({
+            id: 'uo',
+            priority: 'urgent',
+            due: now - DAY_MS,
+        }); // overdue too
+        const important = makeTask({id: 'im', due: atDay(base, 2) + 1000}); // 1-3 days
+        const normal = makeTask({id: 'no', due: atDay(base, 6)}); // >3 days
+        const done = makeTask({id: 'dn', status: 'done'});
+
+        const groups = buildGroups(
+            [normal, urgentOver, important, urgentFar, done],
+            now,
+        );
+        expect(groups.map((g) => g.key)).toEqual([
+            'urgent',
+            'important',
+            'normal',
+            'done',
+        ]);
+
+        // Urgent sorted by due asc: overdue (yesterday) before far-future urgent.
+        expect(groups[0].items.map((t) => t.id)).toEqual(['uo', 'uf']);
+        expect(groups[1].items.map((t) => t.id)).toEqual(['im']);
+        expect(groups[2].items.map((t) => t.id)).toEqual(['no']);
+        expect(groups[3].items.map((t) => t.id)).toEqual(['dn']);
+    });
+
+    test('empty groups are omitted, canonical order preserved', () => {
+        const now = Date.now();
+        const onlyNormal = makeTask({id: 'n', due: atDay(now, 10)});
+        const groups = buildGroups([onlyNormal], now);
+        expect(groups.map((g) => g.key)).toEqual(['normal']);
+    });
+
+    test('empty input yields no groups', () => {
+        expect(buildGroups([], Date.now())).toEqual([]);
     });
 });
 
@@ -92,10 +349,9 @@ describe('isOverdue', () => {
     test('a due date >24h away on an open task is not overdue (danger band)', () => {
         // isOverdue now means "danger band" (due within 24h OR past).
         // A due 25h away is still warning band, not danger.
+        const ms25h = 25 * 60 * 60 * 1000;
         expect(
-            isOverdue(
-                makeTask({due: Date.now() + ((25 * 60 * 60) * 1000), status: 'todo'}),
-            ),
+            isOverdue(makeTask({due: Date.now() + ms25h, status: 'todo'})),
         ).toBe(false);
     });
 
@@ -115,89 +371,6 @@ describe('isOverdue', () => {
         expect(
             isOverdue(makeTask({due: Date.now() - 10000, status: 'cancelled'})),
         ).toBe(false);
-    });
-});
-
-describe('groupTasks', () => {
-    test('buckets by status + due window', () => {
-        const overdue = makeTask({
-            id: '1',
-            status: 'todo',
-            due: Date.now() - 86400000,
-        });
-        const today = makeTask({
-            id: '2',
-            status: 'todo',
-
-            // Anchor to local noon today so the bucket test never crosses a
-            // day boundary when run near midnight (CodeRabbit review).
-            due: (() => {
-                const n = new Date();
-                return new Date(
-                    n.getFullYear(),
-                    n.getMonth(),
-                    n.getDate(),
-                    12,
-                    0,
-                    0,
-                ).getTime();
-            })(),
-        });
-        const upcoming = makeTask({
-            id: '3',
-            status: 'todo',
-            due: Date.now() + (30 * 86400000),
-        });
-        const done = makeTask({id: '4', status: 'done'});
-        const cancelled = makeTask({id: '5', status: 'cancelled'});
-        const groups = groupTasks([overdue, today, upcoming, done, cancelled]);
-
-        // Three non-empty buckets in canonical order.
-        expect(groups.map((g) => g.key)).toEqual([
-            'attention',
-            'upcoming',
-            'completed',
-        ]);
-        expect(groups[0].items.map((t) => t.id).sort()).toEqual(['1', '2']);
-        expect(groups[1].items.map((t) => t.id)).toEqual(['3']);
-        expect(groups[2].items.map((t) => t.id).sort()).toEqual(['4', '5']);
-    });
-
-    test('empty buckets are omitted', () => {
-        const onlyDone = makeTask({id: '1', status: 'done'});
-        const groups = groupTasks([onlyDone]);
-        expect(groups.map((g) => g.key)).toEqual(['completed']);
-    });
-});
-
-describe('countByTab', () => {
-    test('counts each tab from the loaded list', () => {
-        const tasks: Task[] = [
-            makeTask({id: '1', status: 'todo'}),
-            makeTask({id: '2', status: 'todo'}),
-            makeTask({id: '3', status: 'done'}),
-            makeTask({id: '4', status: 'cancelled'}),
-        ];
-        const counts = countByTab(tasks, false);
-        expect(counts.all.label).toBe('4');
-        expect(counts.todo.label).toBe('2');
-        expect(counts.done.label).toBe('1');
-        expect(counts.cancelled.label).toBe('1');
-        expect(counts.in_progress.label).toBe('0');
-    });
-
-    test("appends '+' when hasMore is true", () => {
-        const tasks: Task[] = [makeTask({id: '1', status: 'todo'})];
-        const counts = countByTab(tasks, true);
-        expect(counts.all.label).toBe('1+');
-        expect(counts.all.plus).toBe(true);
-    });
-
-    test("does not append '+' for zero-count tabs", () => {
-        const tasks: Task[] = [];
-        const counts = countByTab(tasks, true);
-        expect(counts.all.label).toBe('0');
-        expect(counts.all.plus).toBe(false);
     });
 });
 

@@ -479,6 +479,19 @@ func (s *SQLStore) applyTaskFilters(q store.ListQuery, columns ...string) (sq.Se
 			return b, errors.New("list tasks: scope=channel requires ChannelID")
 		}
 		b = b.Where(sq.Eq{"t.channel_id": q.ChannelID})
+	case store.ScopeMine:
+		// "My tasks" = tasks the user is assigned to, across all channels.
+		// assignee is a members edge (no assignee_id column on tasks), so filter
+		// via an EXISTS subquery on members. Uses members_user_idx (user_id,
+		// role) and avoids JOIN row multiplication for future multi-assignee.
+		if q.UserID == "" {
+			return b, errors.New("list tasks: scope=mine requires UserID")
+		}
+		members := s.tableName(membersTableShort)
+		b = b.Where(sq.Expr(
+			"EXISTS (SELECT 1 FROM "+members+" m WHERE m.task_id = t.id AND m.user_id = ? AND m.role = ?)",
+			q.UserID, model.MemberRoleAssignee,
+		))
 	default:
 		return b, fmt.Errorf("list tasks: unknown scope %q", q.Scope)
 	}

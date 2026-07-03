@@ -261,9 +261,9 @@
         flex-shrink: 0;
     }
 
-    // Filter tabs: Mattermost channel-style — scroll-x row, active marked by a
-    // blue bottom border + filled count badge.
-    &__filter-tabs {
+    // Scope toggle: a two-button segmented control (My Tasks / Channel
+    // Tasks). Active tab marked by accent tint.
+    &__scope-toggle {
         display: flex;
         gap: 1px;
         border-bottom: 1px solid var(--task-border-soft);
@@ -276,7 +276,7 @@
         }
     }
 
-    &__filter-tab {
+    &__scope-tab {
         display: inline-flex;
         align-items: center;
         gap: 5px;
@@ -297,33 +297,25 @@
             color: var(--task-fg);
         }
 
-        &--active {
-            background: var(--task-accent-tint);
-            color: var(--task-accent);
+            &--active {
+                background: var(--task-accent-tint);
+                color: var(--task-accent);
+            }
+
+            &--disabled {
+                // Channel Tasks needs a context channel; when none is available
+                // the tab is non-interactive and dimmed so it can't trigger a
+                // scope=channel fetch without a channel_id.
+                opacity: 0.4;
+                cursor: not-allowed;
+
+                &:hover {
+                    background: transparent;
+                    color: var(--task-muted);
+                }
+            }
         }
-    }
 
-    &__count {
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.02em;
-        background: var(--task-surface-cool);
-        color: var(--task-meta);
-        padding: 1px 5px;
-        border-radius: 9999px;
-        min-width: 16px;
-        text-align: center;
-
-        &--plus {
-            // Indicator that the badge is a lower bound ("25+"); uses the same
-            // surface style so the meaning is the "+" alone.
-        }
-    }
-
-    &__filter-tab--active &__count {
-        color: var(--task-accent-on);
-        background: var(--task-accent);
-    }
 
     &__error {
         margin: 0 12px;

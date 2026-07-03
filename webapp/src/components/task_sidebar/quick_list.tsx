@@ -1,15 +1,13 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-// QuickList is the flat task list shown in the RHS. The list is context-
-// driven: it shows the tasks of the channel the user is standing in (channel
-// mode) or the tasks shared with their DM partner (direct mode). The mode is
-// derived from the channel.type prop — there is no "My Tasks" / "Channel
-// Tasks" toggle. Six filter tabs narrow the result (All / Today / To Do / In
-// Progress / Done / Cancelled). Tasks are grouped under "Needs attention",
-// "Upcoming" and "Completed" headers. Clicking a row selects it (TaskSidebar
-// swaps to TaskDetailPanel); the footer "+ New Task" button opens the inline
-// New Task dialog.
+// QuickList is the flat task list shown in the RHS. The user picks one of two
+// scopes: "My Tasks" (default) — every task assigned to them across all
+// channels (scope=mine) — or "Channel Tasks" — tasks of the current channel
+// (scope=channel). Tasks are bucketed into four priority/time groups (URGENT,
+// IMPORTANT, NORMAL, DONE) and sorted by deadline within each group. Clicking a
+// row selects it (TaskSidebar swaps to TaskDetailPanel); the footer "+ New
+// Task" button opens the inline New Task dialog.
 
 import * as client from 'client';
 import {ClientError} from 'client';
@@ -27,31 +25,15 @@ import {useResolvedUsers} from 'components/user_picker/use_resolved_user';
 
 import type {ListScope, ListTasksParams, Task} from 'types/tasks';
 
-// FilterTab enumerates the six filter tabs. Each tab maps to a (status, due)
-// pair sent to the server; the special "today" maps to due=today, the others
-// map 1:1 to a status filter.
-export type FilterTab =
-	| 'all'
-	| 'today'
-	| 'todo'
-	| 'in_progress'
-	| 'done'
-	| 'cancelled';
-
 export interface QuickListProps {
 
-    // channelID is the context channel. For channel mode (O/P/G) it is sent to
-    // the server as channel_id; for direct mode it is unused (partner_id is
-    // sent instead).
+    // channelID is the context channel. Used only for the Channel Tasks scope
+    // (sent to the server as channel_id). My Tasks ignores it.
     channelID?: string;
 
-    // currentUserID is the authenticated user; used to derive the DM partner.
-    currentUserID?: string;
-
-    // channelType is the Mattermost channel type of the context channel ("D"
-    // for a 1:1 DM, otherwise a channel). When "D", the list uses direct mode.
-    channelType?: string;
-
+    // currentUserID is the authenticated user. The server derives the assignee
+    // from the session header, so this is not sent as a param; it is kept on
+    // the props for future host-driven overrides.
     // onSelectTask is called when a row is clicked; TaskSidebar uses it to swap
     // to the Task Detail panel.
     onSelectTask?: (taskID: string) => void;
@@ -60,13 +42,15 @@ export interface QuickListProps {
     onNewTask?: () => void;
 }
 
-// pageLimit is the cursor page size for "Load more" and the badge "N+" bound.
+// pageLimit is the cursor page size for "Load more".
 const pageLimit = 25;
+
+// GroupKey enumerates the four priority/time groups. The display order is
+// canonical: urgent → important → normal → done.
+export type GroupKey = 'urgent' | 'important' | 'normal' | 'done';
 
 export default function QuickList({
     channelID,
-    currentUserID,
-    channelType,
     onSelectTask,
     onNewTask,
 }: QuickListProps): JSX.Element {
@@ -74,7 +58,10 @@ export default function QuickList({
     const t = useFormatMessage();
     const locale = useActiveLocale();
 
-    const [tab, setTab] = useState<FilterTab>('all');
+    // scope defaults to "My Tasks" (mine) per the product spec. The user can
+    // toggle to "Channel Tasks" (channel), which then follows the context
+    // channel via the channelID effect dependency.
+    const [scope, setScope] = useState<ListScope>('mine');
     const [search, setSearch] = useState('');
     const [tasks, setTasks] = useState<Task[]>([]);
     const [afterOrderKey, setAfterOrderKey] = useState('');
@@ -84,31 +71,20 @@ export default function QuickList({
 
     // latestRequestRef tracks the most recent first-page fetch. Each fetch
     // bumps the counter; when a response arrives we discard it unless its
-    // counter still matches the latest. This lets a filter change while an
-    // earlier request is in flight win.
+    // counter still matches the latest. This lets a scope/channel change while
+    // an earlier request is in flight win.
     const latestRequestRef = React.useRef(0);
-
-    // Derive the scope + context-specific param (channel_id vs partner_id) from
-    // the channel type. For a DM (type "D") we parse the partner from the
-    // channelID encoded channel name — but here the host passes the channel
-    // object already; we accept a precomputed partner_id via channelType=='D'
-    // fallback by querying the current channel's name from the host.
-    //
-    // The webapp's TaskSidebar already reads channel.name; we mirror that by
-    // deriving the partner here once per render (cheap). channelType === 'D'
-    // ⇒ direct scope.
-    const isDM = channelType === 'D';
 
     // loadFirst resets the list and fetches the first page. Memoized so the
     // effect below depends on a stable reference across renders.
     const loadFirst = useCallback(
-        async (activeTab: FilterTab) => {
+        async (activeScope: ListScope) => {
             const myRequest = ++latestRequestRef.current;
             setLoading(true);
             setError('');
             try {
                 const page = await client.listTasks(
-                    buildParams(activeTab, channelID, isDM, ''),
+                    buildParams(activeScope, channelID, ''),
                 );
 
                 // Drop stale responses: only the latest request's result lands.
@@ -132,28 +108,28 @@ export default function QuickList({
                 }
             }
         },
-        [channelID, currentUserID, isDM],
+        [channelID],
     );
 
-    // Fetch the first page whenever the tab changes. Search is client-side.
+    // Fetch the first page whenever the scope or (for Channel Tasks) the
+    // context channel changes. Search is client-side.
     useEffect(() => {
-        loadFirst(tab);
-    }, [tab, loadFirst]);
+        loadFirst(scope);
+    }, [scope, channelID, loadFirst]);
 
     const loadMore = async () => {
         if (!afterOrderKey || loading) {
             return;
         }
 
-        // Capture the tab at request start; if the user switches tabs while
-        // this fetch is in flight, drop the stale response (same guard pattern
-        // as loadFirst).
+        // Capture the scope at request start; if the user switches scope while
+        // this fetch is in flight, drop the stale response.
         const myRequest = ++latestRequestRef.current;
-        const activeTab = tab;
+        const activeScope = scope;
         setLoading(true);
         try {
             const page = await client.listTasks(
-                buildParams(activeTab, channelID, isDM, afterOrderKey),
+                buildParams(activeScope, channelID, afterOrderKey),
             );
             if (myRequest !== latestRequestRef.current) {
                 return;
@@ -166,9 +142,14 @@ export default function QuickList({
             setAfterOrderKey(list.length > 0 ? list[list.length - 1].order_key : '');
             setHasMore(list.length >= pageLimit);
         } catch (err) {
+            if (myRequest !== latestRequestRef.current) {
+                return;
+            }
             setError(messageFor(err));
         } finally {
-            setLoading(false);
+            if (myRequest === latestRequestRef.current) {
+                setLoading(false);
+            }
         }
     };
 
@@ -203,20 +184,17 @@ export default function QuickList({
 
     // Client-side search filter over the loaded page.
     const term = search.trim().toLowerCase();
-    const visible = term ?
-        tasks.filter((x) => x.summary.toLowerCase().includes(term)) :
-        tasks;
+    const visible = term ? tasks.filter((x) => x.summary.toLowerCase().includes(term)) : tasks;
 
     // Resolve assignee ids → "@username" labels for the avatar pills.
     const assigneeLabels = useResolvedUsers(
         visible.map((t) => t.assignee_id).filter(Boolean),
     );
 
-    // Group the visible tasks into the three headers. Needs attention = open
-    // + (overdue or due today). Upcoming = open + everything else. Completed =
-    // done or cancelled.
-    const groups = useMemo(() => groupTasks(visible), [visible]);
-    const counts = useMemo(() => countByTab(tasks, hasMore), [tasks, hasMore]);
+    // Bucket visible tasks into the four priority/time groups and sort each by
+    // deadline. Recomputed each render from the loaded page + current clock.
+    const now = Date.now();
+    const groups = useMemo(() => buildGroups(visible, now), [visible, now]);
 
     return (
         <div className='quick-list'>
@@ -234,26 +212,32 @@ export default function QuickList({
                 </div>
 
                 <div
-                    className='quick-list__filter-tabs'
+                    className='quick-list__scope-toggle'
                     role='tablist'
+                    aria-label={t('webapp.task.scope.label')}
                 >
-                    {(Object.keys(TAB_FILTER) as FilterTab[]).map((key) => (
-                        <button
-                            key={key}
-                            className={`quick-list__filter-tab ${tab === key ? 'quick-list__filter-tab--active' : ''}`}
-                            onClick={() => setTab(key)}
-                            type='button'
-                            role='tab'
-                            aria-selected={tab === key}
-                        >
-                            {tabLabel(key, t)}
-                            <span
-                                className={`quick-list__count ${counts[key].plus ? 'quick-list__count--plus' : ''}`}
-                            >
-                                {counts[key].label}
-                            </span>
-                        </button>
-                    ))}
+                    <button
+                        key='mine'
+                        className={`quick-list__scope-tab ${scope === 'mine' ? 'quick-list__scope-tab--active' : ''}`}
+                        onClick={() => setScope('mine')}
+                        type='button'
+                        role='tab'
+                        aria-selected={scope === 'mine'}
+                    >
+                        {t('webapp.task.scope.mine')}
+                    </button>
+                    <button
+                        key='channel'
+                        className={`quick-list__scope-tab ${scope === 'channel' ? 'quick-list__scope-tab--active' : ''} ${channelID ? '' : 'quick-list__scope-tab--disabled'}`}
+                        onClick={() => channelID && setScope('channel')}
+                        type='button'
+                        role='tab'
+                        aria-selected={scope === 'channel'}
+                        disabled={!channelID}
+                        title={channelID ? undefined : t('webapp.task.scope.channel_tasks')}
+                    >
+                        {t('webapp.task.scope.channel_tasks')}
+                    </button>
                 </div>
             </div>
 
@@ -391,35 +375,25 @@ export default function QuickList({
     );
 }
 
-// TAB_FILTER maps a FilterTab to the (status, due) pair sent to the server.
-// "all" sends neither; "today" sends due=today; the others send status only.
-export const TAB_FILTER: Record<FilterTab, { status: string; due: string }> = {
-    all: {status: '', due: ''},
-    today: {status: '', due: 'today'},
-    todo: {status: 'todo', due: ''},
-    in_progress: {status: 'in_progress', due: ''},
-    done: {status: 'done', due: ''},
-    cancelled: {status: 'cancelled', due: ''},
-};
-
-// tabLabel maps a FilterTab to its localized label.
-export function tabLabel(tab: FilterTab, t: (id: string) => string): string {
-    switch (tab) {
-    case 'all':
-        return t('webapp.task.tab.all');
-    case 'today':
-        return t('webapp.task.tab.today');
-    case 'todo':
-        return t('webapp.task.tab.todo');
-    case 'in_progress':
-        return t('webapp.task.tab.in_progress');
-    case 'done':
-        return t('webapp.task.tab.done');
-    case 'cancelled':
-        return t('webapp.task.tab.cancelled');
-    default:
-        return tab;
+// buildParams assembles the ListTasksParams for the active scope + context.
+// scope=mine spans all channels (no channel_id); scope=channel narrows to the
+// context channel. Exported for unit testing.
+export function buildParams(
+    scope: ListScope,
+    channelID: string | undefined,
+    afterOrderKey: string,
+): ListTasksParams {
+    const params: ListTasksParams = {
+        scope,
+        limit: pageLimit,
+    };
+    if (scope === 'channel' && channelID) {
+        params.channel_id = channelID;
     }
+    if (afterOrderKey) {
+        params.after_order_key = afterOrderKey;
+    }
+    return params;
 }
 
 // dueChipClass picks the right modifier for the due chip based on the task's
@@ -452,9 +426,7 @@ export function isDueSoon(task: Task): boolean {
 }
 
 // isDueToday reports whether the task falls within the current local calendar
-// day (open or terminal). Used by the Quick List 'today' badge so its count
-// matches the `due:today` filter (CodeRabbit review: it must not reuse the
-// broader isDueSoon warning band, which spans 3 days).
+// day (open or terminal).
 export function isDueToday(task: Task): boolean {
     if (!task.due) {
         return false;
@@ -468,95 +440,134 @@ export function isDueToday(task: Task): boolean {
     );
 }
 
-// GroupedTask is one bucket in the grouped list.
+// startOfLocalDay returns the local-midnight timestamp for the calendar day of
+// the given ms epoch.
+function startOfLocalDay(ms: number): number {
+    const d = new Date(ms);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// isDueWithinDays reports whether the task's due date falls on a local calendar
+// day between fromDays (inclusive) and toDays (inclusive) ahead of `now`'s
+// calendar day. Day 0 is today. No due → false. Used by the IMPORTANT bucket
+// (1..3 days). Exported for unit testing.
+export function isDueWithinDays(
+    task: Task,
+    now: number,
+    fromDays: number,
+    toDays: number,
+): boolean {
+    if (!task.due) {
+        return false;
+    }
+    const today0 = startOfLocalDay(now);
+    const due0 = startOfLocalDay(task.due);
+    const dayDiff = Math.round((due0 - today0) / DAY_MS);
+    return dayDiff >= fromDays && dayDiff <= toDays;
+}
+
+// classifyGroup assigns a task to exactly one priority/time group at `now`.
+// Evaluation order matters: terminal → urgent → important → normal (the first
+// matching branch wins). Exported for unit testing.
+export function classifyGroup(task: Task, now: number): GroupKey {
+    const terminal = task.status === 'done' || task.status === 'cancelled';
+    if (terminal) {
+        return 'done';
+    }
+
+    // URGENT: urgent priority, OR due today, OR overdue (past).
+    if (
+        task.priority === 'urgent' ||
+		isDueTodayAt(task, now) ||
+		(task.due !== undefined && task.due < now)
+    ) {
+        return 'urgent';
+    }
+
+    // IMPORTANT: important priority, OR due in 1..3 days.
+    if (task.priority === 'important' || isDueWithinDays(task, now, 1, 3)) {
+        return 'important';
+    }
+    return 'normal';
+}
+
+// isDueTodayAt is the clock-parameterised twin of isDueToday, so classifyGroup
+// is pure over its `now` argument (no hidden Date.now()).
+function isDueTodayAt(task: Task, now: number): boolean {
+    if (!task.due) {
+        return false;
+    }
+    const n = new Date(now);
+    const due = new Date(task.due);
+    return (
+        due.getFullYear() === n.getFullYear() &&
+		due.getMonth() === n.getMonth() &&
+		due.getDate() === n.getDate()
+    );
+}
+
+// GroupedTasks is one bucket in the grouped list.
 export interface GroupedTasks {
-    key: 'attention' | 'upcoming' | 'completed';
+    key: GroupKey;
     label: string;
     items: Task[];
 }
 
-// groupTasks buckets tasks into the three headers. Exported for unit testing.
-export function groupTasks(tasks: Task[]): GroupedTasks[] {
-    const attention: Task[] = [];
-    const upcoming: Task[] = [];
-    const completed: Task[] = [];
-    for (const task of tasks) {
-        const terminal = task.status === 'done' || task.status === 'cancelled';
-        if (terminal) {
-            completed.push(task);
-        } else if (isOverdue(task) || isDueSoon(task)) {
-            attention.push(task);
-        } else {
-            upcoming.push(task);
-        }
-    }
-    const makeLabel = (key: GroupedTasks['key']): string => key;
+// GROUP_ORDER is the canonical display order of the four groups.
+const GROUP_ORDER: GroupKey[] = ['urgent', 'important', 'normal', 'done'];
 
-    // Build only non-empty groups, preserving the canonical order.
+// sortTasksByDue sorts tasks ascending by due date, with tasks that have no due
+// date placed last. The sort is stable so equal/absent due values keep input
+// order. Exported for unit testing.
+export function sortTasksByDue(tasks: Task[]): Task[] {
+    // Array.prototype.sort is stable in the engines this plugin targets
+    // (modern Chromium / Node). Infinity pushes no-due items to the tail.
+    return [...tasks].sort((a, b) => {
+        const av = a.due === undefined ? Number.POSITIVE_INFINITY : a.due;
+        const bv = b.due === undefined ? Number.POSITIVE_INFINITY : b.due;
+        if (av === bv) {
+            return 0;
+        }
+        return av < bv ? -1 : 1;
+    });
+}
+
+// buildGroups buckets tasks into the four priority/time groups (canonical
+// order), sorts each bucket by due date, and drops empty buckets. Pure over
+// `now`. Exported for unit testing.
+export function buildGroups(tasks: Task[], now: number): GroupedTasks[] {
+    const buckets: Record<GroupKey, Task[]> = {
+        urgent: [],
+        important: [],
+        normal: [],
+        done: [],
+    };
+    for (const task of tasks) {
+        buckets[classifyGroup(task, now)].push(task);
+    }
     const out: GroupedTasks[] = [];
-    if (attention.length > 0) {
-        out.push({
-            key: 'attention',
-            label: makeLabel('attention'),
-            items: attention,
-        });
-    }
-    if (upcoming.length > 0) {
-        out.push({
-            key: 'upcoming',
-            label: makeLabel('upcoming'),
-            items: upcoming,
-        });
-    }
-    if (completed.length > 0) {
-        out.push({
-            key: 'completed',
-            label: makeLabel('completed'),
-            items: completed,
-        });
+    for (const key of GROUP_ORDER) {
+        const items = buckets[key];
+        if (items.length > 0) {
+            out.push({key, label: key, items: sortTasksByDue(items)});
+        }
     }
     return out;
 }
 
-// countByTab returns, for each FilterTab, the count of currently-loaded tasks
-// that match that tab's filter — with a "+" suffix when there may be more
-// pages (hasMore). Counts are a lower bound (only the loaded page), matching
-// the design's N+ intent. A zero count never carries "+" (no rows to bound).
-export function countByTab(
-    tasks: Task[],
-    hasMore: boolean,
-): Record<FilterTab, { label: string; plus: boolean }> {
-    const count = (pred: (t: Task) => boolean): number =>
-        tasks.filter(pred).length;
-    const make = (n: number) => {
-        const plus = hasMore && n > 0;
-        return {label: plus ? `${n}+` : String(n), plus};
-    };
-    return {
-        all: make(tasks.length),
-
-        // 'today' badge must match the `due:today` filter (due within the local
-        // calendar day), not the broader isDueSoon warning band (3 days).
-        today: make(count((x) => isDueToday(x))),
-        todo: make(count((x) => x.status === 'todo')),
-        in_progress: make(count((x) => x.status === 'in_progress')),
-        done: make(count((x) => x.status === 'done')),
-        cancelled: make(count((x) => x.status === 'cancelled')),
-    };
-}
-
 // groupLabel maps a group key to its localized header label.
-export function groupLabel(
-    key: GroupedTasks['key'],
-    t: (id: string) => string,
-): string {
+export function groupLabel(key: GroupKey, t: (id: string) => string): string {
     switch (key) {
-    case 'attention':
-        return t('webapp.task.group.attention');
-    case 'upcoming':
-        return t('webapp.task.group.upcoming');
-    case 'completed':
-        return t('webapp.task.group.completed');
+    case 'urgent':
+        return t('webapp.task.group.urgent');
+    case 'important':
+        return t('webapp.task.group.important');
+    case 'normal':
+        return t('webapp.task.group.normal');
+    case 'done':
+        return t('webapp.task.group.done');
     default:
         return key;
     }
@@ -582,40 +593,6 @@ export function truncateDescription(
     const lastSpace = slice.lastIndexOf(' ');
     const cut = lastSpace > 0 ? slice.slice(0, lastSpace) : slice;
     return cut + '…';
-}
-
-// buildParams assembles the ListTasksParams for the active tab + context.
-// Exported for unit testing.
-export function buildParams(
-    tab: FilterTab,
-    channelID: string | undefined,
-    _isDM: boolean,
-    afterOrderKey: string,
-): ListTasksParams {
-    const filter = TAB_FILTER[tab];
-
-    // All-channel model: always list by the real channel id (team, DM, or
-    // self-DM). No separate scope=direct partner_id path.
-    const params: ListTasksParams = {
-        scope: 'channel' as ListScope,
-        limit: pageLimit,
-    };
-    if (channelID) {
-        params.channel_id = channelID;
-    }
-    if (filter.status) {
-        params.status = filter.status as Task['status'];
-    }
-    if (filter.due) {
-        params.due = filter.due;
-    }
-    if (afterOrderKey) {
-        params.after_order_key = afterOrderKey;
-    }
-
-    // currentUserID is intentionally not a parameter: the server derives the
-    // authenticated user from the session.
-    return params;
 }
 
 // messageFor extracts a user-facing message from a thrown error, preferring the

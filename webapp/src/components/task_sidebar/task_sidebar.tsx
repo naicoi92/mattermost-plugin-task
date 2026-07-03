@@ -19,7 +19,10 @@ import {ACTION_TYPES} from 'reducer';
 import type {Channel} from '@mattermost/types/channels';
 import type {GlobalState} from '@mattermost/types/store';
 
-import {getChannel, getCurrentChannelId} from 'mattermost-redux/selectors/entities/channels';
+import {
+    getChannel,
+    getCurrentChannelId,
+} from 'mattermost-redux/selectors/entities/channels';
 import {getCurrentUserId} from 'mattermost-redux/selectors/entities/users';
 
 import NewTaskDialog from 'components/new_task_dialog/new_task_dialog';
@@ -33,7 +36,12 @@ const PLUGIN_STATE_KEY = 'plugins-com.mattermost.plugin-task';
 interface PluginState {
     rhsView: 'list' | 'detail' | 'new';
     selectedTaskID: string;
-    newTaskDialog: {open: boolean; prefillSummary?: string; prefillDescription?: string; channelID?: string};
+    newTaskDialog: {
+        open: boolean;
+        prefillSummary?: string;
+        prefillDescription?: string;
+        channelID?: string;
+    };
 }
 
 type GlobalStateWithPlugin = GlobalState & {
@@ -41,11 +49,13 @@ type GlobalStateWithPlugin = GlobalState & {
 };
 
 function selectSlice(state: GlobalStateWithPlugin): PluginState {
-    return state[PLUGIN_STATE_KEY] ?? {
-        rhsView: 'list',
-        selectedTaskID: '',
-        newTaskDialog: {open: false},
-    };
+    return (
+        state[PLUGIN_STATE_KEY] ?? {
+            rhsView: 'list',
+            selectedTaskID: '',
+            newTaskDialog: {open: false},
+        }
+    );
 }
 
 export interface TaskSidebarProps {
@@ -62,7 +72,11 @@ export interface TaskSidebarProps {
     onNewTask?: () => void;
 }
 
-export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskSidebarProps): JSX.Element {
+export default function TaskSidebar({
+    channelID,
+    currentUserID,
+    onNewTask,
+}: TaskSidebarProps): JSX.Element {
     const dispatch = useDispatch();
     const slice = useSelector(selectSlice);
 
@@ -72,8 +86,9 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
     // when the id is empty, which getChannel handles gracefully.
     const hostChannelID = useSelector(getCurrentChannelId) || channelID || '';
     const hostUserID = useSelector(getCurrentUserId) || currentUserID || '';
-    const channel: Channel | undefined = useSelector((s: GlobalStateWithPlugin) =>
-        (hostChannelID ? getChannel(s, hostChannelID) : undefined),
+    const channel: Channel | undefined = useSelector(
+        (s: GlobalStateWithPlugin) =>
+            (hostChannelID ? getChannel(s, hostChannelID) : undefined),
     );
 
     // The RHS is considered open while it is mounted; record that so the
@@ -86,10 +101,13 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
         };
     }, [dispatch]);
 
-    const openNewTask = onNewTask ?? (() => dispatch({
-        type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
-        channelID: hostChannelID,
-    }));
+    const openNewTask =
+        onNewTask ??
+        (() =>
+            dispatch({
+                type: ACTION_TYPES.OPEN_NEW_TASK_DIALOG,
+                channelID: hostChannelID,
+            }));
 
     const backToList = () => {
         if (slice.rhsView === 'new') {
@@ -130,15 +148,17 @@ export default function TaskSidebar({channelID, currentUserID, onNewTask}: TaskS
                             taskID={slice.selectedTaskID}
                             onBack={backToList}
                             currentUserID={hostUserID}
-                            onOpenSubtask={(id) => dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})}
+                            onOpenSubtask={(id) =>
+                                dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})
+                            }
                         />
                     )}
                     {slice.rhsView === 'list' && (
                         <QuickList
                             channelID={quickListChannel}
-                            currentUserID={hostUserID}
-                            channelType={channel?.type}
-                            onSelectTask={(id) => dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})}
+                            onSelectTask={(id) =>
+                                dispatch({type: ACTION_TYPES.SELECT_TASK, taskID: id})
+                            }
                             onNewTask={openNewTask}
                         />
                     )}
