@@ -10,14 +10,16 @@ const orderKeyAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
 // orderKeyCharIndex maps an alphabet byte to its position (0..61); -1 means the
 // byte is outside the alphabet. Inputs to NextOrderKey are always valid order
 // keys (legacy data uses only 'n' and '0'), so this only guards correctness.
-var orderKeyCharIndex [256]int8
+// [256]int (not int8) avoids a narrowing int->int8 conversion that trips gosec
+// G115; the 2 KiB table is allocated once at package load.
+var orderKeyCharIndex [256]int
 
 func init() {
 	for i := range orderKeyCharIndex {
 		orderKeyCharIndex[i] = -1
 	}
 	for i := range len(orderKeyAlphabet) {
-		orderKeyCharIndex[orderKeyAlphabet[i]] = int8(i)
+		orderKeyCharIndex[orderKeyAlphabet[i]] = i
 	}
 }
 
@@ -48,7 +50,7 @@ func NextOrderKey(maxOrderKey string) string {
 // string is strictly less than its proper extensions.
 func incrementOrderKey(s string) string {
 	b := []byte(s)
-	last := int8(len(orderKeyAlphabet) - 1) // index of 'z'
+	last := len(orderKeyAlphabet) - 1 // index of 'z'
 	for i := len(b) - 1; i >= 0; i-- {
 		idx := orderKeyCharIndex[b[i]]
 		if idx < last { // not 'z': increment this position and stop

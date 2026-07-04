@@ -56,7 +56,7 @@ func TestNextOrderKey_BoundedLength(t *testing.T) {
 	if len(max) != 64 {
 		t.Fatalf("setup: max len = %d, want 64", len(max))
 	}
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		next := NextOrderKey(max)
 		if next <= max {
 			t.Fatalf("iter %d: NextOrderKey(%q) = %q, not greater", i, max, next)
