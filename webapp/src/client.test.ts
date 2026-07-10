@@ -297,6 +297,42 @@ describe('subtask and comment endpoints', () => {
         expect(captured.body).toBe(JSON.stringify({content: 'hi'}));
     });
 
+    test('createComment forwards file_ids when images are attached', async () => {
+        let captured: { url: string; body: string } = {url: '', body: ''};
+        mockFetch((url, init) => {
+            captured = {url, body: String(init?.body ?? '')};
+            return {
+                ...mockResponse(201, {id: 'c1'}),
+                ok: true,
+            } as unknown as MockResponse;
+        });
+        const {createComment} = await importClient();
+        await createComment('t1', {content: 'hi', file_ids: ['f1', 'f2']});
+        expect(captured.body).toBe(
+            JSON.stringify({content: 'hi', file_ids: ['f1', 'f2']}),
+        );
+    });
+
+    test('uploadCommentFiles uploads into the channel and returns file ids', async () => {
+        // importClient() resets the module registry, so capture the fresh client
+        // first, then override the Client4.uploadFile the fresh client.ts sees
+        // (same module instance, cached after the reset).
+        const mod = await importClient();
+        const redux = await import('mattermost-redux/client');
+        let capturedChannel = '';
+        redux.Client4.uploadFile = ((formData: FormData) => {
+            capturedChannel = String(formData.get('channel_id'));
+            return Promise.resolve({
+                file_infos: [{id: 'f1'}, {id: 'f2'}],
+                client_ids: [],
+            });
+        }) as unknown as typeof redux.Client4.uploadFile;
+        const file = new File(['x'], 'a.png', {type: 'image/png'});
+        const ids = await mod.uploadCommentFiles('ch1', [file]);
+        expect(capturedChannel).toBe('ch1');
+        expect(ids).toEqual(['f1', 'f2']);
+    });
+
     test('listComments GETs under the task', async () => {
         let capturedUrl = '';
         mockFetch((url) => {

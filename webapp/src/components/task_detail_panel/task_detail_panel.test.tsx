@@ -147,6 +147,7 @@ function makeComment(over: Partial<Comment> = {}): Comment {
         author_id: 'alice',
         created_at: 1000,
         content: 'hello',
+        file_ids: [],
         deleted: false,
         ...over,
     };
@@ -285,6 +286,7 @@ describe('comment render helpers (Task 5 — author_id + deleted placeholder)', 
             author_id: 'alice',
             created_at: 1000,
             content: 'hello',
+            file_ids: [],
             deleted: false,
         };
         expect(commentAuthorLabel(c, {alice: '@Alice'})).toBe('@Alice');
@@ -298,6 +300,7 @@ describe('comment render helpers (Task 5 — author_id + deleted placeholder)', 
             author_id: 'alice',
             created_at: 0,
             content: '',
+            file_ids: [],
             deleted: false,
         };
         expect(commentAuthorLabel(c, {})).toBe('alice');
@@ -312,6 +315,7 @@ describe('comment render helpers (Task 5 — author_id + deleted placeholder)', 
             author_id: 'alice',
             created_at: 0,
             content: '',
+            file_ids: [],
             deleted: true,
         };
         expect(commentBodyText(c, '(comment đã bị xóa)')).toBe(
@@ -327,6 +331,7 @@ describe('comment render helpers (Task 5 — author_id + deleted placeholder)', 
             author_id: 'alice',
             created_at: 0,
             content: 'hello',
+            file_ids: [],
             deleted: false,
         };
         expect(commentBodyText(c, '(comment đã bị xóa)')).toBe('hello');
@@ -430,6 +435,7 @@ describe('Activity feed merge/sort (Task 7.3 — AC5)', () => {
             author_id: 'a',
             created_at: createdAt,
             content: 'x',
+            file_ids: [],
             deleted: false,
         };
     }

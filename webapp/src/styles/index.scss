@@ -2253,6 +2253,171 @@
     }
 }
 
+// attach-image button (open-design .comment-attach): same shape as the send
+// button, cool-gray hover, with a count badge when images are pending.
+.task-detail__comment-attach {
+    position: relative;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: var(--task-radius-sm);
+    background: transparent;
+    color: var(--task-meta);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    margin-bottom: 1px;
+    transition:
+        background 120ms cubic-bezier(0.2, 0, 0, 1),
+        color 120ms cubic-bezier(0.2, 0, 0, 1);
+
+    &:hover:not(:disabled) {
+        background: var(--task-border);
+        color: var(--task-fg);
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+}
+
+.task-detail__attach-count {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 9999px;
+    background: var(--task-accent);
+    color: var(--task-accent-on);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 15px;
+    text-align: center;
+}
+
+// pending-image preview chips (open-design .attach-chips), shown above the
+// composer field when images are selected but not yet sent.
+.task-detail__attach-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 0 4px;
+}
+
+.task-detail__attach-chip {
+    position: relative;
+    width: 52px;
+    height: 52px;
+    border-radius: var(--task-radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--task-border);
+    background: var(--task-bg);
+
+    img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }
+
+    button {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 16px;
+        height: 16px;
+        border: 0;
+        border-radius: 50%;
+        background: rgba(15, 17, 21, 0.75);
+        color: #fff;
+        font-size: 11px;
+        line-height: 1;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+
+        &:hover {
+background: var(--task-danger);
+        }
+    }
+}
+
+// image thumbnails inside an activity comment (open-design .activity-images).
+.task-detail__activity-images {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.task-detail__activity-img {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: var(--task-radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--task-border);
+    background: var(--task-surface);
+    cursor: zoom-in;
+    padding: 0;
+
+    img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    &:hover img {
+        opacity: 0.85;
+    }
+}
+
+// full-screen image lightbox (open-design .lightbox), click/Esc to close.
+.task-detail__lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: rgba(15, 17, 21, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+
+    img {
+        max-width: 90vw;
+        max-height: 90vh;
+        object-fit: contain;
+        border-radius: var(--task-radius-md);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+}
+
+.task-detail__lightbox-close {
+    position: absolute;
+    top: 20px;
+    right: 24px;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.22);
+    }
+}
+
 // Disabled send button state (empty/whitespace input, AC7).
 .task-btn--primary:disabled {
     opacity: 0.5;

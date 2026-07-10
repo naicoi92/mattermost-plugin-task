@@ -259,6 +259,31 @@ export function listComments(taskID: string): Promise<Comment[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Image upload (host REST API v4) — uploads image attachments for a comment.
+// Reuses the host's Client4.uploadFile (same auth/CSRF/credentials handling
+// as every other host call here) rather than a plugin endpoint: Mattermost
+// already owns file storage, thumbnailing, and serving, so there is nothing
+// for the plugin to add. The files are uploaded into the task's channel so
+// they resolve against the same channel the comment post is created in.
+// The returned file ids are passed back through createComment as file_ids.
+// ---------------------------------------------------------------------------
+
+// uploadCommentFiles uploads the given image Files into channelID via the
+// host API and returns the resulting file ids. Throws ClientError on a
+// non-2xx reply. Callers MUST validate image/* and the 5-file cap before
+// calling — the picker does it at selection time.
+export async function uploadCommentFiles(
+    channelID: string,
+    files: File[],
+): Promise<string[]> {
+    const formData = new FormData();
+    formData.append('channel_id', channelID);
+    files.forEach((f) => formData.append('files', f));
+    const res = await Client4.uploadFile(formData);
+    return (res.file_infos ?? []).map((fi: { id: string }) => fi.id);
+}
+
+// ---------------------------------------------------------------------------
 // Activity / task events (server/api.go: GET /tasks/:id/events)
 // ---------------------------------------------------------------------------
 
@@ -473,6 +498,7 @@ export default {
     listSubtasks,
     createComment,
     listComments,
+    uploadCommentFiles,
     listTaskEvents,
     shareTask,
     setTaskOrder,
