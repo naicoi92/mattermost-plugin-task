@@ -415,13 +415,14 @@ export interface UserSearchResult {
     delete_at?: number;
 }
 
-// searchUsers lists users for the assignee picker. When channelID is provided
-// it scopes to that channel's members (host REST API v4
-// GET /api/v4/users?in_channel=<id>&per_page=N); otherwise it lists users the
-// caller can see (GET /api/v4/users?per_page=N&in_team=... would need a team
-// id, so the no-channel path lists globally visible users). The optional term
-// is sent as `term` for server-side filtering when non-empty; callers may also
-// filter further client-side.
+// searchUsers lists users for the assignee picker and the @mention composer.
+// It must filter by the typed term; GET /api/v4/users ignores a `term` query
+// param and returns the whole page, so a non-empty term uses the dedicated
+// search endpoint POST /api/v4/users/search (matches on username, full name,
+// nickname, email), scoped to channelID via the body's in_channel_id when
+// provided. An empty term falls back to GET /api/v4/users?in_channel=<id>
+// &per_page=N so the initial dropdown still lists channel members before the
+// user types.
 //
 // Like getUserByUsername this hits the host /api/v4 path directly and delegates
 // request options to Client4.getOptions({}) so auth/credentials/CSRF handling
@@ -432,16 +433,48 @@ export async function searchUsers(
     channelID?: string,
     perPage = 50,
 ): Promise<UserSearchResult[]> {
+    const trimmed = term?.trim() ?? '';
+
+    // Non-empty term: server-side search so typing actually filters.
+    if (trimmed) {
+        const body: Record<string, unknown> = {
+            term: trimmed,
+            per_page: perPage,
+        };
+        if (channelID) {
+            body.in_channel_id = channelID;
+        }
+        const res = await fetch(
+            '/api/v4/users/search',
+            Client4.getOptions({
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            }),
+        );
+        if (!res.ok) {
+            let message = '';
+            try {
+                message = (await res.text()).trim();
+            } catch {
+                message = '';
+            }
+            throw new ClientError(
+                res.status,
+                message || res.statusText || 'request failed',
+            );
+        }
+        const list = JSON.parse(await res.text()) as UserSearchResult[];
+        return list.filter((u) => !u.is_bot && !u.delete_at);
+    }
+
+    // Empty term: list channel/global members for the initial dropdown.
     const q = new URLSearchParams();
     q.set('per_page', String(perPage));
     if (channelID) {
         q.set('in_channel', channelID);
     }
-    if (term && term.trim()) {
-        q.set('term', term.trim());
-    }
-    const url = `/api/v4/users?${q.toString()}`;
-    const res = await fetch(url, Client4.getOptions({}));
+    const res = await fetch(`/api/v4/users?${q.toString()}`, Client4.getOptions({}));
     if (!res.ok) {
         let message = '';
         try {
