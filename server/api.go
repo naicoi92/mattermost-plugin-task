@@ -824,8 +824,9 @@ func (p *Plugin) listSubtasks(w http.ResponseWriter, r *http.Request) {
 
 // createCommentRequest is the JSON body for POST /tasks/:id/comments.
 type createCommentRequest struct {
-	Content   string `json:"content"`
-	ChannelID string `json:"channel_id"` // Change B: the channel the viewer is acting from, so the comment threads under the card IN that channel (shared-task fix).
+	Content   string   `json:"content"`
+	ChannelID string   `json:"channel_id"` // Change B: the channel the viewer is acting from, so the comment threads under the card IN that channel (shared-task fix).
+	FileIDs   []string `json:"file_ids"`   // Optional image attachments; the webapp uploads them via Client4.uploadFile into the task's channel and passes the resulting file ids. A comment may be image-only (empty content + files).
 }
 
 // createComment handles POST /tasks/:id/comments. The authenticated user is the
@@ -855,8 +856,8 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		p.writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if strings.TrimSpace(req.Content) == "" {
-		p.writeError(w, http.StatusBadRequest, "comment content is required")
+	if strings.TrimSpace(req.Content) == "" && len(req.FileIDs) == 0 {
+		p.writeError(w, http.StatusBadRequest, "comment content or an image is required")
 		return
 	}
 
@@ -890,6 +891,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 		ChannelId: channelID,
 		RootId:    rootID,
 		Message:   req.Content,
+		FileIds:   req.FileIDs,
 	}
 	created, appErr := p.API.CreatePost(commentPost)
 	if appErr != nil {
@@ -936,7 +938,7 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 	p.updateTaskCards(t)
 
 	w.WriteHeader(http.StatusCreated)
-	p.writeJSON(w, toCommentResponse(comment, created.Message, false))
+	p.writeJSON(w, toCommentResponse(comment, created.Message, false, created.FileIds))
 
 	// Real-time: a new comment arrived — Task Detail comment list refreshes (#32).
 	// Reload the task: AddComment bumped UpdatedAt, so the pre-comment snapshot `t`
@@ -954,21 +956,26 @@ func (p *Plugin) createComment(w http.ResponseWriter, r *http.Request) {
 // posts. These extra fields are NOT persisted in task_comments (Hướng A:
 // post.Message is the single source of truth for content).
 type commentResponse struct {
-	ID        string `json:"id"`
-	TaskID    string `json:"task_id"`
-	PostID    string `json:"post_id"`
-	AuthorID  string `json:"author_id"`
-	CreatedAt int64  `json:"created_at"`
-	Content   string `json:"content"`
-	Deleted   bool   `json:"deleted"`
+	ID        string   `json:"id"`
+	TaskID    string   `json:"task_id"`
+	PostID    string   `json:"post_id"`
+	AuthorID  string   `json:"author_id"`
+	CreatedAt int64    `json:"created_at"`
+	Content   string   `json:"content"`
+	FileIDs   []string `json:"file_ids"`
+	Deleted   bool     `json:"deleted"`
 }
 
 // toCommentResponse builds the transport commentResponse from a task_comments
-// row snapshot plus content/deleted resolved from the backing post. Shared by
-// listComments (content from a batched thread fetch) and createComment
-// (content from the just-created post). AuthorID/ID/... come from the row
-// snapshot, NOT re-derived from the post, so audit survives post deletion.
-func toCommentResponse(c taskmodel.TaskComment, content string, deleted bool) commentResponse {
+// row snapshot plus content/fileIDs/deleted resolved from the backing post.
+// Shared by listComments (content+fileIDs from a batched thread fetch) and
+// createComment (content+fileIDs from the just-created post). AuthorID/ID/...
+// come from the row snapshot, NOT re-derived from the post, so audit survives
+// post deletion.
+func toCommentResponse(c taskmodel.TaskComment, content string, deleted bool, fileIDs []string) commentResponse {
+	if fileIDs == nil {
+		fileIDs = []string{}
+	}
 	return commentResponse{
 		ID:        c.ID,
 		TaskID:    c.TaskID,
@@ -976,6 +983,7 @@ func toCommentResponse(c taskmodel.TaskComment, content string, deleted bool) co
 		AuthorID:  c.AuthorID,
 		CreatedAt: c.CreatedAt,
 		Content:   content,
+		FileIDs:   fileIDs,
 		Deleted:   deleted,
 	}
 }
@@ -1026,11 +1034,11 @@ func (p *Plugin) listComments(w http.ResponseWriter, r *http.Request) {
 		post, pErr := p.API.GetPost(c.PostID)
 		switch {
 		case pErr == nil && post != nil:
-			out[i] = toCommentResponse(c, post.Message, false)
+			out[i] = toCommentResponse(c, post.Message, false, post.FileIds)
 		case pErr != nil && pErr.StatusCode == http.StatusNotFound:
 			// The backing post was deleted out-of-band. Mark deleted but keep the
 			// row so the feed shows the placeholder.
-			out[i] = toCommentResponse(c, "", true)
+			out[i] = toCommentResponse(c, "", true, nil)
 		default:
 			// Transient backend error (or an unexpected nil post without error).
 			// Fail the request instead of rendering a live comment as deleted.

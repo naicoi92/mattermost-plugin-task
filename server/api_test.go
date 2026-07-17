@@ -291,6 +291,76 @@ func TestCreateComment_PersistsAndReturns(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 }
 
+// TestCreateComment_AttachesFileIDs asserts the image-comments feature wires
+// file_ids from the request body onto the created post (so the images render in
+// the thread) and echoes them back in the commentResponse.
+func TestCreateComment_AttachesFileIDs(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardpost"))
+	api := p.API.(*plugintest.API)
+	reseedGetPost(t, api, map[string]*mmmodel.Post{
+		"cardpost": {Id: "cardpost", ChannelId: "ch1"},
+	})
+
+	// Re-register CreatePost with a Run hook that captures the created post so we
+	// can assert FileIds survived onto the post handed to CreatePost.
+	var capturedPost *mmmodel.Post
+	var postSeq int
+	var kept []*mock.Call
+	for _, c := range api.ExpectedCalls {
+		if c.Method != "CreatePost" {
+			kept = append(kept, c)
+		}
+	}
+	api.ExpectedCalls = kept
+	api.On("CreatePost", mock.Anything).Run(func(arguments mock.Arguments) {
+		postSeq++
+		post := arguments.Get(0).(*mmmodel.Post)
+		post.Id = fmt.Sprintf("post-%d", postSeq)
+		capturedPost = post
+	}).Return(func(post *mmmodel.Post) (*mmmodel.Post, *mmmodel.AppError) {
+		return post, nil
+	}).Maybe()
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments",
+		`{"content":"see screenshot","channel_id":"ch1","file_ids":["f1","f2"]}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code)
+	require.NotNil(t, capturedPost, "a reply post was created")
+	assert.Equal(t, []string{"f1", "f2"}, []string(capturedPost.FileIds), "file_ids attach to the created post")
+
+	// The response echoes file_ids back so the webapp can render thumbnails.
+	var resp commentResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, []string{"f1", "f2"}, resp.FileIDs, "response carries file_ids")
+}
+
+// TestCreateComment_ImageOnlyAllowed asserts a comment with no text but with
+// file_ids is accepted (image-only comment), and that empty content with no
+// files is rejected.
+func TestCreateComment_ImageOnlyAllowed(t *testing.T) {
+	p, st := newTestPlugin(t)
+	created := createTaskViaService(t, p, task.CreateInput{Summary: "x", ChannelID: "ch1", CreatorID: "u1"})
+	require.NoError(t, st.SetChannelPostID(context.Background(), created.ID, "cardpost"))
+	api := p.API.(*plugintest.API)
+	reseedGetPost(t, api, map[string]*mmmodel.Post{
+		"cardpost": {Id: "cardpost", ChannelId: "ch1"},
+	})
+
+	// image-only (empty content + file_ids) → 201.
+	w := httptest.NewRecorder()
+	p.ServeHTTP(nil, w, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments",
+		`{"content":"","channel_id":"ch1","file_ids":["f1"]}`, "u1"))
+	require.Equal(t, http.StatusCreated, w.Code, "image-only comment is allowed")
+
+	// empty content + no files → 400.
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(nil, w2, authedRequest(http.MethodPost, "/api/v1/tasks/"+created.ID+"/comments",
+		`{"content":"","channel_id":"ch1"}`, "u1"))
+	assert.Equal(t, http.StatusBadRequest, w2.Code, "empty content with no files is rejected")
+}
+
 // TestCreateComment_NonRegression_PathUnchanged (AC9) pins the existing
 // create-comment flow end-to-end: the contract fix + UI redesign must NOT alter
 // it. The create handler (server/api.go createComment) is untouched by design;

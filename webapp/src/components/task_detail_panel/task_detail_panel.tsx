@@ -14,11 +14,13 @@ import {ClientError} from 'client';
 import type {UserSearchResult} from 'client';
 import {useActiveLocale, useFormatMessage} from 'i18n_utils';
 import React, {useEffect, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
 import {useDispatch, useSelector} from 'react-redux';
 import {ACTION_TYPES} from 'reducer';
 
 import type {GlobalState} from '@mattermost/types/store';
 
+import {Client4} from 'mattermost-redux/client';
 import {
     getChannel,
     getCurrentChannelId,
@@ -124,6 +126,11 @@ export default function TaskDetailPanel({
     const [events, setEvents] = useState<TaskEvent[]>([]);
     const [error, setError] = useState<string>('');
     const [newComment, setNewComment] = useState('');
+    const [pendingImages, setPendingImages] = useState<
+    Array<{ file: File; previewUrl: string }>
+    >([]);
+    const [uploading, setUploading] = useState(false);
+    const [lightboxUrl, setLightboxUrl] = useState('');
     const [newSubtask, setNewSubtask] = useState('');
     const [subtaskAdding, setSubtaskAdding] = useState(false);
     const [editingDescription, setEditingDescription] = useState(false);
@@ -142,6 +149,10 @@ export default function TaskDetailPanel({
     // composerRef backs the auto-growing textarea (AC7) so onInput can read
     // scrollHeight and cap it at 120px.
     const composerRef = useRef<HTMLTextAreaElement>(null);
+
+    // fileInputRef backs the hidden <input type=file> behind the attach-image
+    // button (open-design .comment-attach → .comment-file).
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // @mention autocomplete state (FEAT-C). `mention` drives the dropdown;
     // mentionReqId drops stale searchUsers responses, mentionCache avoids
@@ -593,23 +604,73 @@ export default function TaskDetailPanel({
         }
     };
 
+    const MAX_COMMENT_IMAGES = 5;
+
+    // isImageFile guards the picker and paste/selection paths so only image/*
+    // files ever enter the pending list (matches the image-comments scope).
+    const isImageFile = (f: File) => f.type.startsWith('image/');
+
+    // addPendingImages appends newly-selected images, capped at MAX_COMMENT_IMAGES
+    // total; anything beyond the cap is dropped silently (the cap is also enforced
+    // by the input's selection, this is the backstop for multiple picks).
+    const addPendingImages = (files: FileList | File[]) => {
+        const imgs = Array.from(files).filter(isImageFile);
+        setPendingImages((prev) => {
+            const room = MAX_COMMENT_IMAGES - prev.length;
+            return room <= 0 ?
+                prev :
+                [
+                    ...prev,
+                    ...imgs.
+                        slice(0, room).
+                        map((file) => ({file, previewUrl: URL.createObjectURL(file)})),
+                ];
+        });
+    };
+
+    // removePendingImage drops one pending image and revokes its object URL so the
+    // browser can free the preview blob.
+    const removePendingImage = (index: number) => {
+        setPendingImages((prev) => {
+            URL.revokeObjectURL(prev[index]?.previewUrl ?? '');
+            return prev.filter((_, i) => i !== index);
+        });
+    };
+
     const addComment = async () => {
         const content = newComment.trim();
-        if (!content) {
+        if (!content && pendingImages.length === 0) {
             return;
         }
+        setUploading(pendingImages.length > 0);
         try {
+            let fileIDs: string[] | undefined;
+            if (pendingImages.length > 0) {
+                // Upload into the task's home channel so the files resolve against the
+                // same channel the comment post is created in (createComment threads
+                // under the task's card). full.channel_id is always set on a task.
+                fileIDs = await client.uploadCommentFiles(
+                    full.channel_id,
+                    pendingImages.map((p) => p.file),
+                );
+            }
+
             // Change B: pass the active channel so the server threads the comment
             // under the task's card IN this channel (e.g. a shared card), not the
             // home channel card.
             const created = await client.createComment(full.id, {
                 content,
                 channel_id: currentChannelID || undefined,
+                file_ids: fileIDs,
             });
             setComments((prev) => [created, ...prev]);
             setNewComment('');
+            pendingImages.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+            setPendingImages([]);
         } catch (err) {
             setError(messageFor(err));
+        } finally {
+            setUploading(false);
         }
     };
 
@@ -1247,6 +1308,25 @@ export default function TaskDetailPanel({
                                                 c,
                                                 t('webapp.task.comments.deleted_placeholder'),
                                             )}
+                                            {c.file_ids.length > 0 && (
+                                                <div className='task-detail__activity-images'>
+                                                    {c.file_ids.map((fid) => (
+                                                        <button
+                                                            key={fid}
+                                                            type='button'
+                                                            className='task-detail__activity-img'
+                                                            onClick={() =>
+                                                                setLightboxUrl(Client4.getFileUrl(fid, 0))
+                                                            }
+                                                        >
+                                                            <img
+                                                                src={Client4.getFileThumbnailUrl(fid, 0)}
+                                                                alt=''
+                                                            />
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -1256,6 +1336,28 @@ export default function TaskDetailPanel({
                 </ul>
             </div>
             <div className='task-detail__comment-box'>
+                {pendingImages.length > 0 && (
+                    <div className='task-detail__attach-chips'>
+                        {pendingImages.map((img, i) => (
+                            <div
+                                key={img.previewUrl}
+                                className='task-detail__attach-chip'
+                            >
+                                <img
+                                    src={img.previewUrl}
+                                    alt=''
+                                />
+                                <button
+                                    type='button'
+                                    aria-label={t('webapp.task.comments.remove_image')}
+                                    onClick={() => removePendingImage(i)}
+                                >
+                                    {'×'}
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
                 <div className='task-detail__comment-field'>
                     <textarea
                         ref={composerRef}
@@ -1317,11 +1419,41 @@ export default function TaskDetailPanel({
                             // 'newline' => let the default insert a newline; 'none' => default.
                         }}
                     />
+                    <input
+                        ref={fileInputRef}
+                        type='file'
+                        accept='image/*'
+                        multiple={true}
+                        style={{display: 'none'}}
+                        onChange={(e) => {
+                            if (e.currentTarget.files) {
+                                addPendingImages(e.currentTarget.files);
+                            }
+                            e.currentTarget.value = '';
+                        }}
+                    />
+                    <button
+                        className={`task-detail__comment-attach${pendingImages.length > 0 ? ' task-detail__comment-attach--has-files' : ''}`}
+                        type='button'
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        aria-label={t('webapp.task.comments.attach_image')}
+                    >
+                        <PaperclipIcon/>
+                        {pendingImages.length > 0 && (
+                            <span className='task-detail__attach-count'>
+                                {pendingImages.length}
+                            </span>
+                        )}
+                    </button>
                     <button
                         className='task-detail__comment-send'
                         type='button'
                         onClick={addComment}
-                        disabled={!composerInputValid(newComment)}
+                        disabled={
+                            uploading ||
+							(!composerInputValid(newComment) && pendingImages.length === 0)
+                        }
                         aria-label={t('webapp.task.comments.post')}
                     >
                         <CommentSendIcon/>
@@ -1356,6 +1488,29 @@ export default function TaskDetailPanel({
                     </ul>
                 )}
             </div>
+            {lightboxUrl &&
+                createPortal(
+                    <div
+                        className='task-detail__lightbox'
+                        role='dialog'
+                        aria-modal='true'
+                        onClick={() => setLightboxUrl('')}
+                    >
+                        <button
+                            type='button'
+                            className='task-detail__lightbox-close'
+                            aria-label={t('webapp.task.comments.close_image')}
+                            onClick={() => setLightboxUrl('')}
+                        >
+                            {'×'}
+                        </button>
+                        <img
+                            src={lightboxUrl}
+                            alt=''
+                        />
+                    </div>,
+                    document.body,
+                )}
         </div>
     );
 }
@@ -1684,6 +1839,27 @@ function CommentSendIcon(): JSX.Element {
         >
             <path d='M2.5 8H13.5'/>
             <path d='M9 3.5L13.5 8L9 12.5'/>
+        </svg>
+    );
+}
+
+// PaperclipIcon is the attach-image control (open-design .comment-attach).
+function PaperclipIcon(): JSX.Element {
+    return (
+        <svg
+            viewBox='0 0 16 16'
+            aria-hidden='true'
+            style={{
+                width: 16,
+                height: 16,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.6,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+            }}
+        >
+            <path d='M13.5 7.5L8 13a3.5 3.5 0 0 1-5-5l6-6a2.4 2.4 0 0 1 3.4 3.4l-6 6a1.2 1.2 0 0 1-1.7-1.7l5.3-5.3'/>
         </svg>
     );
 }

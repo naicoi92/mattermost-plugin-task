@@ -65,6 +65,7 @@ export interface Comment {
     author_id: string; // was user_id; the row snapshot, not re-derived from the post
     created_at: number;
     content: string; // from post.Message (single source of truth, Hướng A)
+    file_ids: string[]; // image attachments resolved from post.FileIds; empty when none
     deleted: boolean; // true when the backing post was deleted out-of-band
 }
 
@@ -187,6 +188,7 @@ export interface CreateSubtaskInput {
 export interface CreateCommentInput {
     content: string;
     channel_id?: string;
+    file_ids?: string[]; // uploaded image file ids (Client4.uploadFile); a comment may be image-only
 }
 
 // SetReminderInput is the JSON body for POST /tasks/:id/reminder. Matches

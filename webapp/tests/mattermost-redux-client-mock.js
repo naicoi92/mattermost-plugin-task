@@ -15,7 +15,10 @@
 // appear on non-GET requests.
 
 function readCSRFToken() {
-    if (typeof document === 'undefined' || typeof document.cookie === 'undefined') {
+    if (
+        typeof document === 'undefined' ||
+		typeof document.cookie === 'undefined'
+    ) {
         return '';
     }
     const cookies = document.cookie.split(';');
@@ -45,6 +48,20 @@ const Client4 = {
             }
         }
         return Object.assign({}, newOptions, {headers, credentials: 'include'});
+    },
+
+    // uploadFile mirrors the host Client4 contract just enough for
+    // uploadCommentFiles: returns {file_infos: [{id}]}. Tests override this
+    // (Client4.uploadFile = jest.fn()) to drive assertions. No params: this
+    // is a stub; extra args from the caller are ignored.
+    uploadFile() {
+        return Promise.resolve({file_infos: [], client_ids: []});
+    },
+    getFileUrl(fileId, timestamp) {
+        return `/api/v4/files/${fileId}?t=${timestamp}`;
+    },
+    getFileThumbnailUrl(fileId, timestamp) {
+        return `/api/v4/files/${fileId}/thumbnail?t=${timestamp}`;
     },
 };
 
